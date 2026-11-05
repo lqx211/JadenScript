@@ -26,6 +26,7 @@ SU_BUF   equ 0x500                  ; the working copy: 16 bytes in the data are
 SU_ITEM  equ 0x510                  ; which row is selected
 SU_TAB   equ 0x50C                  ; which page: 0 Main, 1 Info, 2 Exit
 SU_OLD   equ 0x50D                  ; the value before an edit, for Esc
+SU_OPT   equ 0x50E                  ; which button the exit prompt has lit
 SU_N     equ 11                     ; how many rows (the last is read-only)
 
 ; attribute bytes
@@ -44,9 +45,11 @@ G_BR     equ 0xBC
 G_TJ     equ 0xCB                   ; the rule meets the top border
 G_BJ     equ 0xCA                   ; and the bottom border
 
+SU_TOP   equ 1                      ; the frame's top border; row 0 is the title
+SU_BOT   equ 22                     ; and its bottom border
 SU_SPLIT equ 45                     ; the column rule between menu and panel
 SU_RX    equ 47                     ; the panel's first column
-SU_ROW0  equ 2                      ; the first menu row
+SU_ROW0  equ 3                      ; the first menu row
 SU_VAL   equ 20                     ; the value column
 
 ; ---------------------------------------------------------------------------
@@ -88,8 +91,7 @@ suWindow:
     ret
 
 ; ---------------------------------------------------------------------------
-; suEnter -- the screen itself. Returns when the user leaves, with the CMOS
-; already written (F10) or untouched (Esc).
+; suLoad / suSave -- the CMOS and the working copy
 ; ---------------------------------------------------------------------------
 suLoad:
     mov     al, 0x08                ; month
@@ -309,6 +311,162 @@ suBar:
     ret
 
 ; ---------------------------------------------------------------------------
+; suAdjust -- change the selected value by dl (-1 or +1)
+; ---------------------------------------------------------------------------
+suAdjust:
+    push    ax
+    push    bx
+    push    cx
+    mov     al, [es:SU_ITEM]
+    mov     ah, al                  ; ah = the row, kept while we work
+    xor     bx, bx
+    mov     bl, al
+    mov     al, [es:SU_BUF + bx]    ; the value
+    cmp     bl, 0
+    jne     .not_month
+    call    suStep12                ; 1..12
+    jmp     .store
+.not_month:
+    cmp     bl, 1
+    jne     .not_day
+    call    suStep31
+    jmp     .store
+.not_day:
+    cmp     bl, 2
+    jne     .not_year
+    add     al, dl
+    cmp     al, 100
+    jb      .y_ok
+    xor     al, al
+.y_ok:
+    cmp     al, 0
+    jge     .y_done
+    mov     al, 99
+.y_done:
+    jmp     .store
+.not_year:
+    cmp     bl, 3
+    jne     .not_hour
+    add     al, dl
+    cmp     al, 24
+    jb      .h_ok
+    xor     al, al
+.h_ok:
+    cmp     al, 0
+    jge     .h_done
+    mov     al, 23
+.h_done:
+    jmp     .store
+.not_hour:
+    cmp     bl, 4
+    jne     .not_min
+    call    suStep60
+    jmp     .store
+.not_min:
+    cmp     bl, 5
+    jne     .not_sec
+    call    suStep60
+    jmp     .store
+.not_sec:
+    cmp     bl, 6
+    jne     .not_flop
+    add     al, dl
+    cmp     al, 5
+    jb      .f_ok
+    xor     al, al
+.f_ok:
+    cmp     al, 0
+    jge     .f_done
+    mov     al, 4
+.f_done:
+    jmp     .store
+.not_flop:
+    cmp     bl, 7
+    jne     .not_hd
+    add     al, dl
+    cmp     al, 4
+    jb      .d_ok
+    xor     al, al
+.d_ok:
+    cmp     al, 0
+    jge     .d_done
+    mov     al, 3
+.d_done:
+    jmp     .store
+.not_hd:
+    cmp     bl, 8
+    jne     .not_boot
+    add     al, dl
+    cmp     al, 4
+    jb      .b_ok
+    xor     al, al
+.b_ok:
+    cmp     al, 0
+    jge     .b_done
+    mov     al, 3
+.b_done:
+    jmp     .store
+.not_boot:
+    ; base memory: the buffer counts 64 KiB steps, the outer range is 0..10
+    add     al, dl
+    cmp     al, 10
+    jbe     .m_lo
+    mov     al, 10
+.m_lo:
+    cmp     al, 0
+    jge     .m_done
+    xor     al, al
+.m_done:
+.store:
+    mov     bl, ah
+    mov     [es:SU_BUF + bx], al
+    mov     al, ah
+    call    suDrawRow
+    pop     cx
+    pop     bx
+    pop     ax
+    ret
+
+; 1..12, wrapping
+suStep12:
+    add     al, dl
+    cmp     al, 13
+    jb      .a
+    mov     al, 1
+.a:
+    cmp     al, 1
+    jge     .b
+    mov     al, 12
+.b:
+    ret
+
+; 1..31
+suStep31:
+    add     al, dl
+    cmp     al, 32
+    jb      .a
+    mov     al, 1
+.a:
+    cmp     al, 1
+    jge     .b
+    mov     al, 31
+.b:
+    ret
+
+; 0..59
+suStep60:
+    add     al, dl
+    cmp     al, 60
+    jb      .a
+    xor     al, al
+.a:
+    cmp     al, 0
+    jge     .b
+    mov     al, 59
+.b:
+    ret
+
+; ---------------------------------------------------------------------------
 ; suEnter: the setup utility. Three pages on the top border, arrows move,
 ; Enter edits the selected setting in a dialog, Esc asks before it throws
 ; anything away -- the shape the rv64 setup uses.
@@ -318,8 +476,8 @@ suEnter:
     call    suLoad
     mov     byte [es:SU_TAB], 0
     mov     byte [es:SU_ITEM], 0
-.main:
-    call    drawSetup
+    call    drawSetup               ; the whole screen, once
+.key:
     call    keyScan
     cmp     al, 0x48                ; up
     je      .up
@@ -337,13 +495,14 @@ suEnter:
     je      .ask
     cmp     al, 0x0E                ; Backspace asks too
     je      .ask
-    jmp     .main
+    jmp     .key
 
 .up:
+    mov     cl, [es:SU_ITEM]        ; the row that was lit
     mov     al, [es:SU_TAB]
     call    tabItems
     test    bl, bl
-    jz      .main                   ; a page with nothing to select
+    jz      .key                    ; a page with nothing to select
     mov     al, [es:SU_ITEM]
     test    al, al
     jnz     .updec
@@ -351,13 +510,14 @@ suEnter:
 .updec:
     dec     al
     mov     [es:SU_ITEM], al
-    jmp     .main
+    jmp     .moved
 
 .down:
+    mov     cl, [es:SU_ITEM]
     mov     al, [es:SU_TAB]
     call    tabItems
     test    bl, bl
-    jz      .main
+    jz      .key
     mov     al, [es:SU_ITEM]
     inc     al
     cmp     al, bl
@@ -365,7 +525,15 @@ suEnter:
     xor     al, al
 .downset:
     mov     [es:SU_ITEM], al
-    jmp     .main
+.moved:
+    ; two rows and the panel, not the whole screen: a full repaint is nearly
+    ; two thousand characters and the arrow keys come faster than that
+    mov     al, cl
+    call    suDrawRow
+    mov     al, [es:SU_ITEM]
+    call    suDrawRow
+    call    suPanelTop
+    jmp     .key
 
 .left:
     mov     al, [es:SU_TAB]
@@ -376,7 +544,8 @@ suEnter:
     dec     al
     mov     [es:SU_TAB], al
     mov     byte [es:SU_ITEM], 0
-    jmp     .main
+    call    drawSetup
+    jmp     .key
 
 .right:
     mov     al, [es:SU_TAB]
@@ -387,7 +556,8 @@ suEnter:
 .rightset:
     mov     [es:SU_TAB], al
     mov     byte [es:SU_ITEM], 0
-    jmp     .main
+    call    drawSetup
+    jmp     .key
 
 .enter:
     mov     al, [es:SU_TAB]
@@ -395,21 +565,25 @@ suEnter:
     jz      .edit
     cmp     al, 2
     je      .exitpage
-    jmp     .main                   ; the information page has no actions
+    jmp     .key                    ; the information page has no actions
 .exitpage:
     cmp     byte [es:SU_ITEM], 0
     jne     .leave                  ; "discard and exit"
     jmp     .save
 .edit:
     call    suEdit
-    jmp     .main
+    call    drawSetup               ; the dialog left its paper behind
+    jmp     .key
 .ask:
     call    suAskExit               ; al = 1 save, 0 discard, 2 cancel
     cmp     al, 1
     je      .save
     cmp     al, 2
-    je      .main
+    je      .cancel
     jmp     .leave
+.cancel:
+    call    drawSetup
+    jmp     .key
 .save:
     call    suSave
 .leave:
@@ -423,6 +597,289 @@ suEnter:
     call    suGoto
     pop     dx
     pop     cx
+    pop     ax
+    ret
+
+; ---------------------------------------------------------------------------
+; suEdit -- Enter on a setting. A dialog holds the value with an arrow either
+; side of it; Left/Right change it and repaint, Enter keeps it, Esc puts the
+; old one back.
+; ---------------------------------------------------------------------------
+suEdit:
+    push    ax
+    push    bx
+    push    cx
+    push    dx
+    push    di
+    mov     al, [es:SU_ITEM]
+    xor     ah, ah
+    mov     di, ax
+    mov     al, [es:SU_BUF + di]
+    mov     [es:SU_OLD], al
+.key:
+    call    suEditBox
+    call    keyScan
+    cmp     al, 0x4B                ; left
+    je      .left
+    cmp     al, 0x4D                ; right
+    je      .right
+    cmp     al, 0x1C                ; Enter keeps it
+    je      .done
+    cmp     al, 0x01                ; Esc throws it away
+    je      .revert
+    cmp     al, 0x0E                ; Backspace too
+    je      .revert
+    jmp     .key
+.left:
+    mov     dl, -1
+    call    suAdjust
+    jmp     .key
+.right:
+    mov     dl, 1
+    call    suAdjust
+    jmp     .key
+.revert:
+    mov     al, [es:SU_OLD]
+    mov     [es:SU_BUF + di], al
+.done:
+    pop     di
+    pop     dx
+    pop     cx
+    pop     bx
+    pop     ax
+    ret
+
+; suEditBox: the editing dialog, 33 columns by 7 rows at (24,8)
+suEditBox:
+    push    ax
+    push    bx
+    push    cx
+    push    dx
+    push    si
+    mov     dh, 9
+.paper:
+    mov     dl, 24
+    mov     cx, 33
+    mov     al, ' '
+    mov     bl, SU_SEL
+    call    suBar
+    inc     dh
+    cmp     dh, 15
+    jb      .paper
+    ; the title strip carries the row's own name
+    mov     dl, 24
+    mov     dh, 8
+    mov     cx, 33
+    mov     al, ' '
+    mov     bl, SU_HEAD
+    call    suBar
+    mov     dl, 26
+    mov     dh, 8
+    call    suGoto
+    mov     al, [es:SU_ITEM]
+    xor     ah, ah
+    add     ax, ax
+    mov     si, ax
+    mov     si, [si + su_labels]
+    mov     bl, SU_HEAD
+    call    suPrint
+    ; the value, arrow either side, in the row's own printer
+    mov     dl, 30
+    mov     dh, 10
+    call    suGoto
+    mov     si, msg_su_lt
+    mov     bl, SU_HEAD
+    call    suPrint
+    mov     dl, 34
+    mov     dh, 10
+    call    suGoto
+    mov     al, [es:SU_ITEM]
+    mov     bl, SU_SEL
+    call    suValue
+    mov     dl, 52
+    mov     dh, 10
+    call    suGoto
+    mov     si, msg_su_gt
+    mov     bl, SU_HEAD
+    call    suPrint
+    mov     dl, 26
+    mov     dh, 12
+    call    suGoto
+    mov     si, msg_su_edit_hint
+    mov     bl, SU_SEL
+    call    suPrint
+    pop     si
+    pop     dx
+    pop     cx
+    pop     bx
+    pop     ax
+    ret
+
+; ---------------------------------------------------------------------------
+; suAskExit -- the "you have changed something" prompt. Returns al = 1 to
+; save, 0 to throw the changes away, 2 to stay.
+; ---------------------------------------------------------------------------
+suAskExit:
+    push    bx
+    push    cx
+    push    dx
+    push    si
+    mov     byte [es:SU_OPT], 0
+.draw:
+    call    suAskBox
+    call    keyScan
+    cmp     al, 0x4B                ; left
+    je      .left
+    cmp     al, 0x4D                ; right
+    je      .right
+    cmp     al, 0x1C                ; Enter takes the highlighted one
+    je      .choose
+    cmp     al, 0x01                ; Esc means stay
+    je      .stay
+    cmp     al, 0x0E
+    je      .stay
+    jmp     .draw
+.left:
+    mov     al, [es:SU_OPT]
+    test    al, al
+    jnz     .leftdec
+    mov     al, 3
+.leftdec:
+    dec     al
+    mov     [es:SU_OPT], al
+    jmp     .draw
+.right:
+    mov     al, [es:SU_OPT]
+    inc     al
+    cmp     al, 3
+    jb      .rightset
+    xor     al, al
+.rightset:
+    mov     [es:SU_OPT], al
+    jmp     .draw
+.choose:
+    mov     al, [es:SU_OPT]
+    test    al, al
+    jz      .save
+    cmp     al, 1
+    je      .discard
+.stay:
+    mov     al, 2
+    jmp     .out
+.save:
+    mov     al, 1
+    jmp     .out
+.discard:
+    xor     al, al
+.out:
+    pop     si
+    pop     dx
+    pop     cx
+    pop     bx
+    ret
+
+; suAskBox: the prompt, 36 columns by 7 rows at (22,9)
+suAskBox:
+    push    ax
+    push    bx
+    push    cx
+    push    dx
+    push    si
+    mov     dh, 9
+.paper:
+    mov     dl, 22
+    mov     cx, 36
+    mov     al, ' '
+    mov     bl, SU_PAPER
+    call    suBar
+    inc     dh
+    cmp     dh, 16
+    jb      .paper
+    mov     dl, 22
+    mov     dh, 9
+    mov     cx, 36
+    mov     al, ' '
+    mov     bl, SU_HEAD
+    call    suBar
+    mov     dl, 24
+    mov     dh, 9
+    call    suGoto
+    mov     si, msg_su_ask_title
+    mov     bl, SU_HEAD
+    call    suPrint
+    ; Save
+    mov     dl, 24
+    mov     dh, 11
+    mov     cx, 11
+    mov     al, ' '
+    mov     bl, SU_PAPER
+    cmp     byte [es:SU_OPT], 0
+    jne     .s0
+    mov     bl, SU_SEL
+.s0:
+    call    suBar
+    mov     dl, 27
+    mov     dh, 11
+    call    suGoto
+    mov     si, msg_su_yes
+    mov     bl, SU_PAPER
+    cmp     byte [es:SU_OPT], 0
+    jne     .s1
+    mov     bl, SU_SEL
+.s1:
+    call    suPrint
+    ; Discard
+    mov     dl, 36
+    mov     dh, 11
+    mov     cx, 11
+    mov     al, ' '
+    mov     bl, SU_PAPER
+    cmp     byte [es:SU_OPT], 1
+    jne     .d0
+    mov     bl, SU_SEL
+.d0:
+    call    suBar
+    mov     dl, 37
+    mov     dh, 11
+    call    suGoto
+    mov     si, msg_su_no
+    mov     bl, SU_PAPER
+    cmp     byte [es:SU_OPT], 1
+    jne     .d1
+    mov     bl, SU_SEL
+.d1:
+    call    suPrint
+    ; Cancel
+    mov     dl, 48
+    mov     dh, 11
+    mov     cx, 9
+    mov     al, ' '
+    mov     bl, SU_PAPER
+    cmp     byte [es:SU_OPT], 2
+    jne     .c0
+    mov     bl, SU_SEL
+.c0:
+    call    suBar
+    mov     dl, 49
+    mov     dh, 11
+    call    suGoto
+    mov     si, msg_su_cancel
+    mov     bl, SU_PAPER
+    cmp     byte [es:SU_OPT], 2
+    jne     .c1
+    mov     bl, SU_SEL
+.c1:
+    call    suPrint
+    mov     dl, 24
+    mov     dh, 13
+    call    suGoto
+    mov     si, msg_su_ask_hint
+    mov     bl, SU_PAPER
+    call    suPrint
+    pop     si
+    pop     dx
+    pop     cx
+    pop     bx
     pop     ax
     ret
 
@@ -451,20 +908,27 @@ drawSetup:
     push    si
     call    suClearBody
     call    suFrame
-    call    drawTabs
-    ; the title in the top border, the version hard right
-    mov     dl, 4
+    ; row 0 is the title bar, above the frame -- the way the rv64 setup does
+    ; it, so the tabs get the border to themselves
+    xor     dl, dl
+    xor     dh, dh
+    mov     cx, 80
+    mov     al, ' '
+    mov     bl, SU_PAPER
+    call    suBar
+    mov     dl, 1
     xor     dh, dh
     call    suGoto
     mov     si, msg_su_title
     mov     bl, SU_HEAD
     call    suPrint
-    mov     dl, 70
+    mov     dl, 74
     xor     dh, dh
     call    suGoto
     mov     si, msg_su_version
     mov     bl, SU_HEAD
     call    suPrint
+    call    drawTabs
     ; the page
     mov     al, [es:SU_TAB]
     test    al, al
@@ -493,7 +957,7 @@ drawTabs:
     push    bx
     push    dx
     mov     dl, 2
-    xor     dh, dh
+    mov     dh, SU_TOP
     call    suGoto
     mov     si, msg_tab_main
     mov     bl, SU_HEAD
@@ -503,7 +967,7 @@ drawTabs:
 .t0:
     call    suPrint
     mov     dl, 10
-    xor     dh, dh
+    mov     dh, SU_TOP
     call    suGoto
     mov     si, msg_tab_info
     mov     bl, SU_HEAD
@@ -513,7 +977,7 @@ drawTabs:
 .t1:
     call    suPrint
     mov     dl, 18
-    xor     dh, dh
+    mov     dh, SU_TOP
     call    suGoto
     mov     si, msg_tab_exit
     mov     bl, SU_HEAD
@@ -532,7 +996,7 @@ pageMain:
     push    ax
     push    si
     mov     dl, 2
-    mov     dh, 1
+    mov     dh, SU_TOP + 1
     call    suGoto
     mov     si, msg_su_settings
     mov     bl, SU_HEAD
@@ -557,7 +1021,7 @@ pageInfo:
     push    ax
     push    si
     mov     dl, 2
-    mov     dh, 1
+    mov     dh, SU_TOP + 1
     call    suGoto
     mov     si, msg_su_info
     mov     bl, SU_HEAD
@@ -653,7 +1117,7 @@ pageExit:
     push    dx
     push    si
     mov     dl, 2
-    mov     dh, 1
+    mov     dh, SU_TOP + 1
     call    suGoto
     mov     si, msg_su_exithead
     mov     bl, SU_HEAD
@@ -665,14 +1129,14 @@ pageExit:
     mov     bl, SU_SEL
 .row0:
     mov     dl, 1
-    mov     dh, 2
+    mov     dh, 3
     mov     cx, 43
     push    bx
     mov     al, ' '
     call    suBar
     pop     bx
     mov     dl, 3
-    mov     dh, 2
+    mov     dh, 3
     call    suGoto
     mov     si, msg_su_save
     call    suPrint
@@ -683,26 +1147,26 @@ pageExit:
     mov     bl, SU_SEL
 .row1:
     mov     dl, 1
-    mov     dh, 3
+    mov     dh, 4
     mov     cx, 43
     push    bx
     mov     al, ' '
     call    suBar
     pop     bx
     mov     dl, 3
-    mov     dh, 3
+    mov     dh, 4
     call    suGoto
     mov     si, msg_su_discard
     call    suPrint
     ; what each one does
     mov     dl, 47
-    mov     dh, 2
+    mov     dh, 4
     call    suGoto
     mov     si, msg_su_savehelp
     mov     bl, SU_PAPER
     call    suPrint
     mov     dl, 47
-    mov     dh, 5
+    mov     dh, 7
     call    suGoto
     mov     si, msg_su_discardhelp
     mov     bl, SU_PAPER
@@ -721,36 +1185,36 @@ suFrame:
     push    si
     ; the two horizontal rules, top and bottom
     xor     dl, dl
-    xor     dh, dh
+    mov     dh, SU_TOP
     mov     cx, 80
     mov     al, G_HBAR
     mov     bl, SU_HEAD
     call    suBar
     xor     dl, dl
-    mov     dh, 22
+    mov     dh, SU_BOT
     mov     cx, 80
     mov     al, G_HBAR
     mov     bl, SU_HEAD
     call    suBar
     ; the four corners
     xor     dl, dl
-    xor     dh, dh
+    mov     dh, SU_TOP
     mov     al, G_TL
     call    suCell
     mov     dl, 79
-    xor     dh, dh
+    mov     dh, SU_TOP
     mov     al, G_TR
     call    suCell
     xor     dl, dl
-    mov     dh, 22
+    mov     dh, SU_BOT
     mov     al, G_BL
     call    suCell
     mov     dl, 79
-    mov     dh, 22
+    mov     dh, SU_BOT
     mov     al, G_BR
     call    suCell
     ; the verticals: the sides and the rule at SU_SPLIT
-    mov     dh, 1
+    mov     dh, SU_TOP + 1
 .side:
     xor     dl, dl
     mov     al, G_VBAR
@@ -766,11 +1230,11 @@ suFrame:
     jb      .side
     ; the junctions where the rule meets the two horizontal borders
     mov     dl, SU_SPLIT
-    xor     dh, dh
+    mov     dh, SU_TOP
     mov     al, G_TJ
     call    suCell
     mov     dl, SU_SPLIT
-    mov     dh, 22
+    mov     dh, SU_BOT
     mov     al, G_BJ
     call    suCell
     pop     si
@@ -797,7 +1261,7 @@ suClearBody:
     push    bx
     push    cx
     push    dx
-    mov     dh, 1
+    mov     dh, SU_TOP + 1
 .row:
     mov     dl, 1
     mov     cx, 78
@@ -811,46 +1275,6 @@ suClearBody:
     pop     cx
     pop     bx
     pop     ax
-    ret
-
-suDrawAll:
-    mov     al, 1
-    mov     [es:SU_ITEM], 0
-    call    suClearBody
-    call    suFrame
-    ; the title sits in the top border, the version hard right
-    mov     dl, 4
-    xor     dh, dh
-    call    suGoto
-    mov     si, msg_su_title
-    mov     bl, SU_HEAD
-    call    suPrint
-    mov     dl, 74
-    xor     dh, dh
-    call    suGoto
-    mov     si, msg_su_version
-    mov     bl, SU_HEAD
-    call    suPrint
-    ; the headings
-    mov     dl, 2
-    mov     dh, 1
-    call    suGoto
-    mov     si, msg_su_settings
-    mov     bl, SU_HEAD
-    call    suPrint
-    ; the menu
-    xor     al, al
-.rows:
-    cmp     al, SU_N
-    jae     .panel
-    push    ax
-    call    suDrawRow
-    pop     ax
-    inc     al
-    jmp     .rows
-.panel:
-    call    suPanel
-    call    suStatus
     ret
 
 ; the status line under the frame, and the key legend below it
@@ -924,7 +1348,7 @@ suPanel:
     push    si
     push    di
     ; blank the panel's columns so a redraw starts clean
-    mov     dh, 1
+    mov     dh, SU_TOP + 1
 .blank:
     mov     dl, SU_RX
     mov     cx, 32
@@ -932,7 +1356,37 @@ suPanel:
     mov     bl, SU_PAPER
     call    suBar
     inc     dh
-    cmp     dh, 22
+    cmp     dh, SU_BOT
+    jb      .blank
+    call    suPanelTop
+    call    suPanelFacts
+    pop     di
+    pop     si
+    pop     dx
+    pop     cx
+    pop     bx
+    pop     ax
+    ret
+
+; suPanelTop: the name of the selected row and what it does. This is the part
+; that changes when the arrow keys move, so it is kept apart from the facts
+; below it -- and it only clears its own five rows
+suPanelTop:
+    push    ax
+    push    bx
+    push    cx
+    push    dx
+    push    si
+    push    di
+    mov     dh, SU_TOP + 1
+.blank:
+    mov     dl, SU_RX
+    mov     cx, 32
+    mov     al, ' '
+    mov     bl, SU_PAPER
+    call    suBar
+    inc     dh
+    cmp     dh, SU_TOP + 6
     jb      .blank
     ; the item's name
     mov     al, [es:SU_ITEM]
@@ -940,47 +1394,62 @@ suPanel:
     add     ax, ax
     mov     di, ax
     mov     dl, SU_RX
-    mov     dh, 1
+    mov     dh, SU_TOP + 1
     call    suGoto
     mov     si, [di + su_labels]
     mov     bl, SU_HEAD
     call    suPrint
     ; its two lines of help
     mov     dl, SU_RX
-    mov     dh, 2
+    mov     dh, SU_TOP + 2
     call    suGoto
     mov     si, [di + su_d1]
     mov     bl, SU_PAPER
     call    suPrint
     mov     dl, SU_RX
-    mov     dh, 3
+    mov     dh, SU_TOP + 3
     call    suGoto
     mov     si, [di + su_d2]
     mov     bl, SU_PAPER
     call    suPrint
     ; how to change it
     mov     dl, SU_RX
-    mov     dh, 5
+    mov     dh, SU_TOP + 5
     call    suGoto
     mov     si, msg_su_hint
     mov     bl, SU_HEAD
     call    suPrint
-    ; the system summary: what a setup screen always shows and never edits
+    pop     di
+    pop     si
+    pop     dx
+    pop     cx
+    pop     bx
+    pop     ax
+    ret
+
+; suPanelFacts: the system summary -- what a setup screen always shows and
+; never edits
+suPanelFacts:
+    push    ax
+    push    bx
+    push    cx
+    push    dx
+    push    si
     mov     dl, SU_RX
-    mov     dh, 8
+    mov     dh, SU_TOP + 8
     call    suGoto
     mov     si, msg_su_system
     mov     bl, SU_HEAD
     call    suPrint
     mov     dl, SU_RX
-    mov     dh, 9
+    mov     dh, SU_TOP + 9
     call    suGoto
     mov     si, msg_su_cpu
     mov     bl, SU_PAPER
     call    suPrint
     ; memory, in KiB out of the CMOS
     mov     dl, SU_RX
-    mov     dh, 10
+    mov     dh, SU_TOP + 10
     call    suGoto
     mov     si, msg_su_mem
     mov     bl, SU_PAPER
@@ -998,7 +1467,7 @@ suPanel:
     call    suPrint
     ; cores, from the chipset
     mov     dl, SU_RX
-    mov     dh, 11
+    mov     dh, SU_TOP + 11
     call    suGoto
     mov     si, msg_su_cores
     mov     bl, SU_PAPER
@@ -1010,13 +1479,12 @@ suPanel:
     call    put2
     ; the clock, straight out of the RTC
     mov     dl, SU_RX
-    mov     dh, 12
+    mov     dh, SU_TOP + 12
     call    suGoto
     mov     si, msg_su_clock
     mov     bl, SU_PAPER
     call    suPrint
     call    suClock
-    pop     di
     pop     si
     pop     dx
     pop     cx
@@ -1291,12 +1759,44 @@ msg_su_title:   db "JSW BIOS Setup Utility", 0
 msg_su_version: db "v0.3", 0
 msg_su_settings: db "Settings", 0
 msg_su_system:  db "System", 0
-msg_su_hint:    db "< > change", 0
+msg_su_hint:    db "Enter edits it", 0
 msg_su_cpu:     db "CPU: 80386 real mode", 0
 msg_su_mem:     db "Memory: ", 0
 msg_su_cores:   db "Cores: ", 0
 msg_su_clock:   db "Clock: ", 0
-msg_su_keys:    db "^/v select   < > change   Enter saves   Backspace boots", 0
+msg_su_keys:    db "^/v select  </> page  Enter edit  F10 save  Esc exit", 0
+
+; the pages, on the top border
+msg_tab_main:   db " Main ", 0
+msg_tab_info:   db " Info ", 0
+msg_tab_exit:   db " Exit ", 0
+
+; the information page: what the machine is, never editable
+msg_su_info:    db "System information", 0
+msg_su_biosline: db "BIOS: JSW BIOS v0.3", 0
+msg_su_cpuline: db "CPU: Intel 80386, real mode", 0
+msg_su_diskline: db "Disk: int 13h, one boot sector", 0
+msg_su_ramline: db "RAM: 640 KB below 1 MB", 0
+msg_su_romline: db "ROM: 64 KB at F000:0000", 0
+msg_su_videoline: db "Video: VGA text, 80x25", 0
+msg_su_tabhelp: db "< > switches pages", 0
+
+; the exit page
+msg_su_exithead: db "Exit", 0
+msg_su_save:    db "Save and exit", 0
+msg_su_discard: db "Discard and exit", 0
+msg_su_savehelp: db "Write these settings to CMOS", 0
+msg_su_discardhelp: db "Leave CMOS as it was", 0
+
+; the dialogs
+msg_su_edit_hint: db "< > changes, Enter keeps", 0
+msg_su_lt:      db "<", 0
+msg_su_gt:      db ">", 0
+msg_su_ask_title: db "Save the changes?", 0
+msg_su_ask_hint: db "Enter picks, Esc stays", 0
+msg_su_yes:     db "Save", 0
+msg_su_no:      db "Discard", 0
+msg_su_cancel:  db "Cancel", 0
 msg_su_battery: db "Battery: ", 0
 msg_su_ok:      db "OK", 0
 msg_su_dead:    db "DEAD", 0

@@ -180,20 +180,38 @@ class I386SetupTests(unittest.TestCase):
         mach.run(limit=limit)
         return mach
 
-    def test_delete_opens_it_and_enter_saves(self) -> None:
+    def test_delete_opens_it_on_the_main_page(self) -> None:
         mach = self._setup([0x53])                     # Delete
         screen = mach.text()
         self.assertIn("JSW BIOS Setup Utility", screen)
+        self.assertIn(" Main ", screen)
+        self.assertIn(" Info ", screen)
+        self.assertIn(" Exit ", screen)
         self.assertIn("Base memory", screen)
         self.assertIn("Battery: OK", screen)
 
-    def test_the_arrow_keys_move_and_change_a_value(self) -> None:
-        mach = self._setup([0x53, 0x50, 0x50, 0x4D])    # Del, Down, Down, Right
+    def test_the_right_arrow_walks_to_the_information_page(self) -> None:
+        mach = self._setup([0x53, 0x4D])               # Del, Right
+        screen = mach.text()
+        self.assertIn("System information", screen)
+        self.assertIn("Video: VGA text, 80x25", screen)
+        self.assertNotIn("Base memory", screen)
+
+    def test_enter_edits_the_selected_value(self) -> None:
+        keys = [0x53, 0x50, 0x50, 0x1C, 0x4D, 0x1C]    # Del, Down x2, Enter, Right, Enter
+        mach = self._setup(keys)
         self.assertIn("Year", mach.text())
         self.assertIn("2026", mach.text(), "the year row went from 25 to 26")
+        self.assertEqual(mach.cmos[0x09], 0x25, "nothing is written until it is saved")
 
-    def test_saving_writes_the_cmos_and_post_reads_it_back(self) -> None:
-        mach = self._setup([0x53] + [0x50] * 9 + [0x4B, 0x44])   # to memory, -1, F10
+    def test_escape_in_the_dialog_puts_the_old_value_back(self) -> None:
+        keys = [0x53, 0x50, 0x50, 0x1C, 0x4D, 0x01]    # ... then Esc
+        mach = self._setup(keys)
+        self.assertIn("2025", mach.text(), "the edit was thrown away")
+
+    def test_f10_saves_and_the_next_post_reads_it_back(self) -> None:
+        keys = [0x53] + [0x50] * 9 + [0x1C, 0x4B, 0x1C, 0x44]
+        mach = self._setup(keys)                       # to memory, edit, -1, keep, F10
         self.assertEqual(mach.cmos[0x16] * 256 + mach.cmos[0x15], 576)
         # and a fresh POST believes it
         mach.sreg[rv.SEG_CS] = rv.RESET_CS
@@ -203,8 +221,21 @@ class I386SetupTests(unittest.TestCase):
         mach.run(limit=300_000)
         self.assertIn("Memory: 576K conventional", mach.text())
 
-    def test_leaving_with_backspace_keeps_the_old_values(self) -> None:
-        mach = self._setup([0x53, 0x4D, 0x0E])          # Del, Right, Backspace
+    def test_the_exit_page_saves(self) -> None:
+        keys = [0x53, 0x4D, 0x4D, 0x1C]                # Del, Right, Right, Enter
+        mach = self._setup(keys)
+        self.assertEqual(mach.cmos[0x31], 0xA5, "the setup checksum was written")
+
+    def test_escape_asks_before_it_leaves(self) -> None:
+        mach = self._setup([0x53, 0x01])               # Del, Esc
+        screen = mach.text()
+        self.assertIn("Save the changes?", screen)
+        self.assertIn("Cancel", screen)
+
+    def test_discarding_keeps_the_old_values(self) -> None:
+        keys = [0x53, 0x50, 0x50, 0x1C, 0x4D, 0x1C, 0x01, 0x4D, 0x1C]
+        # Del, Down x2, Enter, Right, Enter, Esc, Right (Discard), Enter
+        mach = self._setup(keys)
         self.assertEqual(mach.cmos[0x09], 0x25, "the year was not written")
 
 
