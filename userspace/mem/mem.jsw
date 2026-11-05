@@ -1,0 +1,34 @@
+#enable_feature<useTempVariables>;
+#enable_feature<namespacedNames>;
+
+/*
+ * Proof that the board's memory extension is a real gigabyte: allocate one,
+ * write every byte in it, then read three addresses a gigabyte apart. A buffer
+ * that is not really there cannot be filled, and its last byte cannot be read.
+ */
+
+metadata note Stage at 50,50 350x170: "{\"width\":480,\"height\":360} // _twconfig_";
+
+public X.memMiB = 0;
+public X.memFirst = 0;
+public X.memMid = 0;
+public X.memLast = 0;
+public X.memWord = 0;
+
+class MemTest {
+    public void memStart() { // hook: green flag
+        X.memMiB = Mem.alloc(1073741824) / 1048576;
+        Mem.fill(0, 1073741824, 90);
+        Mem.write32(1073741816, 305419896);
+        X.memFirst = Mem.read8(0);
+        X.memMid = Mem.read8(536870912);
+        X.memLast = Mem.read8(1073741823);
+        X.memWord = Mem.read32(1073741816);
+        Looks.say(join(join(join(join(join(join(X.memMiB, " MiB written. byte 0 = "), X.memFirst),
+                     join(", byte 512M = ", X.memMid)), join(", last byte = ", X.memLast)),
+                     join(", word before it = ", X.memWord)), "."));
+        while (1) {
+            Control.wait(0);
+        }
+    }
+}

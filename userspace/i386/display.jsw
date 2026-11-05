@@ -1,0 +1,223 @@
+/*
+ * display — the video card.
+ *
+ * The card itself is memory: the text plane at 0xB_8000 is 80 x 25 cells of
+ * (character, attribute), which the CPU writes like any other memory. This
+ * sprite turns those cells into pixels, and it is the only sprite allowed to
+ * touch the pen.
+ *
+ * One pen dot is one stage pixel. The pen is size 1 and every dot sits on a
+ * pixel *centre*, so a glyph is its bitmap and nothing else. Painting is
+ * incremental: the CPU marks a cell dirty and this loop redraws a few per
+ * frame, so a scrolling console costs a line, not a screen.
+ *
+ * A text attribute is `paper * 16 + ink`, the way a VGA card stores it, so
+ * white on blue is 0x1F and light grey paper with black text is 0x70.
+ */
+
+public X.dispEga = [0, 170, 43520, 43690, 11141120, 11141290, 11162880, 11184810,
+    5592405, 5592575, 5635925, 5636095, 16733525, 16733695, 16777045, 16777215];
+public X.pow2 = [1, 2, 4, 8, 16, 32, 64, 128, 256];
+public X.dispPen = -1;
+
+import "assets/lists/font.jsa" as font;
+
+class Display {
+    public void displayStart() { // hook: green flag
+        Looks.hide();
+        while (1) {
+            if (X.dispReq == 1) {
+                X.dispBooted = 0;
+                dispBoot();
+                X.dispReq = 0;
+                X.dispAck = 1;
+            }
+            paintSome();
+            Control.wait(0);
+        }
+    }
+
+    /* One frame of painting, under warp so a full screen is one frame's work
+     * rather than sixty. The loop that calls this one is not warp: see the note
+     * in i386.jsw about `wait 0` inside a warp procedure. */
+
+    private void dispBoot() { // warp
+        Pen.setPenSize(1);
+        clearScreen();
+        _i = 1;
+        while (_i <= X.dispCols * X.dispRows) {
+            X.textDirty.set(_i, 1);
+            X.textDrawn.set(_i, -1);
+            _i += 1;
+        }
+        X.textN = X.dispCols * X.dispRows;
+        X.textScan = 1;
+        X.dispPen = 0;
+        X.dispBooted = 1;
+    }
+
+    /* Black, one pen stroke per row: with the pen at 1 the capsules cover
+     * exactly the pixels the stroke passes through. */
+    private void clearScreen() { // warp
+        Pen.eraseAll();
+        Pen.setPenColor(0);
+        _y = X.stageH / 2;
+        while (_y > 0 - X.stageH / 2) {
+            _y -= 1;
+            Motion.setXY(0 - X.stageW / 2, _y);
+            Pen.penDown();
+            Motion.setXY(X.stageW / 2 - 1, _y);
+            Pen.penUp();
+        }
+        _i = 1;
+        while (_i <= X.dispCols * X.dispRows) {
+            X.textDrawn.set(_i, -1);
+            _i += 1;
+        }
+    }
+
+    /*
+     * A dot at stage x lights image column x + 320, and stage y lights image
+     * row 239 - y, so pixel centres sit on integer stage coordinates. A dot has
+     * to *move*: pen-down on a point and straight back up stamps nothing in
+     * TurboWarp's compiled runtime, so every dot is a hundredth of a unit long
+     * and its round cap covers exactly the one pixel it starts on.
+     */
+    private void pixel(ix, iy, hex) { // warp
+        if (hex != X.dispPen) {
+            Pen.setPenColor(hex);
+            X.dispPen = hex;
+        }
+        _px = ix - X.stageW / 2;
+        _py = X.stageH / 2 - 1 - iy;
+        Motion.setXY(_px, _py);
+        Pen.penDown();
+        Motion.setXY(_px + 0.01, _py);
+        Pen.penUp();
+        X.dispDots += 1;
+    }
+
+    private void pixelRun(ix, iy, len, hex) { // warp
+        if (hex != X.dispPen) {
+            Pen.setPenColor(hex);
+            X.dispPen = hex;
+        }
+        _px = ix - X.stageW / 2;
+        _py = X.stageH / 2 - 1 - iy;
+        Motion.setXY(_px, _py);
+        Pen.penDown();
+        Motion.setXY(_px + len - 1, _py);
+        Pen.penUp();
+        X.dispDots += len;
+    }
+
+    private void paintSome() { // warp
+        if (X.dispBooted < 1) {
+            return;
+        }
+        /* No "nothing to do" shortcut: `textN` is a hint, and a hint that is
+         * wrong stops the card for ever. Scanning a few hundred cells is one
+         * list read each, which is cheaper than a screen that never finishes. */
+        X.dispPainted = 0;
+        /* A time budget, not a cell count. The pen costs about 1.5 ms a cell,
+         * so eight cells is the whole frame and the CPU gets nothing: the
+         * machine was running at 15,000 instructions a second instead of
+         * 1,700,000. Four milliseconds a frame paints a few cells and leaves
+         * the rest of the frame to the guest. */
+        _t0 = Sensing.timer();
+        _s = 0;
+        while (_s < 400) {
+            if (Sensing.timer() - _t0 > 0.004) {
+                return;
+            }
+            _cell = X.textScan;
+            /* A dirty flag is bookkeeping; the plane is the truth. Repaint
+             * whenever the drawn copy differs, because a flag that went
+             * missing would leave a cell wrong for ever. */
+            _word = X.text.get(Operators.math("floor", (_cell - 1) / 2) + 1) + 0;
+            _now = _word % 65536;
+            if ((_cell - 1) % 2 == 1) {
+                _now = Operators.math("floor", _word / 65536) % 65536;
+            }
+            _dirty = 0;
+            if (X.textDirty.get(_cell) == 1) {
+                _dirty = 1;
+            }
+            if (_dirty == 1 || X.textDrawn.get(_cell) != _now) {
+                if (_dirty == 1) {
+                    X.textDirty.set(_cell, 0);
+                    if (X.textN > 0) {
+                        X.textN -= 1;
+                    }
+                }
+                paintCell(_cell - 1);
+                X.dispPainted += 1;
+            }
+            _cell += 1;
+            if (_cell > X.dispCols * X.dispRows) {
+                _cell = 1;
+            }
+            X.textScan = _cell;
+            _s += 1;
+        }
+    }
+
+    /* One cell: the paper first, then the glyph's set bits, a run at a time. */
+    private void paintCell(index) { // warp
+        _col = index % X.dispCols;
+        _row = Operators.math("floor", index / X.dispCols);
+        _x0 = _col * X.dispCellW;
+        _y0 = _row * X.dispCellH;
+        // the plane is memory, not one item a cell: cell n is two bytes at
+        // 2n, so it is the low or the high half of word n / 2
+        _word = X.text.get(Operators.math("floor", index / 2) + 1) + 0;
+        _cell = _word % 65536;
+        if (index % 2 == 1) {
+            _cell = Operators.math("floor", _word / 65536) % 65536;
+        }
+        _ch = _cell % 256;
+        _at = Operators.math("floor", _cell / 256) % 256;
+        _inkNo = _at % 16;
+        _papNo = Operators.math("floor", _at / 16) % 16;
+        _ink = X.dispEga.get(_inkNo + 1) + 0;
+        _pap = X.dispEga.get(_papNo + 1) + 0;
+        _now = _ch + _at * 256;
+        if (X.textDrawn.get(index + 1) == _now) {
+            return;
+        }
+        // The font table is stored bottom row first: item 1 of a glyph is its
+        // *last* row. So row `_g` belongs at `y0 + height - _g`, which puts the
+        // glyph in rows 1..15 and leaves row 0 as the blank line above it.
+        _g = 1;
+        while (_g <= X.dispGlyphH) {
+            _bits = font.get(_ch * X.dispGlyphH + _g) + 0;
+            _y = _y0 + X.dispCellH - _g;
+            pixelRun(_x0, _y, X.dispCellW, _pap);
+            if (_bits > 0) {
+                _b = 0;
+                _runStart = -1;
+                while (_b < 8) {
+                    // bit 7 is the leftmost pixel, so the shift counts down
+                    _on = Operators.math("floor", _bits / X.pow2.get(X.dispCellW - _b)) % 2;
+                    if (_on == 1 && _runStart < 0) {
+                        _runStart = _b;
+                    }
+                    if (_on == 0 && _runStart >= 0) {
+                        pixelRun(_x0 + _runStart, _y, _b - _runStart, _ink);
+                        _runStart = -1;
+                    }
+                    _b += 1;
+                }
+                if (_runStart >= 0) {
+                    pixelRun(_x0 + _runStart, _y, 8 - _runStart, _ink);
+                }
+            }
+            _g += 1;
+        }
+        pixelRun(_x0, _y0, X.dispCellW, _pap);
+        /* Only now, with the pixels on the canvas: warp yields inside a long
+         * batch, and a cell marked drawn before its last stroke would be a
+         * hole that never fills. */
+        X.textDrawn.set(index + 1, _now);
+    }
+}

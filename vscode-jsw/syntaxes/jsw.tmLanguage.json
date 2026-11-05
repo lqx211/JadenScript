@@ -1,0 +1,660 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "JadenScript",
+  "scopeName": "source.jsw",
+  "patterns": [
+    {
+      "include": "#directives"
+    },
+    {
+      "include": "#comments"
+    },
+    {
+      "include": "#strings"
+    },
+    {
+      "include": "#imports"
+    },
+    {
+      "include": "#target"
+    },
+    {
+      "include": "#metadata"
+    },
+    {
+      "include": "#declarations"
+    },
+    {
+      "include": "#keywords"
+    },
+    {
+      "include": "#numbers"
+    },
+    {
+      "include": "#calls"
+    },
+    {
+      "include": "#namespaces"
+    },
+    {
+      "include": "#variables"
+    },
+    {
+      "include": "#operators"
+    },
+    {
+      "include": "#punctuation"
+    }
+  ],
+  "repository": {
+    "directives": {
+      "comment": "#enable_feature<name>; - the only compiler directive.",
+      "patterns": [
+        {
+          "name": "meta.preprocessor.jsw",
+          "begin": "^(\\s*)(#enable_feature)",
+          "beginCaptures": {
+            "1": {
+              "name": "punctuation.whitespace.leading.jsw"
+            },
+            "2": {
+              "name": "keyword.other.directive.jsw"
+            }
+          },
+          "end": ";",
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.terminator.jsw"
+            }
+          },
+          "patterns": [
+            {
+              "name": "punctuation.definition.tag.begin.jsw",
+              "match": "<"
+            },
+            {
+              "name": "punctuation.definition.tag.end.jsw",
+              "match": ">"
+            },
+            {
+              "name": "constant.language.feature.jsw",
+              "match": "\\b(?:useTempVariables|commentMetadata|hideObjectNames|namespacedNames|doObfuscation)\\b"
+            },
+            {
+              "name": "entity.name.tag.jsw",
+              "match": "[A-Za-z_][A-Za-z0-9_]*"
+            }
+          ]
+        }
+      ]
+    },
+    "comments": {
+      "patterns": [
+        {
+          "comment": "A decompiler annotation: the words carry meaning, so they get their own scope.",
+          "name": "comment.line.double-slash.jsw",
+          "begin": "//",
+          "end": "$",
+          "patterns": [
+            {
+              "name": "string.quoted.double.jsw",
+              "begin": "\"",
+              "end": "\"",
+              "patterns": [
+                {
+                  "name": "constant.character.escape.jsw",
+                  "match": "\\\\."
+                }
+              ]
+            },
+            {
+              "name": "keyword.control.directive.jsw",
+              "match": "(?:\\bmain thread\\b|\\breceiver at\\b|\\bproccode\\b|\\bSprite:|\\bcomment\\b|\\bgrouped\\b|\\bmonitor\\b|\\bStage\\b|\\bhook:|\\bwatch\\b|\\bwarp\\b|\\bat\\b)"
+            },
+            {
+              "comment": "// costume … / // sound …",
+              "name": "keyword.other.annotation.jsw",
+              "match": "\\b(?:costume|sound)\\b"
+            },
+            {
+              "comment": "centerx= centery= res= rate= samples=",
+              "name": "variable.parameter.annotation.jsw",
+              "match": "\\b(?:centerx|centery|samples|sample|rate|res)\\b(?=\\s*=)"
+            },
+            {
+              "name": "entity.name.tag.jsw",
+              "match": "@[A-Za-z_$][\\w$]*(?:\\.[A-Za-z_$][\\w$]*)*"
+            },
+            {
+              "name": "constant.numeric.jsw",
+              "match": "\\b\\d+(?:\\.\\d+)?\\b"
+            }
+          ]
+        },
+        {
+          "name": "comment.block.jsw",
+          "begin": "/\\*",
+          "end": "\\*/"
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "comment": "f-strings may contain {expression} holes",
+          "name": "string.interpolated.jsw",
+          "begin": "\\bf(\\\"|')",
+          "end": "\\1",
+          "patterns": [
+            {
+              "name": "constant.character.escape.jsw",
+              "match": "\\{\\{"
+            },
+            {
+              "name": "constant.character.escape.jsw",
+              "match": "\\}\\}"
+            },
+            {
+              "name": "meta.embedded.expression.jsw",
+              "begin": "\\{",
+              "beginCaptures": {
+                "0": {
+                  "name": "punctuation.section.embedded.begin.jsw"
+                }
+              },
+              "end": "\\}",
+              "endCaptures": {
+                "0": {
+                  "name": "punctuation.section.embedded.end.jsw"
+                }
+              },
+              "patterns": [
+                {
+                  "include": "#strings"
+                },
+                {
+                  "include": "#numbers"
+                },
+                {
+                  "include": "#namespaces"
+                },
+                {
+                  "include": "#variables"
+                }
+              ]
+            },
+            {
+              "name": "constant.character.escape.jsw",
+              "match": "\\\\."
+            }
+          ]
+        },
+        {
+          "name": "string.quoted.double.jsw",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [
+            {
+              "name": "constant.character.escape.jsw",
+              "match": "\\\\."
+            }
+          ]
+        },
+        {
+          "name": "string.quoted.single.jsw",
+          "begin": "'",
+          "end": "'",
+          "patterns": [
+            {
+              "name": "constant.character.escape.jsw",
+              "match": "\\\\."
+            }
+          ]
+        }
+      ]
+    },
+    "imports": {
+      "comment": "import \"assets/lists/notes.jsa\" as notes;",
+      "patterns": [
+        {
+          "match": "\\b(import)\\s+(\"[^\"]*\"|'[^']*')(?:\\s+(as)\\s+(\"[^\"]*\"|'[^']*'|[A-Za-z_$][\\w$]*))?",
+          "captures": {
+            "1": {
+              "name": "keyword.control.import.jsw"
+            },
+            "2": {
+              "name": "string.quoted.jsw"
+            },
+            "3": {
+              "name": "keyword.control.import.jsw"
+            },
+            "4": {
+              "name": "entity.name.namespace.jsw"
+            }
+          }
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.import.jsw",
+          "match": "\\b(?:import|as)\\b"
+        },
+        {
+          "name": "storage.modifier.jsw",
+          "match": "\\b(?:private|public|static|final)\\b"
+        },
+        {
+          "name": "storage.type.jsw",
+          "match": "\\b(?:void)\\b"
+        },
+        {
+          "name": "keyword.control.jsw",
+          "match": "\\b(?:continue|default|repeat|return|switch|break|loose|while|call|case|elif|else|for|if)\\b"
+        },
+        {
+          "name": "keyword.operator.word.jsw",
+          "match": "\\b(?:and|not|or)\\b"
+        },
+        {
+          "name": "constant.language.jsw",
+          "match": "\\b(?:false|null|true|any)\\b"
+        },
+        {
+          "name": "keyword.declaration.jsw",
+          "match": "\\b(?:metadata|class|stage)\\b"
+        },
+        {
+          "comment": "Reserved for future versions; flagged so users avoid them.",
+          "name": "invalid.illegal.reserved.jsw",
+          "match": "\\b(?:instanceof|extends|finally|typedef|delete|export|struct|typeof|async|await|catch|const|throw|yield|enum|this|let|new|try|var|do|of)\\b"
+        }
+      ]
+    },
+    "declarations": {
+      "patterns": [
+        {
+          "comment": "class Lyrics(namespace=\"Lyrics\") — the same keys inline.",
+          "name": "meta.class-parameters.jsw",
+          "begin": "\\b(class)\\s+([A-Za-z_$][\\w$]*)\\s*(\\()",
+          "beginCaptures": {
+            "1": {
+              "name": "keyword.declaration.class.jsw"
+            },
+            "2": {
+              "name": "entity.name.type.class.jsw"
+            },
+            "3": {
+              "name": "punctuation.section.parens.jsw"
+            }
+          },
+          "end": "\\)",
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.section.parens.jsw"
+            }
+          },
+          "patterns": [
+            {
+              "name": "keyword.other.target-key.jsw",
+              "match": "\\b(?:videoTransparency|direction|draggable|namespace|rotation|costume|volume|layer|tempo|video|name|show|size|ns|x|y)\\b(?=\\s*=)"
+            },
+            {
+              "name": "string.quoted.double.jsw",
+              "begin": "\"",
+              "end": "\""
+            },
+            {
+              "name": "keyword.operator.assignment.jsw",
+              "match": "="
+            }
+          ]
+        },
+        {
+          "comment": "class Name / stage",
+          "match": "\\b(class)\\s+([A-Za-z_$][\\w$]*)|\\b(stage)\\b",
+          "captures": {
+            "1": {
+              "name": "keyword.declaration.class.jsw"
+            },
+            "2": {
+              "name": "entity.name.type.class.jsw"
+            },
+            "3": {
+              "name": "keyword.declaration.stage.jsw"
+            }
+          }
+        },
+        {
+          "comment": "Empty: name=\"Empty\", x=36, y=28, ... - a target declaration.",
+          "match": "^(\\s*)([A-Za-z_$][\\w$]*)\\s*(?=:\\s*name=)",
+          "captures": {
+            "1": {
+              "name": "punctuation.whitespace.leading.jsw"
+            },
+            "2": {
+              "name": "entity.name.type.class.jsw"
+            }
+          }
+        },
+        {
+          "comment": "public c_en = …; — the declaration names the state.",
+          "match": "\\b(public|private)\\s+(_[A-Za-z0-9_$][\\w$]*)\\s*(?=[=;])",
+          "captures": {
+            "1": {
+              "name": "storage.modifier.jsw"
+            },
+            "2": {
+              "name": "variable.other.temp.jsw"
+            }
+          }
+        },
+        {
+          "match": "\\b(public|private)\\s+(?!void\\b)([A-Za-z$][\\w$]*)\\s*(?=[=;\\[])",
+          "captures": {
+            "1": {
+              "name": "storage.modifier.jsw"
+            },
+            "2": {
+              "name": "variable.other.readwrite.jsw"
+            }
+          }
+        },
+        {
+          "comment": "for i in a..b — the inclusive counter form.",
+          "match": "\\b(for)\\s+([A-Za-z_$][\\w$]*(?:\\.[A-Za-z_$][\\w$]*)*)\\s+(in)\\b",
+          "captures": {
+            "1": {
+              "name": "keyword.control.jsw"
+            },
+            "2": {
+              "name": "variable.other.loop.jsw"
+            },
+            "3": {
+              "name": "keyword.control.jsw"
+            }
+          }
+        },
+        {
+          "comment": "void Namespace.name(...) / void name(...)",
+          "match": "\\b(void)\\s+([A-Za-z_$][\\w$]*(?:\\.[A-Za-z_$][\\w$]*)*)",
+          "captures": {
+            "1": {
+              "name": "storage.type.jsw"
+            },
+            "2": {
+              "name": "entity.name.function.jsw"
+            }
+          }
+        }
+      ]
+    },
+    "metadata": {
+      "comment": "metadata list Stage.x at 0,0 100x24 hidden; - the mode words and keys are syntax.",
+      "patterns": [
+        {
+          "name": "meta.metadata.jsw",
+          "begin": "^(\\s*)(metadata)\\b",
+          "beginCaptures": {
+            "1": {
+              "name": "punctuation.whitespace.leading.jsw"
+            },
+            "2": {
+              "name": "keyword.declaration.jsw"
+            }
+          },
+          "end": ";|$",
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.terminator.jsw"
+            }
+          },
+          "patterns": [
+            {
+              "comment": "list / large / slider / normal / default",
+              "name": "constant.language.monitor-mode.jsw",
+              "match": "\\b(?:default|normal|slider|large|list)\\b"
+            },
+            {
+              "comment": "pos / at / hidden / shown / range / watchers",
+              "name": "keyword.other.metadata.jsw",
+              "match": "\\b(?:watchers|hidden|range|shown|max|min|pos|at)\\b"
+            },
+            {
+              "comment": "Stage.Lyrics.zh - the annotated target.",
+              "name": "variable.other.member.jsw",
+              "match": "\\b[A-Za-z_$][\\w$]*(?:\\.[A-Za-z_$][\\w$]*)+"
+            },
+            {
+              "name": "string.quoted.double.jsw",
+              "begin": "\"",
+              "end": "\"",
+              "patterns": [
+                {
+                  "name": "constant.character.escape.jsw",
+                  "match": "\\\\."
+                }
+              ]
+            },
+            {
+              "name": "constant.numeric.jsw",
+              "match": "\\b\\d+(?:\\.\\d+)?\\b"
+            }
+          ]
+        }
+      ]
+    },
+    "target": {
+      "comment": "stage: costume=0, volume=100, …; and Sprite: name=\"x\", x=0, …;",
+      "patterns": [
+        {
+          "name": "meta.target-declaration.jsw",
+          "begin": "^(\\s*)(?:(stage)|([A-Za-z_$][\\w$]*))\\s*(:)(?=\\s*[A-Za-z_$][\\w$]*\\s*=)",
+          "beginCaptures": {
+            "1": {
+              "name": "punctuation.whitespace.leading.jsw"
+            },
+            "2": {
+              "name": "keyword.declaration.stage.jsw"
+            },
+            "3": {
+              "name": "entity.name.type.class.jsw"
+            },
+            "4": {
+              "name": "punctuation.separator.jsw"
+            }
+          },
+          "end": ";|$",
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.terminator.jsw"
+            }
+          },
+          "patterns": [
+            {
+              "comment": "costume / volume / layer / tempo / video …",
+              "name": "keyword.other.target-key.jsw",
+              "match": "\\b(?:videoTransparency|direction|draggable|namespace|rotation|costume|volume|layer|tempo|video|name|show|size|ns|x|y)\\b(?=\\s*=)"
+            },
+            {
+              "name": "string.quoted.double.jsw",
+              "begin": "\"",
+              "end": "\"",
+              "patterns": [
+                {
+                  "name": "constant.character.escape.jsw",
+                  "match": "\\\\."
+                }
+              ]
+            },
+            {
+              "name": "constant.numeric.jsw",
+              "match": "\\b\\d+(?:\\.\\d+)?\\b"
+            },
+            {
+              "name": "keyword.operator.assignment.jsw",
+              "match": "="
+            },
+            {
+              "name": "punctuation.separator.jsw",
+              "match": ","
+            }
+          ]
+        }
+      ]
+    },
+    "variables": {
+      "comment": "A temp variable (_x) is a different kind of thing from sprite state.",
+      "patterns": [
+        {
+          "name": "variable.other.temp.jsw",
+          "match": "\\b_[A-Za-z0-9_$][\\w$]*\\b"
+        },
+        {
+          "comment": "A bare identifier: not a call, not a member, but a list name before ``[`` counts.",
+          "name": "variable.other.jsw",
+          "match": "\\b[A-Za-z_$][\\w$]*\\b(?!\\s*(?:\\(|\\.))"
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.hex.jsw",
+          "match": "\\b0[xX][0-9a-fA-F]+\\b"
+        },
+        {
+          "name": "constant.numeric.binary.jsw",
+          "match": "\\b0[bB][01]+\\b"
+        },
+        {
+          "name": "constant.numeric.octal.jsw",
+          "match": "\\b0[oO][0-7]+\\b"
+        },
+        {
+          "comment": "352x212 — a monitor size, scoped either side of the x.",
+          "name": "constant.numeric.jsw",
+          "match": "\\b\\d+(?:\\.\\d+)?(?=[x×]\\d)"
+        },
+        {
+          "name": "constant.numeric.jsw",
+          "match": "(?<=[x×])\\d+(?:\\.\\d+)?\\b"
+        },
+        {
+          "name": "constant.numeric.jsw",
+          "match": "\\b\\d+(?:\\.\\d+)?(?:[eE][+-]?\\d+)?\\b"
+        },
+        {
+          "comment": ".5 — a bare leading dot, also as the end of ``0.05..1``.",
+          "name": "constant.numeric.jsw",
+          "match": "(?<![\\w])\\.\\d+(?:[eE][+-]?\\d+)?\\b"
+        }
+      ]
+    },
+    "calls": {
+      "patterns": [
+        {
+          "comment": "log/warn/error/join/string/block ... - the compiler's builtins.",
+          "name": "support.function.builtin.jsw",
+          "match": "\\b(?:isTurboWarp|breakpoint|isCompiled|startTimer|stopTimer|lengthOf|ceiling|length|string|block|error|float|floor|log10|pow10|acos|asin|atan|ceil|join|menu|sqrt|warn|abs|cos|exp|len|log|sin|tan|ln)\\b(?=\\s*\\()"
+        },
+        {
+          "name": "entity.name.function.call.jsw",
+          "match": "\\b[A-Za-z_$][\\w$]*(?=\\s*\\()"
+        }
+      ]
+    },
+    "namespaces": {
+      "patterns": [
+        {
+          "comment": "A known extension member: WebSocket.closingCode, Pointerlock.setPointerLock",
+          "match": "(\\b(?:Comments|JSON|Mem|MoreEvents|Pointerlock|Runtime|Temp|Timer|TurboWarp|Util|WebSocket|console|microbit)\\s*\\.\\s*)((?:broadcastDataToTargetAndWait|deleteAllRuntimeVariables|broadcastToTargetAndWait|broadcastDataToTarget|changeRuntimeVariable|deleteRuntimeVariable|forEachThreadVariable|runtimeVariableExists|broadcastDataAndWait|changeThreadVariable|listRuntimeVariables|threadVariableExists|listThreadVariables|receivedMessageData|secondaryButtonDown|closeWithoutReason|currentMillisecond|getRuntimeVariable|isConnectionClosed|jsonArrayRemoveAll|listExistingTimers|setRuntimeVariable|broadcastToTarget|connectionErrored|getLastKeyPressed|getThreadVariable|isMouseButtonDown|jsonArrayAnalysis|primaryButtonDown|setThreadVariable|whenButtonPressed|jsonArrayReverse|middleButtonDown|whenPinConnected|whenValueChanged|closeConnection|closeWithReason|commentReporter|compilerEnabled|getButtonIsDown|isButtonPressed|isPointerLocked|jsonArrayConcat|jsonArrayCreate|jsonArrayDelete|jsonArrayFilter|jsonArrayFromto|jsonArrayInsert|jsonArraySetlen|startResetTimer|stringToBoolean|ternaryOperator|whenStopClicked|whileKeyPressed|closingMessage|commentBoolean|commentCommand|framerateLimit|groupCollapsed|jsonArrayItemH|lastKeyPressed|setPointerLock|whileTrueFalse|broadcastData|buttonPressed|closeWithCode|displaySymbol|everyDuration|getCloneLimit|isLessOrEqual|isMoreOrEqual|jsonArrayFlat|jsonArrayFrom|jsonArrayJoin|jsonArrayPush|jsonArraySort|jsonVmGetlist|jsonVmSetlist|setCloneLimit|setDimensions|startLogTimer|whenKeyAction|whenTrueFalse|clearDisplay|closeMessage|displayClear|getDimension|getFramerate|getTiltAngle|jsonArrayGet|jsonArraySet|jsonHasValue|receivedData|regexReplace|removeTimers|setFramerate|setTurboMode|valueOfTimer|Information|changeTimer|closingCode|concatArray|displayText|endLogTimer|isConnected|isTurboMode|jsonIsValid|jsonJlength|messageData|newInstance|removeTimer|resumeTimer|ruleReplace|sendMessage|setUsername|stageHeight|timerExists|whenGesture|whenTimerOp|beforeSave|cloneLimit|commentHat|falseBlock|getEnabled|hasErrored|jsonDelete|jsonGetAll|jsonHasKey|jsonLength|pauseTimer|setEnabled|stageWidth|startTimer|whenChange|whenTilted|afterSave|arrayPush|closeCode|connectTo|fetchFrom|greenFlag|isBoolean|isExactly|jsonEqual|onMessage|parseJSON|setLocked|tiltAngle|trueBlock|turboMode|Emptying|Timerlog|Timeroff|arrayGet|commentC|exponent|getTimer|groupEnd|isClosed|isLocked|isNumber|isObject|isString|isTilted|logTimer|setTimer|Journal|Timeron|Warning|display|forever|isArray|isValid|jsonGet|jsonNew|jsonSet|letters|newline|onClose|onError|write32|copyTo|jsonIs|length|onOpen|read32|tilted|write8|Error|alloc|angle|clamp|clear|debug|error|group|parse|read8|stats|fill|info|size|warn|get|log|now|set|pi)\\b)",
+          "captures": {
+            "1": {
+              "name": "support.class.builtin.jsw"
+            },
+            "2": {
+              "name": "support.function.extension.jsw"
+            }
+          }
+        },
+        {
+          "comment": "Known runtime namespace: Motion, Pen, Music, microbit, ...",
+          "name": "support.class.builtin.jsw",
+          "match": "\\b(?:Pointerlock|MoreEvents|Operators|TurboWarp|Variables|WebSocket|Comments|microbit|Control|Runtime|Sensing|console|Events|Motion|Clone|Lists|Looks|Music|Sound|Stage|Timer|JSON|Temp|Util|Mem|Pen)\\b(?=\\s*\\.)"
+        },
+        {
+          "comment": "Any capitalised identifier used as a namespace.",
+          "name": "support.class.jsw",
+          "match": "\\b[A-Z][A-Za-z0-9_]*\\b(?=\\s*\\.)"
+        },
+        {
+          "name": "constant.language.microbit.jsw",
+          "match": "(?<=\\.)(?:back|buttonA|buttonB|front|jumped|left|moved|pin0|pin1|pin2|right|shaken)\\b"
+        },
+        {
+          "comment": "Method or property after a dot.",
+          "name": "entity.name.function.call.jsw",
+          "match": "(?<=\\.)[A-Za-z_$][\\w$]*(?=\\s*\\()"
+        },
+        {
+          "name": "variable.other.property.jsw",
+          "match": "(?<=\\.)[A-Za-z_$][\\w$]*"
+        }
+      ]
+    },
+    "operators": {
+      "patterns": [
+        {
+          "name": "keyword.operator.assignment.jsw",
+          "match": "(\\+=|-=|\\*=|/=|%=|=)"
+        },
+        {
+          "name": "keyword.operator.comparison.jsw",
+          "match": "(==|!=|<=|>=|<|>)"
+        },
+        {
+          "name": "keyword.operator.logical.jsw",
+          "match": "(&&|\\|\\||!)"
+        },
+        {
+          "name": "keyword.operator.arithmetic.jsw",
+          "match": "(\\*\\*|\\+|-|\\*|/|%|\\+\\+|--)"
+        },
+        {
+          "name": "keyword.operator.range.jsw",
+          "match": "\\.\\."
+        },
+        {
+          "name": "keyword.operator.ternary.jsw",
+          "match": "\\?"
+        }
+      ]
+    },
+    "punctuation": {
+      "patterns": [
+        {
+          "name": "punctuation.terminator.jsw",
+          "match": ";"
+        },
+        {
+          "name": "punctuation.separator.jsw",
+          "match": "[,:]"
+        },
+        {
+          "name": "punctuation.section.braces.jsw",
+          "match": "[{}]"
+        },
+        {
+          "name": "punctuation.section.brackets.jsw",
+          "match": "[\\[\\]]"
+        },
+        {
+          "name": "punctuation.section.parens.jsw",
+          "match": "[()]"
+        }
+      ]
+    }
+  }
+}

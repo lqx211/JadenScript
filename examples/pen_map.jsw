@@ -1,0 +1,33 @@
+/* Where does a pen dot land?
+ *
+ * Row A (stage y = 0): dots at integer x, -320 .. -313.
+ * Row B (stage y = -10): dots at half-integer x, -319.5 .. -312.5.
+ * Reading the pen buffer then says which coordinate a pixel centre is on.
+ */
+metadata note Stage at 50,50 350x170: "Configuration for https://turbowarp.org/\nYou can move, resize, and minimize this comment, but don't edit it by hand. This comment can be deleted to remove the stored settings.\n{\"width\":640,\"height\":480} // _twconfig_";
+
+class Pen {
+    public void penStart() { // hook: green flag
+        Looks.hide();
+        Pen.eraseAll();
+        Pen.setPenSize(1);
+        Pen.setPenColor(0);
+        _i = 0;
+        while (_i < 8) {
+            dot(0 - 320 + _i, 0);
+            _i += 1;
+        }
+        _i = 0;
+        while (_i < 8) {
+            dot(0 - 320 + _i + 0.5, -10);
+            _i += 1;
+        }
+    }
+
+    private void dot(px, py) { // warp
+        Motion.setXY(px, py);
+        Pen.penDown();
+        Motion.setXY(px + 0.01, py);
+        Pen.penUp();
+    }
+}

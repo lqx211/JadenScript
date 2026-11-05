@@ -1,0 +1,14 @@
+#enable_feature<hideObjectNames>;
+#enable_feature<useTempVariables>;
+
+class FXCore {
+    public void main(){
+        Looks.say('Hello');
+    }
+}
+
+stage {
+    public void greenFlag(){
+        main();
+    }
+}

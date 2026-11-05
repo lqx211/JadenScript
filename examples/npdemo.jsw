@@ -1,0 +1,217 @@
+// npdemo.jsw — JadenScript 自检 + 迷你 NotePlayer
+//
+//   make npdemo          (or: python3 -m jswc build examples/npdemo.jsw -o build/npdemo.sb3)
+//
+// 绿旗后先跑一组语言自检，结果写进 Test.log / Test.fail；
+// 然后循环播放《欢乐颂》，用画笔把每个音符画成一根柱子。
+//   空格 = 暂停/继续    上/下箭头 = 加/减速度
+#enable_feature<commentMetadata>;
+
+metadata Stage.Test.pass default at 5,5 100x24 shown;
+metadata Stage.Test.fail default at 5,32 100x24 shown;
+metadata Stage.Player.now default at 5,59 100x24 shown;
+metadata Stage.Test.log list at 110,5 190x120 shown;
+
+stage { // Stage: costume=0 volume=100 layer=0 tempo=60
+    import "npdemo/backdrop.svg" as "backdrop1";
+}
+
+class player { // Sprite: player (0,0) size=100 direction=90 show=1
+    import "npdemo/dot.svg" as "costume1";
+
+    // ---------- 舞台变量 ----------
+    public Test.log = [];        // 自检输出，一行一条
+    public Test.pass = 0;
+    public Test.fail = 0;
+    public Test.gv = 0;
+
+    public Tune.notes = [64, 64, 65, 67, 67, 65, 64, 62, 60, 60, 62, 64, 64, 62, 62];
+    public Tune.beats = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1.5, 0.5, 2];
+
+    public Player.now = 60;
+    public Player.paused = 0;
+    public Player.loop = 0;
+
+    // ---------- 精灵局部 ----------
+    private items = [];
+    private n = 0;
+
+    // ---------- 主流程 ----------
+    public void greenFlag() {
+        runTests();
+        Music.setInstrument(1);
+        Music.setTempo(120);
+        Player.paused = 0;
+        while (1) {
+            Player.loop++;
+            drawStaff();
+            for (i = 1, i <= Tune.notes.length(), i++) {
+                waitPause();
+                n = Tune.notes.get(i);
+                Player.now = n;
+                drawBar(i, n);
+                Music.playNote(n, Tune.beats.get(i));
+            }
+        }
+    }
+
+    // ---------- 画笔 ----------
+    private void drawStaff() {
+        Pen.eraseAll();
+        Pen.setPenSize(1);
+        Pen.setPenColor(0x24304a);
+        Pen.penUp();
+        Motion.setXY(-232, -150);
+        Pen.penDown();
+        Motion.setXY(232, -150);
+        Pen.penUp();
+        Pen.setPenSize(7);
+    }
+
+    private void drawBar(i, note) {
+        Pen.setPenColor(note * 3571);
+        Pen.penUp();
+        Motion.setXY(-224 + (i - 1) * 32, -146);
+        Pen.penDown();
+        Motion.setXY(-224 + (i - 1) * 32, -146 + (note - 55) * 11);
+        Pen.penUp();
+    }
+
+    private void waitPause() {
+        while (Player.paused == 1) {
+            Control.wait(0.05);
+        }
+    }
+
+    // ---------- 键盘 ----------
+    public void onSpace() { // hook: when [space] key pressed
+        Player.paused = 1 - Player.paused;
+    }
+
+    public void onUp() { // hook: when [up arrow] key pressed
+        Music.setTempo(Music.tempo() + 20);
+    }
+
+    public void onDown() { // hook: when [down arrow] key pressed
+        Music.setTempo(Music.tempo() - 20);
+    }
+
+    // ---------- 自检 ----------
+    private void check(name, got, want) {
+        if (got == want) {
+            Test.pass++;
+            Test.log.add(f"ok   {name}");
+        } else {
+            Test.fail++;
+            Test.log.add(f"FAIL {name} got={got} want={want}");
+        }
+    }
+
+    private void checkTrue(name, cond) {
+        if (cond) {
+            Test.pass++;
+            Test.log.add(f"ok   {name}");
+        } else {
+            Test.fail++;
+            Test.log.add(f"FAIL {name}");
+        }
+    }
+
+    private void bump() {
+        Test.gv += 1;
+    }
+
+    private void runTests() {
+        Test.log.clear();
+        Test.pass = 0;
+        Test.fail = 0;
+
+        // 算术
+        check("add", 7 * 6, 42);
+        check("div", 10 / 4, 2.5);
+        check("mod", 7 % 3, 1);
+        check("precedence", 2 + 3 * 4, 14);
+        check("round", Operators.round(2.6), 3);
+        check("sqrt", Operators.math("sqrt", 81), 9);
+
+        // 字符串
+        check("join", join("ab", "cd"), "abcd");
+        check("string", string(1 / 2), "0.5");
+        check("len", len("hello"), 5);
+        check("letter", Operators.letterOf(2, "abc"), "b");
+        checkTrue("contains", Operators.contains("hello", "ell"));
+        check("fstring", f"{1}-{2}", "1-2");
+
+        // 逻辑
+        checkTrue("lt", 3 < 5);
+        checkTrue("eq-str", "dog" == "dog");
+        checkTrue("not", !0);
+        checkTrue("and", 1 < 2 and 2 < 3);
+        checkTrue("or", 1 > 2 or 2 < 3);
+
+        // 分支
+        private g = 70;
+        if (g >= 90) {
+            check("elif", "A", "B");
+        } elif (g >= 60) {
+            check("elif", "B", "B");
+        } else {
+            check("elif", "C", "B");
+        }
+
+        switch (2) {
+            case 1:
+                check("switch", "saw 1", "saw 2");
+            case 2:
+                check("switch", "saw 2", "saw 2");
+                break;
+            case _:
+                check("switch", "default", "saw 2");
+        }
+
+        // 循环
+        private sum = 0;
+        for (i = 1, i <= 5, i++) {
+            sum += i;
+        }
+        check("for-sum", sum, 15);
+
+        private n = 0;
+        while (n < 3) {
+            n++;
+        }
+        check("while", n, 3);
+
+        private r = 0;
+        repeat (4) {
+            r++;
+        }
+        check("repeat", r, 4);
+
+        // 列表
+        items.clear();
+        items.add(10);
+        items.add(20);
+        items.add(30);
+        check("list-get", items.get(2), 20);
+        check("list-len", items.length(), 3);
+        check("list-index", items.indexOf(30), 3);
+        items.set(1, 99);
+        check("list-set", items.get(1), 99);
+        items.insert(2, 55);
+        check("list-insert", items.get(2), 55);
+        check("list-insert-len", items.length(), 4);
+        items.delete(1);
+        check("list-delete", items.get(1), 55);
+        items.clear();
+        check("list-clear", items.length(), 0);
+
+        // 作用域
+        private lv = 5;
+        lv += 1;
+        check("local", lv, 6);
+        Test.gv = 1;
+        bump();
+        check("global", Test.gv, 2);
+    }
+}

@@ -1,0 +1,170 @@
+/*
+ * net — the disk controller.
+ *
+ * The block device is a file on the host, reached over a localhost WebSocket;
+ * this sprite owns that socket and the block cache, so the CPU never waits on
+ * a network call itself. The two sides talk the way a board would: the CPU
+ * puts a block number in a register and raises a request line, the controller
+ * fetches, fills the cache and drops the line.
+ *
+ *     core                          net
+ *     X.reqPending = 1   ──────▶    WebSocket.sendMessage("R <block>")
+ *     X.reqBlock/slot               onMessage parks the text: X.msgReady = 1
+ *                                   diskFill decodes 8192 hex letters (warp)
+ *     X.reqPending = 0   ◀──────    tag + bytes in X.diskCache, X.diskWait = 0
+ *
+ * There is no TCP/IP here and there will not be: this is one line protocol over
+ * a WebSocket someone else already opened. A real stack would sit in this same
+ * module, behind the same request/reply registers.
+ */
+class Net {
+    /* Start with a green flag; the CPU raises request lines afterwards. */
+    /* N <hex>: forty-two bytes of Ethernet do not need a framing protocol */
+    private void netSend() { // warp
+        _h = "";
+        _i = 1;
+        while (_i <= X.nicTxLen) {
+            _b = X.nicTxBuf.get(_i) + 0;
+            _h = join(_h, X.diskHex.get(Operators.math("floor", _b / 16) + 1));
+            _h = join(_h, X.diskHex.get(_b % 16 + 1));
+            _i += 1;
+        }
+        WebSocket.sendMessage(join("N ", _h));
+    }
+
+    private void netTake(msg) { // warp
+        _n = lengthOf(msg);
+        _i = 3;
+        _k = 1;
+        while (_i + 1 <= _n && _k <= X.nicFrame) {
+            _hi = X.diskHex.indexOf(Operators.letterOf(_i, msg)) + 0;
+            _lo = X.diskHex.indexOf(Operators.letterOf(_i + 1, msg)) + 0;
+            X.nicRxBuf.set(_k, _hi * 16 + _lo);
+            _i += 2;
+            _k += 1;
+        }
+        X.nicRxWant = _k - 1;
+    }
+
+    public void netStart() { // hook: green flag
+        Looks.hide();
+        if (X.diskOn == 1) {
+            WebSocket.connectTo(X.diskUrl);
+        }
+        while (1) {
+            pump();
+            Control.wait(0);
+        }
+    }
+
+    /* One pass over the request and reply registers. */
+    private void pump() { // warp
+        if (X.nicWant == 1) {
+            X.nicWant = 0;
+            netSend();
+            return;
+        }
+        if (X.msgReady == 1) {
+            diskFill();
+            return;
+        }
+        if (X.reqPending == 1 && X.reqSent == 0) {
+            WebSocket.sendMessage(join("R ", X.reqBlock));
+            X.reqSent = 1;
+            return;
+        }
+        // The host clock, for clockMode 2: one request in flight, and a fresh
+        // answer at most every `X.timeEvery` frames so it cannot flood the
+        // socket. Asking for real wall time is the only way the guest can see
+        // time that passed while the project was not running.
+        if (X.clockMode == 2 && X.diskOn == 1) {
+            X.timeWait += 1;
+            if (X.timeWait >= X.timeEvery) {
+                X.timeWait = 0;
+                if (X.timeSent == 0) {
+                    WebSocket.sendMessage("T");
+                    X.timeSent = 1;
+                }
+            }
+        }
+    }
+
+    public void onDiskMessage() { // hook: WebSocket.onMessage
+        X.hatCount += 1;
+        // a frame in, straight into the card's receive buffer
+        _msg = WebSocket.receivedMessageData;
+        if (Operators.letterOf(1, _msg) == "N") {
+            netTake(_msg);
+            _msg = "";
+        }
+        X.msgLen = lengthOf(_msg);
+        if (Operators.letterOf(1, _msg) == "T") {
+            // "T <microseconds>": the only thing this module does with a clock
+            X.timeSent = 0;
+            hostUsFrom(_msg);
+            return;
+        }
+        if (Operators.letterOf(1, _msg) != "D") {
+            return;
+        }
+        X.lastMsg = _msg;
+        X.msgReady = 1;
+    }
+
+
+    /*
+     * Digits one at a time. There is no `substring` block in this dialect and
+     * no `toNumber` either, and `X.diskHex` already answers "where is this
+     * character in 0..9 a..f", which is exactly a decimal digit's value.
+     */
+    private void hostUsFrom(text) { // warp
+        X.hostUs = 0;
+        _i = 3;                          // past "T "
+        _n = lengthOf(text);
+        while (_i <= _n) {
+            _d = X.diskHex.indexOf(Operators.letterOf(_i, text)) - 1;
+            if (_d < 0) {
+                return;
+            }
+            X.hostUs = X.hostUs * 10 + _d;
+            _i += 1;
+        }
+    }
+
+    private void diskFill() { // warp
+        _msg = X.lastMsg;
+        _n = lengthOf(_msg);
+        X.msgReady = 0;
+        // there is no `substring` reporter in this dialect, so the header is
+        // walked a character at a time: "D <block> <hex>". There is no loop
+        // `break` either -- `break` stops the whole script -- so a flag ends
+        // the walk instead.
+        _i = 3;
+        _block = 0;
+        _go = 1;
+        while (_i <= _n && _go == 1) {
+            _ch = Operators.letterOf(_i, _msg);
+            if (_ch == " ") {
+                _go = 0;
+            } else {
+                _block = _block * 10 + (_ch + 0);
+            }
+            _i += 1;
+        }
+        _base = X.reqSlot * X.diskBlk;
+        _j = 0;
+        while (_i < _n) {
+            _hi = X.diskHex.indexOf(Operators.letterOf(_i, _msg)) - 1;
+            _lo = X.diskHex.indexOf(Operators.letterOf(_i + 1, _msg)) - 1;
+            X.diskCache.set(_base + _j + 1, _hi * 16 + _lo);
+            _i += 2;
+            _j += 1;
+        }
+        X.diskTag.set(X.reqSlot + 1, _block);
+        X.reqPending = 0;
+        X.reqSent = 0;
+        X.diskWait = 0;
+        X.fillDone += 1;
+    }
+
+}

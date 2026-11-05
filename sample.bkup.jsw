@@ -1,0 +1,828 @@
+// NotePlayer4,12
+// by GitHub @lqx211, Bilibili UID 3546654972053873
+// Licensed under the GPL-3.0 License
+// All rights reserved
+
+// Definition: call: do not wait for the called function to finish
+// This is not actual JavaScript code.
+// You need to convert to Scratch blocks by yourself.
+
+/*
+-> Debug information explained in Player._Debug
+T(Current Tick):[Current Tick]/[Total Ticks]
+N:[Current note ID]/[Total notes]
+L:[Loops of main thread]
+NPS:[Note per seconds]
+TPS:[Tick per seconds]
+Cl:[Player thread active time]
+Snds:[Current playing sounds and active instances]
+Spd:[MIDI Speed BPM]x[Player multiplier speed]
+P:[Current FastLoad command line number]
+B:[Measures].[Beat]
+Sk:[Missed notes]
+HNPS:[Max note per second recorded during this play]
+ATPS:[Current tick per second (same as TPS)]
+MTPS:[]
+
+-> Userspace options
+Player.updatePiano: Draw piano (2=multicolor, 1=single color, 0=no animation)
+Player.doSetCustomInitValues: Start player with custom start values
+Player.enableReverseTicking: Makes reverse ticking possible
+Tick.freeze: Stop ticking, will pause player.
+Player.midiSpeed: Player internal playing speed in BPM format. You should not touch that.
+Player.beats2: How many beats in a measure. Used in beats counter Player._Debug[1]
+Player.playDelay: Delay effects for playing notes. Do not enable this in Black MIDI that will cause too much instances and lags
+Player.metronome: Do play metronome sounds.
+Player.maxPing: Maximum timeout allowed for every note. Timeout notes will be skipped and logged as ERROR.
+Player.baseSpeed: Speed multiplier for entire player. 1.035 is recommended in my environment.
+Tick.wait: Tick system speed level, default 4. Each tick stays for 1/(2**Tick.wait) beats approx.
+Player.maxnotes: Maximum notes per second allowed. Notes that exceed the limit will be skipped and logged as ERROR.
+-> Advanced options
+Player.beatReady: Ticks before metronome system starts.
+Player.breakOnError: Pause and raise BREAK event to system when ERROR raised from anywhere.
+Player.breakOnWarning: Pause and raise BREAK event to system when WARN raised from anywhere.
+Player.customStartTick: Where player start playing when Player.doSetCustomInitValues=1.
+Player.customStartNoteID: Where player start playing when Player.doSetCustomInitValues=1 in NotesData.
+Player.customEndValue: The tick number where player stop playing when Player.doSetCustomInitValues=1
+-> More advanced options and values
+Player.endValue: Current player last tick number. Player will stop when tick counter reaches it.
+Player.highestNPS: Highest Notes per second recorded during play.
+Player.loops: Total loops in Player.start during play.
+Player.triggers: Note triggers in Player.start during play.
+Player.useFL: Use Fast Load feature when >=50. It will load and calculate the Notes list if using the legacy mode.
+Player.totalNotes: Sum of notes during current play.
+Player.nps: Current Note per second calculating in ancient way. Please use Player.NPSBuffer.length() instead.
+Player.skips: Skipped notes during play from timeout or reaching maximum NPS.
+Tick.active: Ticking main switch. Setting to 0 will terminate the ticking process.
+Tick.tick: Current player tick.
+
+-> Lists
+Player.FLData: Fast Load database (Normal length: 5)
+Player.PresetFLName: Names of built-ins songs. Press L or use LoadFLPreset()+ImportFL() to load one of them
+Piano.bkmod: Where stores the mod values of black keys in piano.
+Piano.bks: Where stores black key locations.
+Piano.wks: Where stores white key locations.
+Player._Debug: Debug menu during play.
+Player_MIDIConv.py: Internal script that convert MIDI to NotePlayer readable Notes file.
+Player_NoteToFLData.py: Internal script that convert Notes to FastLoad database.
+Player.Notes: The notes file import area.
+Player.Preset: All built-in presets in Notes format.
+Player.PresetFL: All built-in presets in FLData format.
+Player.PresetFLName: Song names of Player.PresetFL
+Player.TickBuffer: Tick counter. Get Tick per second by Player.TickBuffer.length()
+
+Last update: NotePlayer4,5 -- Wed Jul 8 2026 17:48:45
+
+*/
+
+class graphical { // Sprite: graphical (0,0) size=100 direction=90 show=0
+    private void RGB(r,g,b){
+        public Tick.freeze = 1;
+        public Piano.counter0 = 0;
+        public Piano.counter0 += b*65536;
+        public Piano.counter0 += g*256;
+        public Piano.counter0 += r*1;
+        Piano.activergb.add(Piano.counter0);
+        public Tick.freeze = 0;
+    }
+    public void Piano.recalc(){
+        Pen.eraseAll();
+        Piano.bkmod.clear();
+        Piano.bks.clear();
+        Piano.wks.clear();
+        Piano.NotesActive.clear();
+        for (i=1, i<=128, i++){
+            Player.NotesActive.add(0);
+        }
+        for (Piano.counter0=1, Piano.counter0<=128, Piano.counter0++){
+            private x = Piano.counter0-1;
+            if (Piano.bkmod.contains(x%12)){
+                Piano.bks.add(x);
+            } else {
+                Piano.wks.add(x);
+            }
+        }
+    }
+    public void Piano.draw(){
+        Pen.eraseAll();
+        Pen.setPenSize(3);
+        // White key
+        Motion.x = -239;
+        Motion.y = -45;
+        for (Piano.counter0=1, Piano.counter0<=52, Piano.counter0++){
+            Motion.x += 4;
+            Pen.setPenColor(Piano.activergb.get(1+Player.NotesActive.get(Piano.wks.get(Piano.counter0)))%16777216);
+            Pen.penDown();
+            Motion.y -= 14;
+            Motion.y += 14;
+            Pen.penUp();
+        }
+        // Black key
+        Motion.x = -237;
+        Motion.y = -45;
+        for (Piano.counter0=1, Piano.counter0<=52, Piano.counter0++){
+            Motion.x += 4+((Piano.bks.get(Piano.counter0-1)+3==Piano.bks.get(Piano.counter0)*4);
+            Pen.setPenColor(
+                (Piano.activergb.get(1+Player.NotesActive.get(Piano.wks.get(Piano.counter0)))%16777216)
+                if (Player.NotesActive.get(Piano.bks.get(Piano.counter0))>0) else
+                (4210752)
+            );
+            Pen.penDown();
+            Motion.y -= 10;
+            Motion.y += 10;
+            Pen.penUp();
+        }
+    }
+}
+class synth { // Sprite: synth (0,0) size=100 direction=90 show=0
+    public void whenCloned(){
+        private id = Player.id;
+        public Player.instances++;
+        public Player.triggers++;
+        public Player.id = 0;
+        if (Player.instances+1>Player.maxnotes){
+            Player.instances--;
+            return;
+        }
+        private nd = Player.Notes.get(id);
+        private npt = Player.NotesPlayTick.get(id);
+        private nl = Player.NotesLength.get(id);
+        private nc = Player.NotesChannel.get(id);
+        private ni = Player.NotesInstr.get(id);
+        private playtime = (nl/64)+Player.playDelay;
+        Player.NotesActive.replace(nd,(
+            (1) if (Player.updatePiano || !Player.NotesChannel.length() ) else (1+nc%16)
+        ));
+        Music.setInstr((
+            (ni) if (ni*(!Piano.disableMultiInstr)) else (
+                (1) if (!Player.disableMultiInstr) else (Player.disableMultiInstr)
+            )
+        ));
+        Music.playNote(nd,(
+            (16) if (playtime>16) else (playtime)
+        ));
+        Player.NotesActive.set(nd,0);
+        Player.instances--;
+        return;
+    }
+    public void Player.panic(){
+        Music.stopAll();
+        Player.NotesActive.clear();
+    }
+}
+
+
+class core { // Sprite: core (-196,121) size=100 direction=90 show=1
+    public void Player.start(){ // main thread
+        public Player.sbar2 = "Player.start";
+        public Player.loggerL = 0;
+        public Tick.active = 1;
+        console.endLogTimer("Player.timer");
+        logStatic("==[ New Player Instance at GCl:"+string(Sensing.timer)+" ]========");
+        logStatic("NotePlayer4,"+string(Player.version)+" by GitHub/lqx211, All rights reserved");
+        public Player.totalNotes = Player.NotesData.length();
+        // Call some functions
+        Piano.recalc(); // initialize piano drawings
+        Piano.draw(); // now draw piano
+        // Display song name if equiped item from PresetFL[n]
+        if (Player.useFL>49){ // Loaded from FastLoad database?
+            logStatic("May loaded from FastLoad database, Guessed Idx: "+string(Player.guesstedFLIdx)+" Name:\""+string(Player.PresetFLName.get(Player.guessedFLIdx))+"\"");
+        } else {
+            logStatic("Not loading from FastLoad database."); // TODO: typo LastLoad in FL4,13
+        }
+        // Display song details
+        logStatic("----- Details");
+        logStatic("Total notes: "+string(Player.totalNotes)+" notes");
+        logStatic("Player note rate limit: "+string(Player.maxnotes)+" notes per second");
+        logStatic("Player note timeout limit: "+string(Player.maxPing)+" ticks"); // TODO: Replace "Player note timeout" to "Player note timeout limit", planned for NP4,14
+        // Check for misconfiguration
+        // and of course without TurboWarp you cant even run this project
+        if (!isTurboWarp()){
+            logError("How can you even run this without TurboWarp?????")
+            logError("Please visit https://turbowarp.org/ to run this project!")
+            return;
+        }
+        if (!isCompiled()){
+            logWarn("You are executing code without the compiled flag. This may affect performance.");
+        }
+        if (!Runtime.turboMode){
+            logWarn("Turbo mode is disabled. This will make player unstable and cause extreme lags.");
+        }
+        if (Runtime.framerateLimit<60){
+            logWarn("Framerate limit is less than 60. This may affect player performance.");
+        }
+        if (Runtime.cloneLimit==300){ // either 300 or infinity
+            logWarn("Clone limit is finite. This may cause playing issues in black MIDIs.");
+        }
+        // Log environment details
+        logStatic("[Env] Turbo:"+string(Runtime.turboMode)+" FramerateLimit:"+string(Runtime.framerateLimit)+" InfiniteClone:"+string((1)if(Runtime.cloneLimit==Infinity)else(0)));
+        logStatic("[Env] Window x:"+string(Runtime.stageWidth)+" y:"+string(Runtime.stageHeight)+" online:"+string(Sensing.isOnline)+" volume:"+string(Sound.volume*.01));
+        logStatic("[Twrp] compiled:"+string(isCompiled())+" isTwrp:"+string(isTurboWarp()));
+        // Start clock
+        Timer.startTimer("Player.timer");
+        console.startLogTimer("Player.timer");
+        Player.NPSBuffer.clear();
+        Player.TickBuffer.clear();
+        call Player.timerCheck(); // start timer check thread
+        // Init values
+        public Player.sbar = "Start.";
+        public Player.loops = 0;
+        public Player.skips = 0;
+        public Player.triggers = 0;
+        public Player.notes = 0;
+        public Player.npsCounter = 0;
+        public Player.nps = 0;
+        public Player.pcmd = 1;
+        public Player.highestNPS = 0;
+        private lt2 = Tick.tick-1;
+        public Player.beats = -4;
+        public Player.endValue = Player.NotesData.length();
+        // Preset: Start
+        if (Player.doSetCustomInitValues){
+            public Tick.tick = Player.customStartTick;
+            public Player.notes = Player.customStartNoteID;
+            public Player.endValue = Player.customEndValue;
+        }
+        // Other functions and scripts
+        // (Nope)
+        // Main loop
+        logStatic("GCl:"+Sensing.timer+" Player.start init success");
+        while(1){
+            private lt = Tick.tick;
+            public Player.loops++;
+            Music.setTempo(Player.midiSpeed*Player.baseSpeed);
+            public Player.sbar = ""; // TODO: Remove legacy Player.sbar debug menu, planned for NP4,14
+            public Player.sbar2 = ""; // TODO: Remove legacy Player.sbar2 debug menu, planned for NP4,14
+            if (Player.notes-1>Player.endValue || !Tick.enableReverseTicking){
+                if (Player.doRepeat){
+                    logStatic("----- Player repeat");
+                    console.endLogTimer("Player.timer");
+                    public Tick.active = 0;
+                    Player.main(); // this will override the current thread
+                    break; // stop this script
+                } else {
+                    logStatic("----- Player stopping");
+                    console.endLogTimer("Player.timer");
+                    public Tick.active = 0;
+                    break; // stop this script
+                }
+            }
+            // Debug logs and test scripts
+            logDebug(Player._Debug.get(1)+" "+Player._Debug.get(2));
+            // Metronome tick count system
+            if (Tick.tick>lt2+Player.beatReady+15){
+                private lt2 = Tick.tick-Player.beatReady;
+                private mtcsok = 1;
+                public Player.beats++;
+            }
+            // Metronome sound play system
+            if (Player.metronome && mtcsok){
+                if (Player.beats%Player.beats2 == 0){
+                    Sound.playSound("MetronomeEffect2");
+                } else {
+                    Sound.playSound("MetronomeEffect1");
+                }
+            }
+            private mtcsok = 0;
+            // PCmd
+            // PCmd(1): PCmd, Tick, midiSpeed
+            // PCmd(2): PCmd, Tick. tickWait(Tick.wait)
+            // PCmd(3): PCmd, Tick, beatsPerMeasure(Player.beats2)
+            if (Player.NotesCommand.get(Player.pcmd).get(1) == 1){
+                if (Tick.tick>=Player.NotesCommand.get(Player.pcmd).get(2)){
+                    public Player.midiSpeed = Player.NotesCommand.get(Player.pcmd).get(3);
+                    logStatic("GCl:"+Sensing.timer+" PCmd: Change midiSpeed to "+string(Player.midiSpeed)+" at tick "+string(Tick.tick)); // TODO: Add static output for pcmd 1 adjustment, planned for NP4,14
+                    public Player.pcmd++;
+                }
+            } elif (Player.NotesCommand.get(Player.pcmd).get(1) == 2){
+                if (Tick.tick>=Player.NotesCommand.get(Player.pcmd).get(2)){
+                    public Tick.wait = Player.NotesCommand.get(Player.pcmd).get(3);
+                    logStatic("GCl:"+Sensing.timer+" PCmd: Change Tick.wait to "+string(Tick.wait)+" at tick "+string(Tick.tick)); // TODO: Add static output for pcmd 2 adjustment, planned for NP4,14
+                    public Player.pcmd++;
+                }
+            } elif (Player.NotesCommand.get(Player.pcmd).get(1) == 3){
+                if (Tick.tick>=Player.NotesCommand.get(Player.pcmd).get(2)){
+                    public Player.beats2 = Player.NotesCommand.get(Player.pcmd).get(3);
+                    logStatic("GCl:"+Sensing.timer+" PCmd: Change Player.beats2 to "+string(Player.beats2)+" at tick "+string(Tick.tick)); // TODO: Add static output for pcmd 3 adjustment, planned for NP4,14
+                    public Player.pcmd++;
+                }
+            } else {
+                0 // do nothing
+            }
+            // Check for lags
+            private Player.ptps = 1/((60/(Player.midiSpeed*Player.baseSpeed))*(1/(2**Tick.wait)));
+            private Player.atps = Player.TickBuffer.length();
+            if (Player.ptps/Player.atps>2 && Tick.tick>0 && Timer.getTimer("Player.timer")>Player.lastLaggyLog+2){
+                private Player.lastLaggyLog = Timer.getTimer("Player.timer");
+                public Player.loggerL++;
+                logWarn(string(Player.loggerL)+"/Gcl:"+Sensing.timer+" Cl:"+string(Timer.getTimer("Player.timer"))+" T:"+string(Tick.tick)+" Player is laggy (Low ATPS)");
+            }
+            // Note status
+            if (Tick.tick>Player.NotesPlayTick.get(Player.notes+1)+Player.maxPing && !(Tick.tick-(Player.NotesPlayTick.get(Player.notes+1)+1)==Tick.tick-1)){
+                public Player.skips++;
+                public Player.notes++;
+                public Player.loggerL++;
+                logError(string(Player.loggerL)+"/Gcl:"+Sensing.timer+" Cl:"+string(Timer.getTimer("Player.timer"))+" T:"+string(Tick.tick)+" N:"+string(Player.notes)+" Note timeout for "+string(Player.maxPing)+" ticks");
+            } elif (Player.NPSBuffer.length()>=Player.maxnotes){
+                public Player.skips++;
+                public Player.notes++;
+                public Player.loggerL++;
+                logError(string(Player.loggerL)+"/Gcl:"+Sensing.timer+" Cl:"+string(Timer.getTimer("Player.timer"))+" T:"+string(Tick.tick)+" N:"+string(Player.notes)+" Reached note rate limit");
+            }
+            // Play note
+            if (Tick.tick>=Player.NotesPlayTick.get(Player.notes+1)){ // suitable ?
+                if (Tick.tick>Player.NotesPlayTick.get(Player.notes+1)+1){ // Timeout (1t)
+                    public Player.loggerL++;
+                    logWarn(string(Player.loggerL)+"/Gcl:"+Sensing.timer+" Cl:"+string(Timer.getTimer("Player.timer"))+" T:"+string(Tick.tick)+" N:"+string(Player.notes)+" Note almost timeout: "+string(Tick.tick-(Player.NotesPlayTick.get(Player.notes+1)+1))+" ticks");
+                }
+                public Player.id = Player.notes-0;
+                public Player.notes++;
+                public Player.npsCounter++; // legacy nps counter
+                public Player.tmpB = Player.notes;
+                Player.NPSBuffer.add(Timer.getTimer("Player.timer"));
+                Control.clone(synth); // spawn new synth to play note (will not override the current instance)
+            } else {
+                while(Tick.tick>lt||Tick.enableReverseTicking){} // Control.waitUntil
+                if (Tick.enableReveseTicking){
+                    private lt = 0;
+                }
+            }
+        }
+    }
+    private void buildPlayer(){
+        logStatic("BuildPlayer: Export NotesData");
+        public Player.totalNotes = 0;
+        Player.NotesData.clear();
+        Player.NotesCommand.clear();
+        for (Player.tmpA=1; Player.tmpA<=Player.Notes.length(); Player.tmpA++){
+            exportND(Player.tmpA);
+            Player.totalNotes++;
+        }
+        logStatic("BuildPlayer: Export NotesLength");
+        Player.NotesLength.clear();
+        for (i=1; i<=Player.Notes.length(); i++){
+            public Player.sbar = "BP 2/3 (NL) "+Operators.round((i/Player.Notes.length())*1000)/10+"%";
+            if (JSON.isArray(Player.Notes.get(i))){
+                Player.NotesLength.add(Player.Notes.get(i).get(3));
+            } else {
+                Player.NotesLength.add(0);
+            }
+        }
+        logStatic("BuildPlayer: Export NotesPlayTick");
+        Player.NotesPlayTick.clear();
+        for (i=1; i<=Player.Notes.length(); i++){
+            public Player.sbar = "BP 3/3 (NPT) "+Operators.round((i/Player.Notes.length())*1000)/10+"%";
+            if (JSON.isArray(Player.Notes.get(i))){
+                Player.NotesPlayTick.add(Player.Notes.get(i).get(1));
+            } else {
+                Player.NotesPlayTick.add(0);
+            }
+        }
+        // BEGIN TODO: Planned to support NC, NI exporting for legacy mode in NP4,14
+        // Check to prevent list overflow
+        if (Player.Notes.get(i).length()>=4){
+         logStatic("BuildPlayer: Export NotesChannel");
+            Player.NotesChannel.clear();
+            for (i=1; i<=Player.Notes.length(); i++){ 
+                public Player.sbar = "BP 4/3 (NC) "+Operators.round((i/Player.Notes.length())*1000)/10+"%";
+                if (JSON.isArray(Player.Notes.get(i))){
+                    Player.NotesChannel.add(Player.Notes.get(i).get(4));
+                } else {
+                    Player.NotesChannel.add(0);
+                }
+            }
+        }
+        if (Player.Notes.get(i).length()>=5){
+            logStatic("BuildPlayer: Export NotesInstr");
+            Player.NotesInstr.clear();
+            for (i=1; i<=Player.Notes.length(); i++){
+                public Player.sbar = "BP 5/3 (NI) "+Operators.round((i/Player.Notes.length())*1000)/10+"%";
+                if (JSON.isArray(Player.Notes.get(i))){
+                    Player.NotesInstr.add(Player.Notes.get(i).get(5));
+                } else {
+                    Player.NotesInstr.add(1);
+                }
+            }
+        }
+        // END todo
+        logStatic("BuildPlayer: Export Notes OK");
+    }
+    public void Player.checkIfDisp(){
+        if (Player.dispOptions){
+            Variables.showVariable(Player.baseSpeed);
+            Variables.showVariable(Player.maxnotes);
+            Variables.showVariable(Tick.wait);
+            Variables.showVariable(Player.maxPing);
+            Variables.showVariable(Player.midiSpeed);
+            Variables.showVariable(Player.metronome);
+            Variables.showVariable(Tick.freeze);
+            Variables.showVariable(Player.playDelay);
+            Variables.showVaraible(Player.beats2);
+            Variables.showVariable(Player.doSetCustomInitValues);
+            Variables.showVariable(Player.disableMultiInstr);
+            Variables.showVariable(Player.updatePiano);
+            Lists.showList(Player.FLData);
+            Lists.showList(Player.PresetFLName);
+        } else {
+            Variables.hideVariable(Player.baseSpeed);
+            Variables.hideVariable(Player.maxnotes);
+            Variables.hideVariable(Tick.wait);
+            Variables.hideVariable(Player.maxPing);
+            Variables.hideVariable(Player.midiSpeed);
+            Variables.hideVariable(Player.metronome);
+            Variables.hideVariable(Tick.freeze);
+            Variables.hideVariable(Player.playDelay);
+            Variables.hideVaraible(Player.beats2);
+            Variables.hideVariable(Player.doSetCustomInitValues);
+            Variables.hideVariable(Player.disableMultiInstr);
+            Variables.hideVariable(Player.updatePiano);
+            Lists.hideList(Player.FLData);
+            Lists.hideList(Player.PresetFLName);
+        }
+    }
+    private void Ticker(){
+        if (!Tick.freeze){
+            public Tick.tick++;
+            Player.TickBuffer.append(Timer.getTimer("Player.timer"));
+            Player.tickerEvent();
+        }
+        call Player.updateDebugMenu();
+        Music.restForBeats(1/(2**Tick.wait));
+    }
+    public void Events.keyPressed(k){ // grouped
+        switch(k){ 
+            case "p": // hook: when [p] key pressed
+                Player.panic();
+                Piano.recalc();
+                break;
+            case "r": // hook: when [r] key pressed
+                call Player.main();
+                break;
+            case "h": // hook: when [h] key pressed
+                Player.help();
+                break;
+            case "l": // hook: when [l] key pressed
+                Sensing.ask("Enter Preset ID");
+                private pi = Sensing.answer;
+                Sensing.ask("Load PresetFL["+string(pi)+"]; Name:\""+string(Player.PresetFLName.get(pi))+"\"; Confirm? [y]");
+                if (Sensing.answer == "y"){
+                    loadFLPreset(pi);
+                }
+                break;
+            case "o": // hook: when [o] key pressed
+                public Player.dispOptions = !Player.dispOptions;
+                break;
+            case 'space': // hook: when [space] key pressed
+                public Player.freeze = !Player.freeze;
+                break;
+            case 'c': // hook: when [c] key pressed
+                Player.clear();
+                call Player.main();
+                break;
+            case _:
+                break;
+        }
+        Control.waitUntil(Sensing.isKeyPressed("any")); // placeholder to make pseudocode logic looks correct
+    }
+    public void Player.enableReverseTicking(){
+        public Tick.enableReverseTicking = 1;
+    }
+    public void Player.disableReverseTicking(){
+        public Tick.enableReverseTicking = 0;
+    }
+    private void reverseBeats(b){
+        // Not adjusting beats, will increase missed notes...
+        Player.enableReverseTicking();
+        public Tick.tick += b*-15;
+        public Player.notes = -1;
+        Player.disableReverseTicking();
+    }
+    private void reverseTicks(t){
+        // Extremely buggy- will increase missed notes
+        Player.enableReverseTicking();
+        public Tick.tick += Ticks*-1;
+        public Player.notes = -1;
+        Player.disableReverseTicking();
+    }
+    private void customizedMain(StartTick,StopNID,StartNID,LPresetID,initBaseSpd,delayEffect_b,beats2,maxNotes,maxPing){
+        public Tick.freeze = 1;
+        public Player.endValue = 0; // stop Player
+        LoadFLPreset(LPresetID);
+        ImportFL();
+        public Player.doSetCustomInitValues = true;
+        public Player.customEndValue = StopNID;
+        public Player.customStartTick = StartTick;
+        public Player.customStartNoteID = StartNID;
+        public Player.BaseSpeed = initBaseSpd;
+        public Player.playDelay = delayEffect_b;
+        public Player.beats2 = beats2;
+        public Player.maxNotes = maxNotes;
+        public Player.maxPing = maxPing;
+        public Player.metronome = 0;
+        call Player.main();
+        sleep(500);
+        public Player.doSetCustomInitValues = false;
+        public Tick.freeze = 0;
+    }
+    private void importFL(){
+        logStatic("GCl:"+Sensing.timer+" ImportFL NotesData...");
+        Player.NotesData.importArray(Player.FLData.get(1));
+        logStatic("GCl:"+Sensing.timer+" ImportFL NotesPlayTick...");
+        Player.NotesPlayTick.importArray(Player.FLData.get(2));
+        logStatic("GCl:"+Sensing.timer+" ImportFL NotesLength...");
+        Player.NotesLength.importArray(Player.FLData.get(3));
+        logStatic("GCl:"+Sensing.timer+" ImportFL NotesCommand...");
+        Player.NotesCommand.importArray(Player.FLData.get(4));
+        Player.NotesChannel.clear(); // delete all of [Player.NotesChannel]
+        if (Player.FLData.length()>5)){
+            logStatic("GCl:"+Sensing.timer+" ImportFL NotesChannel...");
+            Player.NotesChannel.importArray(Player.FLData.get(5));
+        }
+        if (Player.FLData.length()>6){
+            logStatic("GCl:"+Sensing.timer+" ImportFL NotesInstr...");
+            Player.NotesInstr.importArray(Player.FLData.get(6));
+        }
+        logStatic("ImportFL OK");
+    }
+    public void Player.playCustomPreset_a(){
+        public Player.endValue = 0; // stop Player
+        loadFLPreset(17);
+        importFL();
+        public Player.doSetCustomInitValues = 1;
+        public Player.customEndValue = 100000;
+        public Player.customStartTick = 64*220.75;
+        public Player.customStartNoteID = 95255;
+        public Tick.freeze = 1;
+        public Player.metronome = 0;
+        call Player.main();
+        Control.wait(.5);
+        public Player.doSetCustomInitValues = 0;
+        public Tick.freeze = 0;
+    }
+    private void exportFL(){
+        Player.FLData.clear();
+        Player.FLData.append(Player.NotesData.exportArray());
+        Player.FLData.append(Player.NotesPlayTick.exportArray());
+        Player.FLData.append(Player.NotesLength.exportArray());
+        Player.FLData.append(Player.NotesCommand.exportArray());
+        Player.FLData.append(Player.NotesChannel.exportArray());
+        Player.FLData.append(Player.NotesInstr.exportArray());
+        logStatic("ExportFL OK");
+        public Player.totalNotes = Player.NotesData.length();
+    }
+    
+    private void createNote(t,n,l){
+        Player.Notes.add("["+string(t)+","+string(n)+","+string(l)+"]");
+    }
+    private void createNoteGroup(st,pt,n,pl){ // StartTick, PerTick, Notes, PerLength
+        private cng0 = Util.ruleReplace("["+string(Notes)+"]","\x20",","); // replace [] using the rule [] with []
+        private cng1 = Player.NotesExport.exportArray();
+        private cng2 = JSON.concatArray(cng0,cng1);
+        logStatic(cng0);
+        logStatic(cng1);
+        logStatic(cng2);
+        Player.NotesExport.importArray(cng2);
+        for (i=1; i<=n.length(); i++){ // for i in (length of [Player.NotesExport]), i start from 1
+            createNote(st+(pt*i),Player.NotesExport.get(i),pl);
+        }
+    }
+    public void Player.tickerEvent(){
+        if (Player.updatePiano>0){
+            Piano.draw();
+        }
+    }
+    public void beforeProjectsSaves(){ // header block of extensions: hook
+        logStatic("Attempt to save project");
+    }
+    public void afterProjectSaves(){ // header block of extensions: hook
+        logStatic("Saved project as NotePlayer4,"+string(Player.version));
+        public Player.version++;
+    }
+    public void Player.updateDebugMenu(){
+        Player._Debug.set(
+            1,
+            "T:"+string(Tick.tick)+"/"+string(Player.NotesPlayTick.get(Player.NotesPlayTick.length())-1)+"\x20"+\
+            "N:"+string(Player.notes)+"/"+string(Player.totalNotes)+"\x20"+\
+            "L:"+string(Player.loops)+"\x20"+\
+            "NPS:"+string(Player.NPSBuffer.length())+"\x20"+\
+            "MTPS:"+string((Operators.round((1/((60/Player.midiSpeed)*(1/(2**Tick.wait))))*100))/100)
+        );
+        Player._Debug.set(
+            2,
+            "Spd:"+string(Player.midiSpeed)+"x"+string(Operators.round(1000*Player.baseSpeed*(2**(Tick.wait-4)))/1000)+"\x20"+\
+            "P:"+string(Player.pcmd)+"\x20"+\
+            "B:"+string(Operators.round(((Player.beats-1)/Player.beats2)+1.25-.5))+"."+string((Player.beats%Player.beats2)+1)+"\x20"+\
+            "Sk:"+string(Player.skips)+"\x20"+\
+            "HNPS:"+string(Player.highestNPS)+"\x20"+\
+            "PTPS:"+string((Operators.round((1/((60/(Player.midiSpeed*Player.baseSpeed))*(1/(2**Tick.wait))))*100))/100)+"\x20"+\
+            "Cl:"+string(Timer.getTimer("Player.timer"))+"\x20"+\
+            "Polyphony:"+string(Player.instances)
+        );
+        Player._Debug.set(3,"NotePlayer4,"+string(Player.version)+" by GitHub/lqx211,bili_uid:3546654972053873 All rights reserved");
+    }
+    private void realtimeTPSFix(){
+        private Player.mtps = 1/((60/Player.midiSpeed)*(1/(2**Tick.wait)));
+        private Player.ptps = 1/((60/(Player.midiSpeed*Player.baseSpeed))*(1/(2**Tick.wait)));
+        private Player.atps = Player.TickBuffer.length();
+        if (Player.mtps/Player.atps>4 || Player.mtps/Player.atps<1){
+            public Player.baseSpeed = 1.035/(2**(Tick.wait-4));
+        } else {
+            public Player.baseSpeed = Player.mtps/Player.atps;
+        }
+    }
+    private void exportND(idx){
+        public Player.sbar = "BP 1/3 (ND) "+Operators.round((Player.tmpA/Player.Notes.length())*1000)/10+"%";
+        private i = idx;
+        if (JSON.isArray(Player.Notes.get(i))){
+            Player.NotesData.add(Player.Notes.get(i).get(2));
+        } else {
+            private json = Player.Notes.get(i);
+            private command = Player.Notes.get(i).get("c");
+            private parameters = Player.Notes.get(i).get("p");
+            if (command == 1){
+                private startTick = parameters.get(1);
+                private tempo = parameters.get(2);
+                if (1){ // Comment block: core
+                    // Comment: wait nahhh, it changes basespeed during load, not during play
+                    Player.NotesCommand.add("[1,"+startTick*1+","+tempo*1+"]");
+                    public Player.midiSpeed = tempo;
+                }
+            Player.NotesData.add(0);
+            }
+        }
+    }
+    public void Player.panic(){
+        logStatic("GCl:"+Sensing.timer+" CALL Player.panic");
+        Music.stopAll();
+        Playr.instances = 0;
+        return;
+    }
+    public void Player.help(){
+        Looks.say("[L]LoadPreset [Space]PlayPause [R]Reset [C]HardReset [P]Panic [O]Options [D]Info [H]Help");
+    }
+    public void greenFlag() {
+        call Player.main();
+        Player.help();
+    }
+    public void Player.main(){
+        console.endLogTimer("Player.timer");
+        console.clear();
+        logStatic("GCl:"+Sensing.timer+" CALL Player.main");
+        public Player.sbar2 = "main";
+        public Player.instances = 0;
+        if (Player.useFL<50){
+            buildPlayer();
+        } else {
+            importFL();
+        }
+        call Player.checkIfDisp();
+        call Tick.reset();
+        Player.NotesActive.set(nd,(
+            (1) if (Player.updatePiano || !Player.NotesChannel.length() ) else (1+nc%16)
+        ));
+        Music.setInstr((
+            (ni) if (ni*(!Piano.disableMultiInstr)) else (
+                (1) if (!Player.disableMultiInstr) else (Player.disableMultiInstr)
+            )
+        ));
+        Player.panic();
+        Player.start();
+    }
+    public void Player.timerCheck(){
+        while(1){
+            if (Player.NPSBuffer.length()>Player.highestNPS){
+                public Player.highestNPS = Player.NPSBuffer.length();
+            }
+            while(Timer.getTimer("Player.timer")>Player.NPSBuffer.get(1)+1){
+                Player.NPSBuffer.remove(1);
+            }
+            while(Timer.getTimer("Player.timer")>Player.TickBuffer.get(1)+1){
+                Player.TickBuffer.remove(1);
+            }
+        }
+    }
+    public void Player.clear(){
+        Player.Notes.clear();
+        Player.NotesExport.clear();
+        Player.NotesLength.clear();
+        Player.NotesPlayTick.clear();
+        Player.NotesChannel.clear();
+        Player.NotesInstr.clear();
+    }
+    public void Tick.reset(){
+        public Tick.tick = -64;
+        public Tick.active = 1;
+        Player.panic();
+        while(Tick.active){
+            Ticker();
+        }
+    }
+    /*
+    private void Ticker(){
+        if (!Tick.freeze){
+            public Tick.tick++;
+            Player.TickBuffer.append(Timer.getTimer("Player.timer"));
+            Player.tickerEvent();
+        }
+        call Player.updateDebugMenu();
+        Music.restForBeats(1/(2**Tick.wait));
+    }
+    */
+    private void moveTick(ticks){
+        for (i=1; i<ticks; i++){
+            Ticker();
+        }
+    }
+    private void skipTick(ticks){
+        public Tick.tick += ticks;
+    }
+    private void logStatic(L){
+        twrpConsole.log(L);
+        console.log(L);
+    }
+    private void logInfo(L){
+        twrpConsole.info(L);
+        console.info(L);
+    }
+    private void logDebug(L){
+        twrpConsole.debug(L);
+        console.debug(L);
+    }
+    private void logWarn(L){
+        twrpConsole.warn(L);
+        console.warn(L);
+        if (Player.breakOnWarning){
+            twrpConsole.breakpoint();
+        }
+    }
+    private void logError(L){
+        twrpConsole.error(L);
+        console.error(L);
+        if (Player.breakOnError){
+            twrpConsole.breakpoint();
+        }
+    }
+    private void loadFLPreset(FLPresetID){
+        Player.FLData.importArray(Player.PresetFL.get(FLPresetID));
+        public Player.guessedFLIdx = FLPresetID;
+    }
+    private void removeFLPreset(FLPresetID){
+        Player.PresetFL.remove(FLPresetID);
+        Player.PresetFLName.remove(FLPresetID);
+    }
+    private void saveFLPreset(FLPresetID){
+        Player.PresetFL.set(FLPresetID,Player.FLData.exportArray());
+        Player.PresetFLName.set(FLPresetID,Player.guessedFL);
+    }
+    private void replaceFLPreset(FLPresetID){
+        Player.PresetFL.set(FLPresetID,Player.FLData.exportArray());
+    }
+}
+
+/*
+
+//关于Metronome系统的进化史
+//最后一次更新 NP3.21
+
+NP3.15-NP3.21 Player.start -> while(1) -> commentBlock("Metronome Sound Play System"):
+if (Player.metronome==1 && mtcsok){
+ if (Player.beats%Player.beats2==0){
+  playSound("MetronomeEffect2");
+ } else {
+  playSound("MetronomeEffect1");
+ }
+}
+
+
+NP3.13-NP3.14 Player.start -> while(1) -> commentBlock("Metronome Sound Play System"):
+if (Player.metronome==1 && mtcsok){
+ if( Player.beats%Player.beats2==0){
+  Player.metronomeSoundA();
+ }else{
+  Player.metronomeSoundB();
+ }
+}
+
+NP1.1-NP3.12 Player.start -> while(1) -> commentBlock("Metronome Sound Play System"):
+Function does not exist
+
+---
+
+NP3.18-NP3.21 Player.start -> while(1) -> commentBlock("Metronome Tick Count System"):
+if (Tick.tick > lt2+Player.beatReady+15){
+ private lt2 = Tick.tick - Player.beatReady;
+ private mtcsok = 1;
+ Player.beats++
+}
+
+NP3.13-NP3.17 Player.start -> while(1) -> commentBlock("Metronome Tick Count System"):
+if (Tick.tick > lt2+15){
+ private lt2 = Tick.tick;
+ private mtcsok = 1;
+ Player.beats++
+}
+
+NP1.1-NP3.12 Player.start -> while(1) -> commentBlock("Metronome Tick Count System"):
+Function does not exist
+
+*/

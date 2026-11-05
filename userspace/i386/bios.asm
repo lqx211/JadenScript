@@ -1,0 +1,817 @@
+; ---------------------------------------------------------------------------
+; i386 bios: power-on self test, a text console, and a boot.
+;
+; Real mode, because that is where a PC starts: CS = 0xF000, IP = 0xFFF0, and
+; the ROM assembled at zero so every fits in sixteen bits.
+; nasm -f bin gives us exactly the 64 KiB window a ROM occupies; the reset
+; vector is the last sixteen bytes of it.
+;
+; The services here are the ones a boot sector actually calls:
+;
+;   int 0x10   ah=0x0E teletype output, ah=0x00 set mode, ah=0x0F get mode,
+;              ah=0x03 get cursor
+;   int 0x11   equipment word
+;   int 0x12   memory size in KiB
+;   int 0x13   ah=0x02 read sectors (CHS, 63 sectors, 16 heads, disk 0x80)
+;   int 0x16   ah=0x00 wait for a key, ah=0x01 poll
+;   int 0x19   boot: load sector 0 to 0x7C00 and jump
+;   int 0x1A   ah=0x00 read the tick count
+;
+; The battery-backed CMOS is a real device on ports 0x70/0x71, and this firmware
+; uses it the way a PC does: memory size and equipment come *out* of it (so the
+; same ROM describes a different machine), the clock is read from it, and the
+; boot counter at 0x30 is incremented and written back, which is the one thing
+; that proves the battery is still connected across a power cycle.
+;
+; The handlers keep ds pointing at the ROM segment (so `mov si, msg` works),
+; es at zero for the BIOS data area, and fs at the text plane. Saving bp first
+; and moving sp into it puts the flags the CPU pushed at [bp+6], which is how a
+; handler returns a carry flag: iret pops the flags, so setting them after the
+; fact would be pointless.
+; ---------------------------------------------------------------------------
+
+[bits 16]
+org 0
+
+TEXT_SEG        equ 0xB800
+DISK_SEG        equ 0x3000          ; the staged disk image, 128 sectors
+COLS            equ 80
+ROWS            equ 25
+
+BDA_CURSOR_COL  equ 0x450
+BDA_CURSOR_ROW  equ 0x451
+BDA_TICKS       equ 0x46C
+BDA_EQUIP       equ 0x410
+BDA_MEMK        equ 0x413
+; scratch the console keeps between calls: free space in the data area, at an
+; address that is RAM on every PC. It must *not* live in the ROM, which is
+; read-only on a real board and on this machine
+ARG_AX          equ 0x4F0
+ARG_AH          equ 0x4F1
+ARG_BL          equ 0x4F2
+BDA_CORES       equ 0x4F3
+CON_ATTR        equ 0x4F4          ; the attribute the console prints with
+SU_ROWSAVE      equ 0x520
+
+; ---------------------------------------------------------------------------
+; post
+; ---------------------------------------------------------------------------
+start:
+    cli
+    xor     ax, ax
+    mov     ds, ax
+    mov     es, ax
+    mov     ss, ax
+    mov     sp, 0x7C00
+    cld
+    sti
+
+    ; the text plane: 80 x 25 cells of (char, attribute)
+    mov     ax, TEXT_SEG
+    mov     es, ax
+    xor     di, di
+    mov     cx, COLS * ROWS
+    mov     ax, 0x0720              ; space, light grey on black
+    rep     stosw
+
+    ; the BIOS data area
+    xor     ax, ax
+    mov     es, ax
+    mov     byte [es:BDA_CURSOR_COL], 0
+    mov     byte [es:BDA_CURSOR_ROW], 0
+    mov     byte [es:CON_ATTR], 0x07
+
+    ; what this machine has comes out of the CMOS, not out of this listing:
+    ; 0x14 is the equipment word, 0x15/0x16 the base memory in KiB
+    mov     al, 0x14
+    call    cmos_read
+    mov     ah, al
+    mov     al, 0x15
+    call    cmos_read
+    mov     bl, al
+    mov     al, 0x16
+    call    cmos_read
+    mov     bh, al
+    mov     [es:BDA_EQUIP], ax
+    mov     [es:BDA_MEMK], bx
+    ; two word stores, not one dword store: this firmware keeps every operand
+    ; sixteen bits wide, which is what "16-bit bus" on the banner means
+    mov     word [es:BDA_TICKS], 0
+    mov     word [es:BDA_TICKS + 2], 0
+
+    ; a POST that found memory is a POST that passed
+    mov     al, 0x31
+    mov     cl, 0xA5
+    call    cmos_write
+
+    ; the interrupt vector table
+    mov     ax, cs
+    mov     bx, 0x10 * 4
+    mov     dx, int10
+    call    set_vector
+    mov     bx, 0x11 * 4
+    mov     dx, int11
+    call    set_vector
+    mov     bx, 0x12 * 4
+    mov     dx, int12
+    call    set_vector
+    mov     bx, 0x13 * 4
+    mov     dx, int13
+    call    set_vector
+    mov     bx, 0x16 * 4
+    mov     dx, int16
+    call    set_vector
+    mov     bx, 0x19 * 4
+    mov     dx, int19
+    call    set_vector
+    mov     bx, 0x1A * 4
+    mov     dx, int1a
+    call    set_vector
+    mov     bx, 0x08 * 4
+    mov     dx, int08
+    call    set_vector
+    mov     bx, 0x09 * 4
+    mov     dx, int08
+    call    set_vector
+
+    ; from here on the ROM is the data segment
+    mov     ax, cs
+    mov     ds, ax
+
+    mov     si, msg_banner
+    call    puts
+
+    ; the boot counter at CMOS 0x30: read, add one, write back, then show it.
+    ; This is the battery, stated as a fact the guest can see.
+    mov     al, 0x30
+    call    cmos_read
+    inc     al
+    mov     cl, al
+    mov     al, 0x30
+    call    cmos_write
+    mov     si, msg_bootno
+    call    puts
+    mov     al, cl
+    call    puthex
+    mov     si, msg_crlf
+    call    puts
+
+    ; and the clock, straight out of the RTC registers
+    mov     al, 0x04
+    call    cmos_read
+    call    puthex
+    mov     al, ':'
+    call    putc
+    mov     al, 0x02
+    call    cmos_read
+    call    puthex
+    mov     al, ':'
+    call    putc
+    mov     al, 0x00
+    call    cmos_read
+    call    puthex
+    mov     si, msg_crlf
+    call    puts
+    mov     si, msg_cpu
+    call    puts
+    ; the size comes out of the CMOS, so it is printed rather than baked in
+    mov     si, msg_mem
+    call    puts
+    mov     ax, [es:BDA_MEMK]
+    call    put3
+    mov     si, msg_memk
+    call    puts
+    mov     si, msg_video
+    call    puts
+    ; how many cores the board has, and the SMP bring-up: copy the AP
+    ; trampoline into low RAM, wake every other core, wait for them to check in
+    mov     dx, 0x5A0
+    in      al, dx
+    xor     ah, ah
+    mov     [es:BDA_CORES], al
+    mov     si, msg_cores
+    call    puts
+    mov     al, [es:BDA_CORES]
+    xor     ah, ah
+    call    put3
+    mov     si, msg_crlf
+    call    puts
+
+    call    smpBoot
+
+    ; the window: a second to press DEL or F2, then the setup screen
+    call    suWindow
+    test    al, al
+    jz      .no_setup
+    call    suEnter
+.no_setup:
+    mov     si, msg_boot
+    call    puts
+
+    int     0x19                    ; does not return on success
+
+    mov     si, msg_nodev
+    call    puts
+.halt:
+    cli
+    hlt
+    jmp     .halt
+
+; set_vector: bx = the vector's address in the table, dx = the handler,
+; ax = the segment it lives in
+set_vector:
+    push    es
+    push    di
+    push    ax
+    push    cx
+    xor     cx, cx
+    mov     es, cx
+    mov     [es:bx], dx
+    mov     [es:bx + 2], ax
+    pop     cx
+    pop     ax
+    pop     di
+    pop     es
+    ret
+
+; cmos_read: al = the register, returns al = its value
+cmos_read:
+    push    dx
+    mov     dx, 0x70
+    out     dx, al
+    mov     dx, 0x71
+    in      al, dx
+    pop     dx
+    ret
+
+; cmos_write: al = the register, cl = the value
+cmos_write:
+    push    dx
+    push    ax
+    mov     dx, 0x70
+    out     dx, al
+    mov     al, cl
+    mov     dx, 0x71
+    out     dx, al
+    pop     ax
+    pop     dx
+    ret
+
+; putc: al = a character, printed through the console
+putc:
+    push    ax
+    push    bx
+    mov     ah, 0x0E
+    mov     bl, [es:CON_ATTR]
+    int     0x10
+    pop     bx
+    pop     ax
+    ret
+
+; puthex: al = a byte, printed as two hex digits
+puthex:
+    push    ax
+    push    bx
+    push    cx
+    mov     ah, al
+    mov     cl, 4
+    shr     al, cl
+    call    .digit
+    mov     al, ah
+    call    .digit
+    pop     cx
+    pop     bx
+    pop     ax
+    ret
+.digit:
+    and     al, 0x0F
+    cmp     al, 10
+    jb      .small
+    add     al, 'a' - 10
+    jmp     putc
+.small:
+    add     al, '0'
+    jmp     putc
+
+; ---------------------------------------------------------------------------
+; smpBoot -- put the APs to work.
+;
+; Real firmware copies a trampoline into low memory and sends the other cores
+; there; this does the same, through the board's release port. Each core reads
+; its own number back from the chipset and writes a marker, and the boot core
+; waits (bounded: a machine with a dead core must still POST) for every marker
+; before it says how many are online.
+; ---------------------------------------------------------------------------
+smpBoot:
+    push    ax
+    push    bx
+    push    cx
+    push    dx
+    push    si
+    push    di
+    push    es
+    push    ds
+    mov     al, [es:BDA_CORES]
+    cmp     al, 2
+    jb      .done                   ; one core: nothing to bring up
+    ; the trampoline, from the ROM to 0x8000
+    mov     ax, cs
+    mov     ds, ax
+    mov     si, apTramp
+    xor     ax, ax
+    mov     es, ax
+    mov     di, 0x8000
+    mov     cx, apTrampEnd - apTramp
+    cld
+    rep     movsb
+    ; wake every core but this one
+    mov     bl, 2
+.wake:
+    cmp     bl, [es:BDA_CORES]
+    ja      .wait
+    mov     al, bl
+    mov     dx, 0x5A1
+    out     dx, al
+    inc     bl
+    jmp     .wake
+.wait:
+    mov     cx, 2000                ; a bounded wait, not an infinite one
+.spin:
+    mov     bl, 2
+.check:
+    cmp     bl, [es:BDA_CORES]
+    ja      .online
+    xor     bh, bh
+    cmp     byte [es:bx + 0x8500], 1
+    jne     .again
+    inc     bl
+    jmp     .check
+.again:
+    loop    .spin
+.online:
+    mov     si, msg_smp
+    call    puts
+    ; count who checked in, starting with this core
+    mov     dl, 1
+    mov     bl, 1
+.count:
+    cmp     bl, [es:BDA_CORES]
+    ja      .report
+    xor     bh, bh
+    cmp     byte [es:bx + 0x8500], 1
+    jne     .next
+    inc     dl
+.next:
+    inc     bl
+    jmp     .count
+.report:
+    xor     ax, ax
+    mov     al, dl
+    call    put3
+    mov     si, msg_cores_online
+    call    puts
+.done:
+    pop     ds
+    pop     es
+    pop     di
+    pop     si
+    pop     dx
+    pop     cx
+    pop     bx
+    pop     ax
+    ret
+
+; The AP trampoline: position independent, entered at 0x0800:0x0000 with its
+; own registers and the shared memory it was given.
+apTramp:
+    cli
+    xor     ax, ax
+    mov     ds, ax
+    mov     es, ax
+    mov     ss, ax
+    mov     sp, 0x7C00
+    mov     dx, 0x5A2               ; who am I?
+    in      al, dx
+    mov     bl, al
+    xor     bh, bh
+    mov     byte [bx + 0x8400], al  ; the roster
+    mov     byte [bx + 0x8500], 1   ; and the check-in
+apHalt:
+    cli
+    hlt
+    jmp     apHalt
+apTrampEnd:
+
+; puts: si = a zero-terminated string in the ROM segment
+puts:
+    push    ax
+    push    bx
+    push    si
+.next:
+    lodsb
+    test    al, al
+    jz      .done
+    mov     ah, 0x0E
+    mov     bx, 0x0007
+    int     0x10
+    jmp     .next
+.done:
+    pop     si
+    pop     bx
+    pop     ax
+    ret
+
+; ---------------------------------------------------------------------------
+; int 10h: the console
+; ---------------------------------------------------------------------------
+int10:
+    push    bp
+    mov     bp, sp
+    push    bx
+    push    cx
+    push    dx
+    push    si
+    push    di
+    push    ds
+    push    es
+    push    fs
+    ; the caller owns ds, and the ROM is read-only, so the arguments go to the
+    ; data area -- but only after they have been pushed out of the way, because
+    ; loading the segment registers takes ax with it
+    push    ax
+    push    bx
+    mov     ax, cs
+    mov     ds, ax
+    xor     ax, ax
+    mov     es, ax
+    pop     bx
+    pop     ax
+    mov     [es:ARG_AX], al
+    mov     [es:ARG_AH], ah
+    mov     [es:ARG_BL], bl
+    mov     al, [es:ARG_AX]
+    mov     ah, [es:ARG_AH]
+
+    cmp     ah, 0x0E
+    jne     .not_tty
+    mov     bl, [es:ARG_BL]
+    call    tty
+    jmp     .out
+.not_tty:
+    cmp     ah, 0x00                ; set mode: only the text mode exists
+    jne     .not_mode
+    call    clear_text
+    jmp     .out
+.not_mode:
+    cmp     ah, 0x0F                ; get mode
+    jne     .not_getmode
+    mov     al, 0x03
+    mov     ah, COLS
+    jmp     .out
+.not_getmode:
+    cmp     ah, 0x03                ; get cursor
+    jne     .out
+    mov     dh, [es:BDA_CURSOR_ROW]
+    mov     dl, [es:BDA_CURSOR_COL]
+    xor     cx, cx
+.out:
+    pop     fs
+    pop     es
+    pop     ds
+    pop     di
+    pop     si
+    pop     dx
+    pop     cx
+    pop     bx
+    pop     bp
+    iret
+
+clear_text:
+    push    ax
+    push    cx
+    push    di
+    push    es
+    mov     ax, TEXT_SEG
+    mov     es, ax
+    xor     di, di
+    mov     cx, COLS * ROWS
+    mov     ax, 0x0720
+    rep     stosw
+    pop     es
+    pop     di
+    pop     cx
+    pop     ax
+    ret
+
+; tty: al = character, bl = attribute, ds = the ROM, es = 0
+tty:
+    push    ax
+    push    bx
+    push    cx
+    push    dx
+    push    si
+    push    di
+    push    fs
+    mov     si, ax                  ; si = the character
+    cmp     al, 13
+    jne     .not_cr
+    mov     byte [es:BDA_CURSOR_COL], 0
+    jmp     .out
+.not_cr:
+    cmp     al, 10
+    jne     .not_lf
+    inc     byte [es:BDA_CURSOR_ROW]
+    jmp     .scroll
+.not_lf:
+    cmp     al, 8
+    jne     .print
+    cmp     byte [es:BDA_CURSOR_COL], 0
+    je      .out
+    dec     byte [es:BDA_CURSOR_COL]
+    jmp     .out
+.print:
+    mov     cl, [es:BDA_CURSOR_ROW]
+    xor     ch, ch
+    mov     dx, COLS
+    mov     ax, cx
+    mul     dx                      ; ax = row * 80
+    mov     cl, [es:BDA_CURSOR_COL]
+    xor     ch, ch
+    add     ax, cx
+    shl     ax, 1
+    mov     di, ax
+    mov     cx, TEXT_SEG
+    mov     fs, cx
+    mov     ax, si
+    mov     ah, bl
+    mov     [fs:di], ax
+    inc     byte [es:BDA_CURSOR_COL]
+    cmp     byte [es:BDA_CURSOR_COL], COLS
+    jb      .out
+    mov     byte [es:BDA_CURSOR_COL], 0
+    inc     byte [es:BDA_CURSOR_ROW]
+.scroll:
+    cmp     byte [es:BDA_CURSOR_ROW], ROWS
+    jb      .out
+    push    ax
+    push    cx
+    push    si
+    push    di
+    push    ds
+    push    es
+    mov     ax, TEXT_SEG
+    mov     ds, ax
+    mov     es, ax
+    mov     si, COLS * 2
+    xor     di, di
+    mov     cx, (ROWS - 1) * COLS
+    rep     movsw                   ; every row moves up one
+    mov     di, (ROWS - 1) * COLS * 2
+    mov     cx, COLS
+    mov     ax, 0x0720
+    rep     stosw
+    pop     es
+    pop     ds
+    pop     di
+    pop     si
+    pop     cx
+    pop     ax
+    mov     byte [es:BDA_CURSOR_ROW], ROWS - 1
+.out:
+    pop     fs
+    pop     di
+    pop     si
+    pop     dx
+    pop     cx
+    pop     bx
+    pop     ax
+    ret
+
+; ---------------------------------------------------------------------------
+; int 11h / 12h: what this machine has
+; ---------------------------------------------------------------------------
+int11:
+    push    ds
+    xor     ax, ax
+    mov     ds, ax
+    mov     ax, [ds:BDA_EQUIP]
+    pop     ds
+    iret
+
+int12:
+    push    ds
+    xor     ax, ax
+    mov     ds, ax
+    mov     ax, [ds:BDA_MEMK]
+    pop     ds
+    iret
+
+; ---------------------------------------------------------------------------
+; int 13h: read sectors from the staged disk
+; ---------------------------------------------------------------------------
+int13:
+    push    bp
+    mov     bp, sp
+    push    bx
+    push    cx
+    push    dx
+    push    si
+    push    di
+    push    ds
+    cmp     ah, 0x02
+    je      .read
+    cmp     ah, 0x00                ; reset: nothing to reset yet
+    je      .ok
+    cmp     ah, 0x08                ; drive parameters
+    jne     .fail
+    mov     ch, 79
+    mov     cl, 63
+    mov     dh, 15
+    mov     dl, 1
+    jmp     .ok
+.read:
+    ; the sector count rides on the stack: ax is about to become the lba
+    push    ax
+    ; lba = (cyl * 16 + head) * 63 + sector - 1
+    mov     al, ch
+    xor     ah, ah
+    shl     ax, 4
+    mov     dl, dh
+    xor     dh, dh
+    add     ax, dx
+    mov     dx, 63
+    mul     dx
+    mov     dx, cx
+    and     dx, 0x3F
+    dec     dx
+    add     ax, dx
+    shl     ax, 9                   ; 512 bytes a sector
+    mov     si, ax
+    mov     ax, DISK_SEG
+    mov     ds, ax
+    mov     di, bx
+    pop     cx                      ; cl = the sector count
+    and     cx, 0xFF
+    shl     cx, 8                   ; sectors * 256 words
+    rep     movsw
+.ok:
+    and     word [ss:bp + 6], 0xFFFE ; clear carry: it worked
+    xor     ah, ah
+    jmp     .out
+.fail:
+    or      word [ss:bp + 6], 1     ; set carry: it did not
+    mov     ah, 0x04                ; sector not found
+.out:
+    pop     ds
+    pop     di
+    pop     si
+    pop     dx
+    pop     cx
+    pop     bx
+    pop     bp
+    iret
+
+; ---------------------------------------------------------------------------
+; int 16h: the keyboard
+; ---------------------------------------------------------------------------
+int16:
+    push    bp
+    mov     bp, sp
+    push    bx
+    push    ds
+    xor     bx, bx
+    mov     ds, bx
+    test    ah, ah
+    jnz     .poll
+    call    key_wait
+    jmp     .out
+.poll:
+    cmp     ah, 0x01
+    jne     .out
+    in      al, 0x64                ; is a key waiting?
+    test    al, 1
+    jz      .empty
+    mov     ax, [ds:0x41A]          ; peek at the buffer head
+    jmp     .out
+.empty:
+    or      word [ss:bp + 6], 0x40  ; ZF: nothing there
+.out:
+    pop     ds
+    pop     bx
+    pop     bp
+    iret
+
+key_wait:
+    in      al, 0x64
+    test    al, 1
+    jz      key_wait
+    in      al, 0x60                ; the scan code
+    mov     bx, keymap
+    xor     ah, ah
+    add     bx, ax
+    mov     al, [bx]
+    test    al, al
+    jnz     .mapped
+    mov     al, 0x20                ; unmapped: a space
+.mapped:
+    xor     ah, ah
+    ret
+
+; ---------------------------------------------------------------------------
+; int 19h: boot
+; ---------------------------------------------------------------------------
+int19:
+    push    bp
+    mov     bp, sp
+    push    ax
+    push    bx
+    push    cx
+    push    dx
+    push    es
+    xor     ax, ax
+    mov     es, ax
+    mov     bx, 0x7C00
+    mov     ah, 0x02
+    mov     al, 1
+    xor     ch, ch
+    mov     cl, 1
+    xor     dh, dh
+    mov     dl, 0x80
+    int     0x13
+    jc      .fail
+    cmp     word [es:0x7C00 + 510], 0xAA55
+    jne     .fail
+    pop     es
+    pop     dx
+    pop     cx
+    pop     bx
+    pop     ax
+    pop     bp
+    jmp     0x0000:0x7C00
+.fail:
+    pop     es
+    pop     dx
+    pop     cx
+    pop     bx
+    pop     ax
+    pop     bp
+    iret
+
+; ---------------------------------------------------------------------------
+; int 1Ah: the clock
+; ---------------------------------------------------------------------------
+int1a:
+    push    bp
+    mov     bp, sp
+    push    bx
+    push    ds
+    xor     bx, bx
+    mov     ds, bx
+    test    ah, ah
+    jnz     .out
+    mov     dx, [ds:BDA_TICKS]
+    mov     cx, [ds:BDA_TICKS + 2]
+    xor     al, al
+.out:
+    pop     ds
+    pop     bx
+    pop     bp
+    iret
+
+; int 08h: the timer tick, once there is a timer to tick
+int08:
+    iret
+
+%include "setup.inc"
+
+; ---------------------------------------------------------------------------
+; data
+; ---------------------------------------------------------------------------
+msg_banner: db "JSW 80386 BIOS v0.02", 13, 10, 0
+msg_bootno: db "CMOS boot #", 0
+msg_crlf:   db 13, 10, 0
+msg_cpu:    db "CPU: 80386, real mode, 16-bit bus", 13, 10, 0
+msg_mem:    db "Memory: ", 0
+msg_memk:   db "K conventional", 13, 10, 0
+msg_video:  db "Video: 80x25 text, attribute 0x07", 13, 10, 0
+msg_boot:   db "Booting from disk 0x80...", 13, 10, 0
+msg_cores:  db "Cores: ", 0
+msg_smp:    db "SMP: ", 0
+msg_cores_online: db " core(s) online", 13, 10, 0
+msg_nodev:  db "No bootable device.", 13, 10, 0
+
+; set 1 scan codes, straight out of the 8042
+keymap:
+    db 0, 27, '1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '-', '=', 8, 9
+    db 'q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 'p', '[', ']', 13, 0
+    db 'a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l', ';', 39, '`', 0, 92
+    db 'z', 'x', 'c', 'v', 'b', 'n', 'm', ',', '.', '/', 0, '*', 0, ' '
+    times 128 - ($ - keymap) db 0
+    times 128 db 0
+
+; ---------------------------------------------------------------------------
+; the reset vector: the last sixteen bytes of the 64 KiB ROM
+; ---------------------------------------------------------------------------
+    times 0xFFF0 - ($ - $$) db 0
+    jmp     0xF000:start
+    times 0x10000 - ($ - $$) db 0

@@ -1,0 +1,3401 @@
+{
+ "keywords": [
+  {
+   "label": "and",
+   "kind": "keyword",
+   "detail": "keyword",
+   "doc": "Logical and."
+  },
+  {
+   "label": "any",
+   "kind": "literal",
+   "detail": "literal",
+   "doc": "The \"any key\" menu option — compiles to the text `\"any\"`."
+  },
+  {
+   "label": "as",
+   "kind": "keyword",
+   "detail": "keyword",
+   "doc": "Names the imported value."
+  },
+  {
+   "label": "async",
+   "kind": "reserved",
+   "detail": "reserved",
+   "doc": "Reserved for a future version — the compiler rejects it."
+  },
+  {
+   "label": "await",
+   "kind": "reserved",
+   "detail": "reserved",
+   "doc": "Reserved for a future version — the compiler rejects it."
+  },
+  {
+   "label": "break",
+   "kind": "keyword",
+   "detail": "keyword",
+   "doc": "Leave the innermost loop or switch."
+  },
+  {
+   "label": "call",
+   "kind": "keyword",
+   "detail": "keyword",
+   "doc": "Fire-and-forget broadcast instead of a blocking call."
+  },
+  {
+   "label": "case",
+   "kind": "keyword",
+   "detail": "keyword",
+   "doc": "One branch of a `switch`."
+  },
+  {
+   "label": "catch",
+   "kind": "reserved",
+   "detail": "reserved",
+   "doc": "Reserved for a future version — the compiler rejects it."
+  },
+  {
+   "label": "class",
+   "kind": "keyword",
+   "detail": "keyword",
+   "doc": "Declares a Scratch sprite. `class main { // Sprite: main (0,0) … }`"
+  },
+  {
+   "label": "const",
+   "kind": "reserved",
+   "detail": "reserved",
+   "doc": "Reserved for a future version — the compiler rejects it."
+  },
+  {
+   "label": "continue",
+   "kind": "keyword",
+   "detail": "keyword",
+   "doc": "Skip to the next iteration."
+  },
+  {
+   "label": "default",
+   "kind": "keyword",
+   "detail": "keyword",
+   "doc": "The fallback branch of a `switch`."
+  },
+  {
+   "label": "delete",
+   "kind": "reserved",
+   "detail": "reserved",
+   "doc": "Reserved for a future version — the compiler rejects it."
+  },
+  {
+   "label": "do",
+   "kind": "reserved",
+   "detail": "reserved",
+   "doc": "Reserved for a future version — the compiler rejects it."
+  },
+  {
+   "label": "elif",
+   "kind": "keyword",
+   "detail": "keyword",
+   "doc": "Chained `else if`; compiles to nested if-else blocks."
+  },
+  {
+   "label": "else",
+   "kind": "keyword",
+   "detail": "keyword",
+   "doc": "The other branch of `if` / `elif`."
+  },
+  {
+   "label": "enum",
+   "kind": "reserved",
+   "detail": "reserved",
+   "doc": "Reserved for a future version — the compiler rejects it."
+  },
+  {
+   "label": "export",
+   "kind": "reserved",
+   "detail": "reserved",
+   "doc": "Reserved for a future version — the compiler rejects it."
+  },
+  {
+   "label": "extends",
+   "kind": "reserved",
+   "detail": "reserved",
+   "doc": "Reserved for a future version — the compiler rejects it."
+  },
+  {
+   "label": "false",
+   "kind": "literal",
+   "detail": "literal",
+   "doc": "Boolean literal."
+  },
+  {
+   "label": "final",
+   "kind": "modifier",
+   "detail": "modifier",
+   "doc": "Access modifier."
+  },
+  {
+   "label": "finally",
+   "kind": "reserved",
+   "detail": "reserved",
+   "doc": "Reserved for a future version — the compiler rejects it."
+  },
+  {
+   "label": "for",
+   "kind": "keyword",
+   "detail": "keyword",
+   "doc": "Counted loop: `for (i in 0..n)`."
+  },
+  {
+   "label": "if",
+   "kind": "keyword",
+   "detail": "keyword",
+   "doc": "Compiles to the if / if-else block."
+  },
+  {
+   "label": "import",
+   "kind": "keyword",
+   "detail": "keyword",
+   "doc": "Pull a list (.jsa) / variable (.jsv) in from a side file."
+  },
+  {
+   "label": "in",
+   "kind": "reserved",
+   "detail": "reserved",
+   "doc": "Reserved for a future version — the compiler rejects it."
+  },
+  {
+   "label": "instanceof",
+   "kind": "reserved",
+   "detail": "reserved",
+   "doc": "Reserved for a future version — the compiler rejects it."
+  },
+  {
+   "label": "let",
+   "kind": "reserved",
+   "detail": "reserved",
+   "doc": "Reserved for a future version — the compiler rejects it."
+  },
+  {
+   "label": "loose",
+   "kind": "keyword",
+   "detail": "keyword",
+   "doc": "Keeps a block that is not attached to any hat (`loose { … }`)."
+  },
+  {
+   "label": "metadata",
+   "kind": "keyword",
+   "detail": "keyword",
+   "doc": "Canvas metadata: `metadata <script> pos x,y;`, monitors, notes."
+  },
+  {
+   "label": "new",
+   "kind": "reserved",
+   "detail": "reserved",
+   "doc": "Reserved for a future version — the compiler rejects it."
+  },
+  {
+   "label": "not",
+   "kind": "keyword",
+   "detail": "keyword",
+   "doc": "Logical not."
+  },
+  {
+   "label": "null",
+   "kind": "literal",
+   "detail": "literal",
+   "doc": "Empty value (compiles to an empty input)."
+  },
+  {
+   "label": "of",
+   "kind": "reserved",
+   "detail": "reserved",
+   "doc": "Reserved for a future version — the compiler rejects it."
+  },
+  {
+   "label": "or",
+   "kind": "keyword",
+   "detail": "keyword",
+   "doc": "Logical or."
+  },
+  {
+   "label": "private",
+   "kind": "modifier",
+   "detail": "modifier",
+   "doc": "Local to the sprite (a plain custom block)."
+  },
+  {
+   "label": "public",
+   "kind": "modifier",
+   "detail": "modifier",
+   "doc": "Visible to other sprites; `Sprite.method()` becomes a broadcast."
+  },
+  {
+   "label": "repeat",
+   "kind": "keyword",
+   "detail": "keyword",
+   "doc": "Repeat n times."
+  },
+  {
+   "label": "return",
+   "kind": "keyword",
+   "detail": "keyword",
+   "doc": "Stop this script (Scratch has no return values)."
+  },
+  {
+   "label": "stage",
+   "kind": "keyword",
+   "detail": "keyword",
+   "doc": "Declares the Stage script block."
+  },
+  {
+   "label": "static",
+   "kind": "modifier",
+   "detail": "modifier",
+   "doc": "Access modifier."
+  },
+  {
+   "label": "struct",
+   "kind": "reserved",
+   "detail": "reserved",
+   "doc": "Reserved for a future version — the compiler rejects it."
+  },
+  {
+   "label": "switch",
+   "kind": "keyword",
+   "detail": "keyword",
+   "doc": "Chain of equality tests on one value."
+  },
+  {
+   "label": "this",
+   "kind": "reserved",
+   "detail": "reserved",
+   "doc": "Reserved for a future version — the compiler rejects it."
+  },
+  {
+   "label": "throw",
+   "kind": "reserved",
+   "detail": "reserved",
+   "doc": "Reserved for a future version — the compiler rejects it."
+  },
+  {
+   "label": "true",
+   "kind": "literal",
+   "detail": "literal",
+   "doc": "Boolean literal."
+  },
+  {
+   "label": "try",
+   "kind": "reserved",
+   "detail": "reserved",
+   "doc": "Reserved for a future version — the compiler rejects it."
+  },
+  {
+   "label": "typedef",
+   "kind": "reserved",
+   "detail": "reserved",
+   "doc": "Reserved for a future version — the compiler rejects it."
+  },
+  {
+   "label": "typeof",
+   "kind": "reserved",
+   "detail": "reserved",
+   "doc": "Reserved for a future version — the compiler rejects it."
+  },
+  {
+   "label": "var",
+   "kind": "reserved",
+   "detail": "reserved",
+   "doc": "Reserved for a future version — the compiler rejects it."
+  },
+  {
+   "label": "void",
+   "kind": "type",
+   "detail": "type",
+   "doc": "Marks a method; every method is a custom block."
+  },
+  {
+   "label": "while",
+   "kind": "keyword",
+   "detail": "keyword",
+   "doc": "Repeat until the condition is false."
+  },
+  {
+   "label": "yield",
+   "kind": "reserved",
+   "detail": "reserved",
+   "doc": "Reserved for a future version — the compiler rejects it."
+  }
+ ],
+ "builtins": [
+  {
+   "label": "abs",
+   "kind": "function",
+   "detail": "builtin",
+   "doc": "Absolute value (operator_mathop)."
+  },
+  {
+   "label": "acos",
+   "kind": "function",
+   "detail": "builtin",
+   "doc": "Arccosine in degrees (operator_mathop)."
+  },
+  {
+   "label": "asin",
+   "kind": "function",
+   "detail": "builtin",
+   "doc": "Arcsine in degrees (operator_mathop)."
+  },
+  {
+   "label": "atan",
+   "kind": "function",
+   "detail": "builtin",
+   "doc": "Arctangent in degrees (operator_mathop)."
+  },
+  {
+   "label": "block",
+   "kind": "function",
+   "detail": "builtin",
+   "doc": "Raw block escape hatch: `block(\"opcode\", …)`."
+  },
+  {
+   "label": "breakpoint",
+   "kind": "function",
+   "detail": "builtin",
+   "doc": "Marks a point in the console log."
+  },
+  {
+   "label": "ceil",
+   "kind": "function",
+   "detail": "builtin",
+   "doc": "Round up (operator_mathop) — the block calls this `ceiling`."
+  },
+  {
+   "label": "cos",
+   "kind": "function",
+   "detail": "builtin",
+   "doc": "Cosine of an angle in degrees (operator_mathop)."
+  },
+  {
+   "label": "error",
+   "kind": "function",
+   "detail": "builtin",
+   "doc": "Console error."
+  },
+  {
+   "label": "exp",
+   "kind": "function",
+   "detail": "builtin",
+   "doc": "e raised to the power (operator_mathop)."
+  },
+  {
+   "label": "float",
+   "kind": "function",
+   "detail": "builtin",
+   "doc": "Force a numeric input slot."
+  },
+  {
+   "label": "floor",
+   "kind": "function",
+   "detail": "builtin",
+   "doc": "Round down (operator_mathop)."
+  },
+  {
+   "label": "isCompiled",
+   "kind": "function",
+   "detail": "builtin",
+   "doc": "True when the project was compiled."
+  },
+  {
+   "label": "isTurboWarp",
+   "kind": "function",
+   "detail": "builtin",
+   "doc": "True when running in TurboWarp."
+  },
+  {
+   "label": "join",
+   "kind": "function",
+   "detail": "builtin",
+   "doc": "Join two values (operator_join)."
+  },
+  {
+   "label": "len",
+   "kind": "function",
+   "detail": "builtin",
+   "doc": "Length of a string (operator_length)."
+  },
+  {
+   "label": "length",
+   "kind": "function",
+   "detail": "builtin",
+   "doc": "Length of a string (operator_length)."
+  },
+  {
+   "label": "lengthOf",
+   "kind": "function",
+   "detail": "builtin",
+   "doc": "Length of a value once it is text (operator_length) — `length of []`."
+  },
+  {
+   "label": "ln",
+   "kind": "function",
+   "detail": "builtin",
+   "doc": "Natural logarithm (operator_mathop)."
+  },
+  {
+   "label": "log",
+   "kind": "function",
+   "detail": "builtin",
+   "doc": "Append a line to the TurboWarp console journal."
+  },
+  {
+   "label": "log10",
+   "kind": "function",
+   "detail": "builtin",
+   "doc": "Base-10 logarithm (operator_mathop); `log(x);` is the console statement."
+  },
+  {
+   "label": "menu",
+   "kind": "function",
+   "detail": "builtin",
+   "doc": "Escape hatch for a dropdown shadow."
+  },
+  {
+   "label": "pow10",
+   "kind": "function",
+   "detail": "builtin",
+   "doc": "10 raised to the power (operator_mathop)."
+  },
+  {
+   "label": "sin",
+   "kind": "function",
+   "detail": "builtin",
+   "doc": "Sine of an angle in degrees (operator_mathop)."
+  },
+  {
+   "label": "sqrt",
+   "kind": "function",
+   "detail": "builtin",
+   "doc": "Square root (operator_mathop)."
+  },
+  {
+   "label": "startTimer",
+   "kind": "function",
+   "detail": "builtin",
+   "doc": "Start a named console timer."
+  },
+  {
+   "label": "stopTimer",
+   "kind": "function",
+   "detail": "builtin",
+   "doc": "Stop a named console timer."
+  },
+  {
+   "label": "string",
+   "kind": "function",
+   "detail": "builtin",
+   "doc": "Join a value into a string."
+  },
+  {
+   "label": "tan",
+   "kind": "function",
+   "detail": "builtin",
+   "doc": "Tangent of an angle in degrees (operator_mathop)."
+  },
+  {
+   "label": "warn",
+   "kind": "function",
+   "detail": "builtin",
+   "doc": "Console warning."
+  }
+ ],
+ "features": [
+  "commentMetadata",
+  "doObfuscation",
+  "hideObjectNames",
+  "namespacedNames",
+  "useTempVariables"
+ ],
+ "namespaces": {
+  "Clone": {
+   "members": [
+    [
+     "create",
+     {
+      "kind": "command",
+      "detail": "create() / create(sprite)",
+      "doc": "Clone myself, or another sprite."
+     }
+    ],
+    [
+     "delete",
+     {
+      "kind": "command",
+      "detail": "delete()",
+      "doc": "Delete this clone."
+     }
+    ]
+   ]
+  },
+  "Comments": {
+   "members": [
+    [
+     "commentBoolean",
+     {
+      "kind": "reporter",
+      "detail": "commentBoolean(comment, input)",
+      "doc": "boolean"
+     }
+    ],
+    [
+     "commentC",
+     {
+      "kind": "reporter",
+      "detail": "commentC(comment)",
+      "doc": "conditional"
+     }
+    ],
+    [
+     "commentCommand",
+     {
+      "kind": "command",
+      "detail": "commentCommand(comment)",
+      "doc": "command"
+     }
+    ],
+    [
+     "commentReporter",
+     {
+      "kind": "reporter",
+      "detail": "commentReporter(comment, input)",
+      "doc": "reporter"
+     }
+    ]
+   ]
+  },
+  "Control": {
+   "members": [
+    [
+     "broadcast",
+     {
+      "kind": "command",
+      "detail": "broadcast(message)",
+      "doc": "Fire a broadcast."
+     }
+    ],
+    [
+     "broadcastAndWait",
+     {
+      "kind": "command",
+      "detail": "broadcastAndWait(message)",
+      "doc": "Fire a broadcast and wait."
+     }
+    ],
+    [
+     "clone",
+     {
+      "kind": "command",
+      "detail": "clone(clone_option)",
+      "doc": "control_create_clone_of"
+     }
+    ],
+    [
+     "createClone",
+     {
+      "kind": "command",
+      "detail": "createClone(clone_option)",
+      "doc": "control_create_clone_of"
+     }
+    ],
+    [
+     "deleteThisClone",
+     {
+      "kind": "command",
+      "detail": "deleteThisClone()",
+      "doc": "control_delete_this_clone"
+     }
+    ],
+    [
+     "stopAll",
+     {
+      "kind": "command",
+      "detail": "stopAll()",
+      "doc": "control_stop"
+     }
+    ],
+    [
+     "stopOtherScripts",
+     {
+      "kind": "command",
+      "detail": "stopOtherScripts()",
+      "doc": "control_stop"
+     }
+    ],
+    [
+     "stopThisScript",
+     {
+      "kind": "command",
+      "detail": "stopThisScript()",
+      "doc": "control_stop"
+     }
+    ],
+    [
+     "wait",
+     {
+      "kind": "command",
+      "detail": "wait(duration)",
+      "doc": "control_wait"
+     }
+    ],
+    [
+     "waitUntil",
+     {
+      "kind": "command",
+      "detail": "waitUntil(condition)",
+      "doc": "control_wait_until"
+     }
+    ]
+   ]
+  },
+  "Events": {
+   "members": [
+    [
+     "keyPressed",
+     {
+      "kind": "command",
+      "detail": "Events.keyPressed(k)",
+      "doc": "when [key] key pressed"
+     }
+    ]
+   ]
+  },
+  "JSON": {
+   "members": [
+    [
+     "arrayGet",
+     {
+      "kind": "reporter",
+      "detail": "arrayGet(json, index) → value",
+      "doc": "json_array_get"
+     }
+    ],
+    [
+     "arrayPush",
+     {
+      "kind": "reporter",
+      "detail": "arrayPush(json, item) → value",
+      "doc": "json_array_push"
+     }
+    ],
+    [
+     "concatArray",
+     {
+      "kind": "reporter",
+      "detail": "concatArray(json, json2) → value",
+      "doc": "json_array_concat"
+     }
+    ],
+    [
+     "get",
+     {
+      "kind": "reporter",
+      "detail": "get(json, key) → value",
+      "doc": "json_get"
+     }
+    ],
+    [
+     "isArray",
+     {
+      "kind": "reporter",
+      "detail": "isArray(json) → value",
+      "doc": "json_is"
+     }
+    ],
+    [
+     "isBoolean",
+     {
+      "kind": "reporter",
+      "detail": "isBoolean(json) → value",
+      "doc": "json_is"
+     }
+    ],
+    [
+     "isNumber",
+     {
+      "kind": "reporter",
+      "detail": "isNumber(json) → value",
+      "doc": "json_is"
+     }
+    ],
+    [
+     "isObject",
+     {
+      "kind": "reporter",
+      "detail": "isObject(json) → value",
+      "doc": "json_is"
+     }
+    ],
+    [
+     "isString",
+     {
+      "kind": "reporter",
+      "detail": "isString(json) → value",
+      "doc": "json_is"
+     }
+    ],
+    [
+     "isValid",
+     {
+      "kind": "reporter",
+      "detail": "isValid(json) → value",
+      "doc": "json_is_valid"
+     }
+    ],
+    [
+     "json_array_analysis",
+     {
+      "kind": "reporter",
+      "detail": "json_array_analysis(list, analysis)",
+      "doc": "reporter"
+     }
+    ],
+    [
+     "json_array_create",
+     {
+      "kind": "reporter",
+      "detail": "json_array_create(text, d)",
+      "doc": "reporter"
+     }
+    ],
+    [
+     "json_array_delete",
+     {
+      "kind": "reporter",
+      "detail": "json_array_delete(item, json)",
+      "doc": "reporter"
+     }
+    ],
+    [
+     "json_array_filter",
+     {
+      "kind": "reporter",
+      "detail": "json_array_filter(key, json)",
+      "doc": "reporter"
+     }
+    ],
+    [
+     "json_array_flat",
+     {
+      "kind": "reporter",
+      "detail": "json_array_flat(json, depth)",
+      "doc": "reporter"
+     }
+    ],
+    [
+     "json_array_from",
+     {
+      "kind": "reporter",
+      "detail": "json_array_from(json)",
+      "doc": "reporter"
+     }
+    ],
+    [
+     "json_array_fromto",
+     {
+      "kind": "reporter",
+      "detail": "json_array_fromto(json, item, item2)",
+      "doc": "reporter"
+     }
+    ],
+    [
+     "json_array_insert",
+     {
+      "kind": "reporter",
+      "detail": "json_array_insert(item, pos, json)",
+      "doc": "reporter"
+     }
+    ],
+    [
+     "json_array_itemH",
+     {
+      "kind": "reporter",
+      "detail": "json_array_itemH(item, json)",
+      "doc": "reporter"
+     }
+    ],
+    [
+     "json_array_join",
+     {
+      "kind": "reporter",
+      "detail": "json_array_join(json, d)",
+      "doc": "reporter"
+     }
+    ],
+    [
+     "json_array_remove_all",
+     {
+      "kind": "reporter",
+      "detail": "json_array_remove_all(item, json)",
+      "doc": "reporter"
+     }
+    ],
+    [
+     "json_array_reverse",
+     {
+      "kind": "reporter",
+      "detail": "json_array_reverse(json)",
+      "doc": "reporter"
+     }
+    ],
+    [
+     "json_array_set",
+     {
+      "kind": "reporter",
+      "detail": "json_array_set(item, pos, json)",
+      "doc": "reporter"
+     }
+    ],
+    [
+     "json_array_setlen",
+     {
+      "kind": "reporter",
+      "detail": "json_array_setlen(json, len)",
+      "doc": "reporter"
+     }
+    ],
+    [
+     "json_array_sort",
+     {
+      "kind": "reporter",
+      "detail": "json_array_sort(list, order)",
+      "doc": "reporter"
+     }
+    ],
+    [
+     "json_delete",
+     {
+      "kind": "reporter",
+      "detail": "json_delete(item, json)",
+      "doc": "reporter"
+     }
+    ],
+    [
+     "json_equal",
+     {
+      "kind": "reporter",
+      "detail": "json_equal(json1, json2, equal)",
+      "doc": "boolean"
+     }
+    ],
+    [
+     "json_has_key",
+     {
+      "kind": "reporter",
+      "detail": "json_has_key(key, json)",
+      "doc": "boolean"
+     }
+    ],
+    [
+     "json_has_value",
+     {
+      "kind": "reporter",
+      "detail": "json_has_value(value, json)",
+      "doc": "boolean"
+     }
+    ],
+    [
+     "json_jlength",
+     {
+      "kind": "reporter",
+      "detail": "json_jlength(json)",
+      "doc": "reporter"
+     }
+    ],
+    [
+     "json_new",
+     {
+      "kind": "reporter",
+      "detail": "json_new(json)",
+      "doc": "reporter"
+     }
+    ],
+    [
+     "json_vm_getlist",
+     {
+      "kind": "reporter",
+      "detail": "json_vm_getlist(list)",
+      "doc": "reporter"
+     }
+    ],
+    [
+     "json_vm_setlist",
+     {
+      "kind": "command",
+      "detail": "json_vm_setlist(list, json)",
+      "doc": "command"
+     }
+    ],
+    [
+     "length",
+     {
+      "kind": "reporter",
+      "detail": "length(json) → value",
+      "doc": "json_length"
+     }
+    ],
+    [
+     "parse",
+     {
+      "kind": "reporter",
+      "detail": "parse(json) → value",
+      "doc": "json_get_all"
+     }
+    ],
+    [
+     "set",
+     {
+      "kind": "reporter",
+      "detail": "set(json, key, value) → value",
+      "doc": "json_set"
+     }
+    ]
+   ]
+  },
+  "Lists": {
+   "members": [
+    [
+     "add",
+     {
+      "kind": "command",
+      "detail": "add(name, item)",
+      "doc": "Append to a list by name."
+     }
+    ],
+    [
+     "clear",
+     {
+      "kind": "command",
+      "detail": "clear(name)",
+      "doc": "Delete every item."
+     }
+    ],
+    [
+     "contains",
+     {
+      "kind": "reporter",
+      "detail": "contains(name, item)",
+      "doc": "Whether the list holds an item."
+     }
+    ],
+    [
+     "delete",
+     {
+      "kind": "command",
+      "detail": "delete(name, i)",
+      "doc": "Delete an item."
+     }
+    ],
+    [
+     "get",
+     {
+      "kind": "reporter",
+      "detail": "get(name, i)",
+      "doc": "Item of a list by name."
+     }
+    ],
+    [
+     "hideList",
+     {
+      "kind": "command",
+      "detail": "hideList(name)",
+      "doc": "Hide the list monitor."
+     }
+    ],
+    [
+     "indexOf",
+     {
+      "kind": "reporter",
+      "detail": "indexOf(name, item)",
+      "doc": "Position of an item."
+     }
+    ],
+    [
+     "insert",
+     {
+      "kind": "command",
+      "detail": "insert(name, i, item)",
+      "doc": "Insert an item."
+     }
+    ],
+    [
+     "length",
+     {
+      "kind": "reporter",
+      "detail": "length(name)",
+      "doc": "Length of a list by name."
+     }
+    ],
+    [
+     "set",
+     {
+      "kind": "command",
+      "detail": "set(name, i, item)",
+      "doc": "Replace an item."
+     }
+    ],
+    [
+     "showList",
+     {
+      "kind": "command",
+      "detail": "showList(name)",
+      "doc": "Show the list monitor."
+     }
+    ]
+   ]
+  },
+  "Looks": {
+   "members": [
+    [
+     "backdropName",
+     {
+      "kind": "reporter",
+      "detail": "backdropName() → value",
+      "doc": "looks_backdropnumbername"
+     }
+    ],
+    [
+     "backdropNumber",
+     {
+      "kind": "reporter",
+      "detail": "backdropNumber() → value",
+      "doc": "looks_backdropnumbername"
+     }
+    ],
+    [
+     "changeSize",
+     {
+      "kind": "command",
+      "detail": "changeSize(change)",
+      "doc": "looks_changesizeby"
+     }
+    ],
+    [
+     "clearGraphicEffects",
+     {
+      "kind": "command",
+      "detail": "clearGraphicEffects()",
+      "doc": "looks_cleargraphiceffects"
+     }
+    ],
+    [
+     "costumeName",
+     {
+      "kind": "reporter",
+      "detail": "costumeName() → value",
+      "doc": "looks_costumenumbername"
+     }
+    ],
+    [
+     "costumeNumber",
+     {
+      "kind": "reporter",
+      "detail": "costumeNumber() → value",
+      "doc": "looks_costumenumbername"
+     }
+    ],
+    [
+     "goToBack",
+     {
+      "kind": "command",
+      "detail": "goToBack()",
+      "doc": "looks_gotofrontback"
+     }
+    ],
+    [
+     "goToFront",
+     {
+      "kind": "command",
+      "detail": "goToFront()",
+      "doc": "looks_gotofrontback"
+     }
+    ],
+    [
+     "hide",
+     {
+      "kind": "command",
+      "detail": "hide()",
+      "doc": "looks_hide"
+     }
+    ],
+    [
+     "nextCostume",
+     {
+      "kind": "command",
+      "detail": "nextCostume()",
+      "doc": "looks_nextcostume"
+     }
+    ],
+    [
+     "say",
+     {
+      "kind": "command",
+      "detail": "say(message)",
+      "doc": "looks_say"
+     }
+    ],
+    [
+     "sayForSecs",
+     {
+      "kind": "command",
+      "detail": "sayForSecs(message, secs)",
+      "doc": "looks_sayforsecs"
+     }
+    ],
+    [
+     "setEffect",
+     {
+      "kind": "command",
+      "detail": "setEffect(effect, value)",
+      "doc": "looks_seteffectto"
+     }
+    ],
+    [
+     "setSize",
+     {
+      "kind": "command",
+      "detail": "setSize(size)",
+      "doc": "looks_setsizeto"
+     }
+    ],
+    [
+     "show",
+     {
+      "kind": "command",
+      "detail": "show()",
+      "doc": "looks_show"
+     }
+    ],
+    [
+     "size",
+     {
+      "kind": "property",
+      "detail": "size (readable/writable)",
+      "doc": "looks_size / looks_setsizeto"
+     }
+    ],
+    [
+     "switchBackdrop",
+     {
+      "kind": "command",
+      "detail": "switchBackdrop(backdrop)",
+      "doc": "looks_switchbackdropto"
+     }
+    ],
+    [
+     "switchBackdropAndWait",
+     {
+      "kind": "command",
+      "detail": "switchBackdropAndWait(backdrop)",
+      "doc": "looks_switchbackdroptoandwait"
+     }
+    ],
+    [
+     "switchCostume",
+     {
+      "kind": "command",
+      "detail": "switchCostume(costume)",
+      "doc": "looks_switchcostumeto"
+     }
+    ],
+    [
+     "think",
+     {
+      "kind": "command",
+      "detail": "think(message)",
+      "doc": "looks_think"
+     }
+    ]
+   ]
+  },
+  "Mem": {
+   "members": [
+    [
+     "alloc",
+     {
+      "kind": "reporter",
+      "detail": "alloc(bytes)",
+      "doc": "reporter"
+     }
+    ],
+    [
+     "copyTo",
+     {
+      "kind": "command",
+      "detail": "copyTo(addr, len, list)",
+      "doc": "command"
+     }
+    ],
+    [
+     "fill",
+     {
+      "kind": "command",
+      "detail": "fill(addr, len, value)",
+      "doc": "command"
+     }
+    ],
+    [
+     "read32",
+     {
+      "kind": "reporter",
+      "detail": "read32(addr)",
+      "doc": "reporter"
+     }
+    ],
+    [
+     "read8",
+     {
+      "kind": "reporter",
+      "detail": "read8(addr)",
+      "doc": "reporter"
+     }
+    ],
+    [
+     "size",
+     {
+      "kind": "reporter",
+      "detail": "size()",
+      "doc": "reporter"
+     }
+    ],
+    [
+     "stats",
+     {
+      "kind": "reporter",
+      "detail": "stats()",
+      "doc": "reporter"
+     }
+    ],
+    [
+     "write32",
+     {
+      "kind": "command",
+      "detail": "write32(addr, value)",
+      "doc": "command"
+     }
+    ],
+    [
+     "write8",
+     {
+      "kind": "command",
+      "detail": "write8(addr, value)",
+      "doc": "command"
+     }
+    ]
+   ]
+  },
+  "MoreEvents": {
+   "members": [
+    [
+     "afterSave",
+     {
+      "kind": "command",
+      "detail": "afterSave()",
+      "doc": "command"
+     }
+    ],
+    [
+     "beforeSave",
+     {
+      "kind": "reporter",
+      "detail": "beforeSave()",
+      "doc": "event"
+     }
+    ],
+    [
+     "broadcastData",
+     {
+      "kind": "command",
+      "detail": "broadcastData(data)",
+      "doc": "command"
+     }
+    ],
+    [
+     "broadcastDataAndWait",
+     {
+      "kind": "command",
+      "detail": "broadcastDataAndWait(data)",
+      "doc": "command"
+     }
+    ],
+    [
+     "broadcastDataToTarget",
+     {
+      "kind": "command",
+      "detail": "broadcastDataToTarget(target, data)",
+      "doc": "command"
+     }
+    ],
+    [
+     "broadcastDataToTargetAndWait",
+     {
+      "kind": "command",
+      "detail": "broadcastDataToTargetAndWait(target, data)",
+      "doc": "command"
+     }
+    ],
+    [
+     "broadcastToTarget",
+     {
+      "kind": "command",
+      "detail": "broadcastToTarget(target)",
+      "doc": "command"
+     }
+    ],
+    [
+     "broadcastToTargetAndWait",
+     {
+      "kind": "command",
+      "detail": "broadcastToTargetAndWait(target)",
+      "doc": "command"
+     }
+    ],
+    [
+     "forever",
+     {
+      "kind": "reporter",
+      "detail": "forever()",
+      "doc": "event"
+     }
+    ],
+    [
+     "receivedData",
+     {
+      "kind": "reporter",
+      "detail": "receivedData()",
+      "doc": "reporter"
+     }
+    ],
+    [
+     "whenStopClicked",
+     {
+      "kind": "reporter",
+      "detail": "whenStopClicked(stop)",
+      "doc": "event"
+     }
+    ]
+   ]
+  },
+  "Motion": {
+   "members": [
+    [
+     "direction",
+     {
+      "kind": "property",
+      "detail": "direction (readable/writable)",
+      "doc": "motion_direction / motion_pointindirection"
+     }
+    ],
+    [
+     "glideTo",
+     {
+      "kind": "command",
+      "detail": "glideTo(secs, x, y)",
+      "doc": "motion_glidesecstoxy"
+     }
+    ],
+    [
+     "goto",
+     {
+      "kind": "command",
+      "detail": "goto(to)",
+      "doc": "motion_goto"
+     }
+    ],
+    [
+     "move",
+     {
+      "kind": "command",
+      "detail": "move(steps)",
+      "doc": "motion_movesteps"
+     }
+    ],
+    [
+     "setXY",
+     {
+      "kind": "command",
+      "detail": "setXY(x, y)",
+      "doc": "motion_gotoxy"
+     }
+    ],
+    [
+     "turnLeft",
+     {
+      "kind": "command",
+      "detail": "turnLeft(degrees)",
+      "doc": "motion_turnleft"
+     }
+    ],
+    [
+     "turnRight",
+     {
+      "kind": "command",
+      "detail": "turnRight(degrees)",
+      "doc": "motion_turnright"
+     }
+    ],
+    [
+     "x",
+     {
+      "kind": "property",
+      "detail": "x (readable/writable)",
+      "doc": "motion_xposition / motion_setx"
+     }
+    ],
+    [
+     "xPosition",
+     {
+      "kind": "reporter",
+      "detail": "xPosition() → value",
+      "doc": "motion_xposition"
+     }
+    ],
+    [
+     "y",
+     {
+      "kind": "property",
+      "detail": "y (readable/writable)",
+      "doc": "motion_yposition / motion_sety"
+     }
+    ],
+    [
+     "yPosition",
+     {
+      "kind": "reporter",
+      "detail": "yPosition() → value",
+      "doc": "motion_yposition"
+     }
+    ]
+   ]
+  },
+  "Music": {
+   "members": [
+    [
+     "changeTempo",
+     {
+      "kind": "command",
+      "detail": "changeTempo(tempo)",
+      "doc": "music_changeTempo"
+     }
+    ],
+    [
+     "playDrum",
+     {
+      "kind": "command",
+      "detail": "playDrum(drum, beats)",
+      "doc": "music_playDrumForBeats"
+     }
+    ],
+    [
+     "playNote",
+     {
+      "kind": "command",
+      "detail": "playNote(note, beats)",
+      "doc": "music_playNoteForBeats"
+     }
+    ],
+    [
+     "restForBeats",
+     {
+      "kind": "command",
+      "detail": "restForBeats(beats)",
+      "doc": "music_restForBeats"
+     }
+    ],
+    [
+     "setInstr",
+     {
+      "kind": "command",
+      "detail": "setInstr(instrument)",
+      "doc": "music_setInstrument"
+     }
+    ],
+    [
+     "setInstrument",
+     {
+      "kind": "command",
+      "detail": "setInstrument(instrument)",
+      "doc": "music_setInstrument"
+     }
+    ],
+    [
+     "setTempo",
+     {
+      "kind": "command",
+      "detail": "setTempo(tempo)",
+      "doc": "music_setTempo"
+     }
+    ],
+    [
+     "stopAll",
+     {
+      "kind": "command",
+      "detail": "stopAll()",
+      "doc": "sound_stopallsounds"
+     }
+    ],
+    [
+     "stopAllSounds",
+     {
+      "kind": "command",
+      "detail": "stopAllSounds()",
+      "doc": "sound_stopallsounds"
+     }
+    ],
+    [
+     "tempo",
+     {
+      "kind": "reporter",
+      "detail": "tempo() → value",
+      "doc": "music_getTempo"
+     }
+    ]
+   ]
+  },
+  "Operators": {
+   "members": [
+    [
+     "contains",
+     {
+      "kind": "reporter",
+      "detail": "contains(string1, string2) → value",
+      "doc": "operator_contains"
+     }
+    ],
+    [
+     "length",
+     {
+      "kind": "reporter",
+      "detail": "length(string) → value",
+      "doc": "operator_length"
+     }
+    ],
+    [
+     "letterOf",
+     {
+      "kind": "reporter",
+      "detail": "letterOf(letter, string) → value",
+      "doc": "operator_letter_of"
+     }
+    ],
+    [
+     "math",
+     {
+      "kind": "reporter",
+      "detail": "math(operator, num) → value",
+      "doc": "operator_mathop"
+     }
+    ],
+    [
+     "random",
+     {
+      "kind": "reporter",
+      "detail": "random(from, to) → value",
+      "doc": "operator_random"
+     }
+    ],
+    [
+     "round",
+     {
+      "kind": "reporter",
+      "detail": "round(num) → value",
+      "doc": "operator_round"
+     }
+    ]
+   ]
+  },
+  "Pen": {
+   "members": [
+    [
+     "changePenColorParam",
+     {
+      "kind": "command",
+      "detail": "changePenColorParam(color_param, value)",
+      "doc": "pen_changePenColorParamBy"
+     }
+    ],
+    [
+     "changePenSize",
+     {
+      "kind": "command",
+      "detail": "changePenSize(size)",
+      "doc": "pen_changePenSizeBy"
+     }
+    ],
+    [
+     "clear",
+     {
+      "kind": "command",
+      "detail": "clear()",
+      "doc": "pen_clear"
+     }
+    ],
+    [
+     "eraseAll",
+     {
+      "kind": "command",
+      "detail": "eraseAll()",
+      "doc": "pen_clear"
+     }
+    ],
+    [
+     "penDown",
+     {
+      "kind": "command",
+      "detail": "penDown()",
+      "doc": "pen_penDown"
+     }
+    ],
+    [
+     "penUp",
+     {
+      "kind": "command",
+      "detail": "penUp()",
+      "doc": "pen_penUp"
+     }
+    ],
+    [
+     "setPenColor",
+     {
+      "kind": "command",
+      "detail": "setPenColor(color)",
+      "doc": "pen_setPenColorToColor"
+     }
+    ],
+    [
+     "setPenColorParamTo",
+     {
+      "kind": "command",
+      "detail": "setPenColorParamTo(color_param, value)",
+      "doc": "pen_setPenColorParamTo"
+     }
+    ],
+    [
+     "setPenColorToColor",
+     {
+      "kind": "command",
+      "detail": "setPenColorToColor(color)",
+      "doc": "pen_setPenColorToColor"
+     }
+    ],
+    [
+     "setPenSize",
+     {
+      "kind": "command",
+      "detail": "setPenSize(size)",
+      "doc": "pen_setPenSizeTo"
+     }
+    ],
+    [
+     "stamp",
+     {
+      "kind": "command",
+      "detail": "stamp()",
+      "doc": "pen_stamp"
+     }
+    ]
+   ]
+  },
+  "Pointerlock": {
+   "members": [
+    [
+     "isLocked",
+     {
+      "kind": "reporter",
+      "detail": "isLocked → value",
+      "doc": "isLocked"
+     }
+    ],
+    [
+     "isPointerLocked",
+     {
+      "kind": "reporter",
+      "detail": "isPointerLocked → value",
+      "doc": "isLocked"
+     }
+    ],
+    [
+     "setLocked",
+     {
+      "kind": "command",
+      "detail": "setLocked(enabled)",
+      "doc": "setLocked"
+     }
+    ],
+    [
+     "setPointerLock",
+     {
+      "kind": "command",
+      "detail": "setPointerLock(enabled)",
+      "doc": "setLocked"
+     }
+    ]
+   ]
+  },
+  "Runtime": {
+   "members": [
+    [
+     "cloneLimit",
+     {
+      "kind": "reporter",
+      "detail": "cloneLimit(limit) → value",
+      "doc": "getCloneLimit"
+     }
+    ],
+    [
+     "compilerEnabled",
+     {
+      "kind": "reporter",
+      "detail": "compilerEnabled → value",
+      "doc": "getEnabled"
+     }
+    ],
+    [
+     "framerateLimit",
+     {
+      "kind": "reporter",
+      "detail": "framerateLimit(fps) → value",
+      "doc": "getFramerate"
+     }
+    ],
+    [
+     "greenFlag",
+     {
+      "kind": "command",
+      "detail": "greenFlag(flag)",
+      "doc": "command"
+     }
+    ],
+    [
+     "isTurboMode",
+     {
+      "kind": "reporter",
+      "detail": "isTurboMode → value",
+      "doc": "getEnabled"
+     }
+    ],
+    [
+     "setCloneLimit",
+     {
+      "kind": "command",
+      "detail": "setCloneLimit(limit)",
+      "doc": "command"
+     }
+    ],
+    [
+     "setDimensions",
+     {
+      "kind": "command",
+      "detail": "setDimensions(width, height)",
+      "doc": "command"
+     }
+    ],
+    [
+     "setFramerate",
+     {
+      "kind": "command",
+      "detail": "setFramerate(fps)",
+      "doc": "setFramerate"
+     }
+    ],
+    [
+     "setTurboMode",
+     {
+      "kind": "command",
+      "detail": "setTurboMode(enabled)",
+      "doc": "setEnabled"
+     }
+    ],
+    [
+     "setUsername",
+     {
+      "kind": "command",
+      "detail": "setUsername(username)",
+      "doc": "command"
+     }
+    ],
+    [
+     "stageHeight",
+     {
+      "kind": "reporter",
+      "detail": "stageHeight → value",
+      "doc": "getDimension"
+     }
+    ],
+    [
+     "stageWidth",
+     {
+      "kind": "reporter",
+      "detail": "stageWidth → value",
+      "doc": "getDimension"
+     }
+    ],
+    [
+     "turboMode",
+     {
+      "kind": "reporter",
+      "detail": "turboMode → value",
+      "doc": "getEnabled"
+     }
+    ],
+    [
+     "whenChange",
+     {
+      "kind": "reporter",
+      "detail": "whenChange(what)",
+      "doc": "event"
+     }
+    ]
+   ]
+  },
+  "Sensing": {
+   "members": [
+    [
+     "answer",
+     {
+      "kind": "reporter",
+      "detail": "answer() → value",
+      "doc": "sensing_answer"
+     }
+    ],
+    [
+     "ask",
+     {
+      "kind": "command",
+      "detail": "ask(question)",
+      "doc": "sensing_askandwait"
+     }
+    ],
+    [
+     "daysSince2000",
+     {
+      "kind": "reporter",
+      "detail": "daysSince2000() → value",
+      "doc": "sensing_dayssince2000"
+     }
+    ],
+    [
+     "distanceTo",
+     {
+      "kind": "reporter",
+      "detail": "distanceTo(distancetomenu) → value",
+      "doc": "sensing_distanceto"
+     }
+    ],
+    [
+     "isKeyPressed",
+     {
+      "kind": "reporter",
+      "detail": "isKeyPressed(key_option) → value",
+      "doc": "sensing_keypressed"
+     }
+    ],
+    [
+     "isOnline",
+     {
+      "kind": "reporter",
+      "detail": "isOnline() → value",
+      "doc": "sensing_online"
+     }
+    ],
+    [
+     "keyPressed",
+     {
+      "kind": "reporter",
+      "detail": "keyPressed(key_option) → value",
+      "doc": "sensing_keypressed"
+     }
+    ],
+    [
+     "loudness",
+     {
+      "kind": "reporter",
+      "detail": "loudness() → value",
+      "doc": "sensing_loud"
+     }
+    ],
+    [
+     "mouseDown",
+     {
+      "kind": "reporter",
+      "detail": "mouseDown() → value",
+      "doc": "sensing_mousedown"
+     }
+    ],
+    [
+     "mouseX",
+     {
+      "kind": "reporter",
+      "detail": "mouseX() → value",
+      "doc": "sensing_mousex"
+     }
+    ],
+    [
+     "mouseY",
+     {
+      "kind": "reporter",
+      "detail": "mouseY() → value",
+      "doc": "sensing_mousey"
+     }
+    ],
+    [
+     "of",
+     {
+      "kind": "reporter",
+      "detail": "of(property, object) → value",
+      "doc": "sensing_of"
+     }
+    ],
+    [
+     "resetTimer",
+     {
+      "kind": "command",
+      "detail": "resetTimer()",
+      "doc": "sensing_resettimer"
+     }
+    ],
+    [
+     "timer",
+     {
+      "kind": "reporter",
+      "detail": "timer() → value",
+      "doc": "sensing_timer"
+     }
+    ],
+    [
+     "touching",
+     {
+      "kind": "reporter",
+      "detail": "touching(touchingobjectmenu) → value",
+      "doc": "sensing_touchingobject"
+     }
+    ],
+    [
+     "touchingColor",
+     {
+      "kind": "reporter",
+      "detail": "touchingColor(color) → value",
+      "doc": "sensing_touchingcolor"
+     }
+    ],
+    [
+     "username",
+     {
+      "kind": "reporter",
+      "detail": "username() → value",
+      "doc": "sensing_username"
+     }
+    ]
+   ]
+  },
+  "Sound": {
+   "members": [
+    [
+     "changeVolume",
+     {
+      "kind": "command",
+      "detail": "changeVolume(volume)",
+      "doc": "sound_changevolumeby"
+     }
+    ],
+    [
+     "playSound",
+     {
+      "kind": "command",
+      "detail": "playSound(sound_menu)",
+      "doc": "sound_play"
+     }
+    ],
+    [
+     "playSoundUntilDone",
+     {
+      "kind": "command",
+      "detail": "playSoundUntilDone(sound_menu)",
+      "doc": "sound_playuntildone"
+     }
+    ],
+    [
+     "setEffect",
+     {
+      "kind": "command",
+      "detail": "setEffect(effect, value)",
+      "doc": "sound_seteffectto"
+     }
+    ],
+    [
+     "setVolume",
+     {
+      "kind": "command",
+      "detail": "setVolume(volume)",
+      "doc": "sound_setvolumeto"
+     }
+    ],
+    [
+     "stopAllSounds",
+     {
+      "kind": "command",
+      "detail": "stopAllSounds()",
+      "doc": "sound_stopallsounds"
+     }
+    ],
+    [
+     "volume",
+     {
+      "kind": "property",
+      "detail": "volume (readable/writable)",
+      "doc": "sound_volume / sound_setvolumeto"
+     }
+    ]
+   ]
+  },
+  "Stage": {
+   "members": [
+    [
+     "change",
+     {
+      "kind": "command",
+      "detail": "change(name, delta)",
+      "doc": "Change stage state by name."
+     }
+    ],
+    [
+     "get",
+     {
+      "kind": "reporter",
+      "detail": "get(name)",
+      "doc": "Read stage state by name."
+     }
+    ],
+    [
+     "set",
+     {
+      "kind": "command",
+      "detail": "set(name, value)",
+      "doc": "Set stage state by name."
+     }
+    ]
+   ]
+  },
+  "Temp": {
+   "members": [
+    [
+     "changeRuntimeVariable",
+     {
+      "kind": "command",
+      "detail": "changeRuntimeVariable(var, num)",
+      "doc": "command"
+     }
+    ],
+    [
+     "changeThreadVariable",
+     {
+      "kind": "command",
+      "detail": "changeThreadVariable(var, num)",
+      "doc": "command"
+     }
+    ],
+    [
+     "deleteAllRuntimeVariables",
+     {
+      "kind": "command",
+      "detail": "deleteAllRuntimeVariables()",
+      "doc": "command"
+     }
+    ],
+    [
+     "deleteRuntimeVariable",
+     {
+      "kind": "command",
+      "detail": "deleteRuntimeVariable(var)",
+      "doc": "command"
+     }
+    ],
+    [
+     "forEachThreadVariable",
+     {
+      "kind": "reporter",
+      "detail": "forEachThreadVariable(var, num)",
+      "doc": "loop"
+     }
+    ],
+    [
+     "getRuntimeVariable",
+     {
+      "kind": "reporter",
+      "detail": "getRuntimeVariable(var)",
+      "doc": "reporter"
+     }
+    ],
+    [
+     "getThreadVariable",
+     {
+      "kind": "reporter",
+      "detail": "getThreadVariable(var)",
+      "doc": "reporter"
+     }
+    ],
+    [
+     "listRuntimeVariables",
+     {
+      "kind": "reporter",
+      "detail": "listRuntimeVariables()",
+      "doc": "reporter"
+     }
+    ],
+    [
+     "listThreadVariables",
+     {
+      "kind": "reporter",
+      "detail": "listThreadVariables()",
+      "doc": "reporter"
+     }
+    ],
+    [
+     "runtimeVariableExists",
+     {
+      "kind": "reporter",
+      "detail": "runtimeVariableExists(var)",
+      "doc": "boolean"
+     }
+    ],
+    [
+     "setRuntimeVariable",
+     {
+      "kind": "command",
+      "detail": "setRuntimeVariable(var, string)",
+      "doc": "command"
+     }
+    ],
+    [
+     "setThreadVariable",
+     {
+      "kind": "command",
+      "detail": "setThreadVariable(var, string)",
+      "doc": "command"
+     }
+    ],
+    [
+     "threadVariableExists",
+     {
+      "kind": "reporter",
+      "detail": "threadVariableExists(var)",
+      "doc": "boolean"
+     }
+    ]
+   ]
+  },
+  "Timer": {
+   "members": [
+    [
+     "changeTimer",
+     {
+      "kind": "command",
+      "detail": "changeTimer(TIMER, NUM)",
+      "doc": "changeTimer"
+     }
+    ],
+    [
+     "getTimer",
+     {
+      "kind": "reporter",
+      "detail": "getTimer(TIMER) → value",
+      "doc": "valueOfTimer"
+     }
+    ],
+    [
+     "listExistingTimers",
+     {
+      "kind": "reporter",
+      "detail": "listExistingTimers()",
+      "doc": "reporter"
+     }
+    ],
+    [
+     "pauseTimer",
+     {
+      "kind": "command",
+      "detail": "pauseTimer(TIMER)",
+      "doc": "pauseTimer"
+     }
+    ],
+    [
+     "removeTimer",
+     {
+      "kind": "command",
+      "detail": "removeTimer(TIMER)",
+      "doc": "removeTimer"
+     }
+    ],
+    [
+     "removeTimers",
+     {
+      "kind": "command",
+      "detail": "removeTimers()",
+      "doc": "command"
+     }
+    ],
+    [
+     "resumeTimer",
+     {
+      "kind": "command",
+      "detail": "resumeTimer(TIMER)",
+      "doc": "resumeTimer"
+     }
+    ],
+    [
+     "setTimer",
+     {
+      "kind": "command",
+      "detail": "setTimer(TIMER, NUM)",
+      "doc": "setTimer"
+     }
+    ],
+    [
+     "startTimer",
+     {
+      "kind": "command",
+      "detail": "startTimer(TIMER)",
+      "doc": "startResetTimer"
+     }
+    ],
+    [
+     "timerExists",
+     {
+      "kind": "reporter",
+      "detail": "timerExists(TIMER) → value",
+      "doc": "timerExists"
+     }
+    ]
+   ]
+  },
+  "TurboWarp": {
+   "members": [
+    [
+     "getButtonIsDown",
+     {
+      "kind": "reporter",
+      "detail": "getButtonIsDown(MOUSE_BUTTON) → value",
+      "doc": "getButtonIsDown"
+     }
+    ],
+    [
+     "getLastKeyPressed",
+     {
+      "kind": "reporter",
+      "detail": "getLastKeyPressed → value",
+      "doc": "getLastKeyPressed"
+     }
+    ],
+    [
+     "isMouseButtonDown",
+     {
+      "kind": "reporter",
+      "detail": "isMouseButtonDown(MOUSE_BUTTON) → value",
+      "doc": "getButtonIsDown"
+     }
+    ],
+    [
+     "lastKeyPressed",
+     {
+      "kind": "reporter",
+      "detail": "lastKeyPressed → value",
+      "doc": "getLastKeyPressed"
+     }
+    ],
+    [
+     "middleButtonDown",
+     {
+      "kind": "reporter",
+      "detail": "middleButtonDown → value",
+      "doc": "getButtonIsDown"
+     }
+    ],
+    [
+     "primaryButtonDown",
+     {
+      "kind": "reporter",
+      "detail": "primaryButtonDown → value",
+      "doc": "getButtonIsDown"
+     }
+    ],
+    [
+     "secondaryButtonDown",
+     {
+      "kind": "reporter",
+      "detail": "secondaryButtonDown → value",
+      "doc": "getButtonIsDown"
+     }
+    ]
+   ]
+  },
+  "Util": {
+   "members": [
+    [
+     "clamp",
+     {
+      "kind": "reporter",
+      "detail": "clamp(n, min, max) → value",
+      "doc": "clamp"
+     }
+    ],
+    [
+     "exponent",
+     {
+      "kind": "reporter",
+      "detail": "exponent(a, b)",
+      "doc": "reporter"
+     }
+    ],
+    [
+     "falseBlock",
+     {
+      "kind": "reporter",
+      "detail": "falseBlock()",
+      "doc": "boolean"
+     }
+    ],
+    [
+     "fetchFrom",
+     {
+      "kind": "reporter",
+      "detail": "fetchFrom(url)",
+      "doc": "reporter"
+     }
+    ],
+    [
+     "isExactly",
+     {
+      "kind": "reporter",
+      "detail": "isExactly(a, b)",
+      "doc": "boolean"
+     }
+    ],
+    [
+     "isLessOrEqual",
+     {
+      "kind": "reporter",
+      "detail": "isLessOrEqual(a, b)",
+      "doc": "boolean"
+     }
+    ],
+    [
+     "isMoreOrEqual",
+     {
+      "kind": "reporter",
+      "detail": "isMoreOrEqual(a, b)",
+      "doc": "boolean"
+     }
+    ],
+    [
+     "letters",
+     {
+      "kind": "reporter",
+      "detail": "letters(start, end, string)",
+      "doc": "reporter"
+     }
+    ],
+    [
+     "newline",
+     {
+      "kind": "reporter",
+      "detail": "newline → value",
+      "doc": "newline"
+     }
+    ],
+    [
+     "now",
+     {
+      "kind": "reporter",
+      "detail": "now → value",
+      "doc": "currentMillisecond"
+     }
+    ],
+    [
+     "parseJSON",
+     {
+      "kind": "reporter",
+      "detail": "parseJSON(json) → value",
+      "doc": "parseJSON"
+     }
+    ],
+    [
+     "pi",
+     {
+      "kind": "reporter",
+      "detail": "pi → value",
+      "doc": "pi"
+     }
+    ],
+    [
+     "regexReplace",
+     {
+      "kind": "reporter",
+      "detail": "regexReplace(STRING, REGEX, NEWSTRING) → value",
+      "doc": "regexReplace"
+     }
+    ],
+    [
+     "ruleReplace",
+     {
+      "kind": "reporter",
+      "detail": "ruleReplace(STRING, REGEX, NEWSTRING) → value",
+      "doc": "regexReplace"
+     }
+    ],
+    [
+     "stringToBoolean",
+     {
+      "kind": "reporter",
+      "detail": "stringToBoolean(string) → value",
+      "doc": "stringToBoolean"
+     }
+    ],
+    [
+     "ternaryOperator",
+     {
+      "kind": "reporter",
+      "detail": "ternaryOperator(a, b, c)",
+      "doc": "reporter"
+     }
+    ],
+    [
+     "trueBlock",
+     {
+      "kind": "reporter",
+      "detail": "trueBlock()",
+      "doc": "boolean"
+     }
+    ]
+   ]
+  },
+  "Variables": {
+   "members": [
+    [
+     "hideVariable",
+     {
+      "kind": "command",
+      "detail": "hideVariable(name)",
+      "doc": "Hide the variable monitor."
+     }
+    ],
+    [
+     "showVariable",
+     {
+      "kind": "command",
+      "detail": "showVariable(name)",
+      "doc": "Show the variable monitor."
+     }
+    ]
+   ]
+  },
+  "WebSocket": {
+   "members": [
+    [
+     "closeCode",
+     {
+      "kind": "reporter",
+      "detail": "closeCode → value",
+      "doc": "closeCode"
+     }
+    ],
+    [
+     "closeConnection",
+     {
+      "kind": "command",
+      "detail": "closeConnection()",
+      "doc": "closeWithoutReason"
+     }
+    ],
+    [
+     "closeMessage",
+     {
+      "kind": "reporter",
+      "detail": "closeMessage → value",
+      "doc": "closeMessage"
+     }
+    ],
+    [
+     "closeWithCode",
+     {
+      "kind": "command",
+      "detail": "closeWithCode(code)",
+      "doc": "command"
+     }
+    ],
+    [
+     "closeWithReason",
+     {
+      "kind": "command",
+      "detail": "closeWithReason(code, reason)",
+      "doc": "command"
+     }
+    ],
+    [
+     "closingCode",
+     {
+      "kind": "reporter",
+      "detail": "closingCode → value",
+      "doc": "closeCode"
+     }
+    ],
+    [
+     "closingMessage",
+     {
+      "kind": "reporter",
+      "detail": "closingMessage → value",
+      "doc": "closeMessage"
+     }
+    ],
+    [
+     "connectTo",
+     {
+      "kind": "command",
+      "detail": "connectTo(URL)",
+      "doc": "newInstance"
+     }
+    ],
+    [
+     "connectionErrored",
+     {
+      "kind": "reporter",
+      "detail": "connectionErrored → value",
+      "doc": "hasErrored"
+     }
+    ],
+    [
+     "hasErrored",
+     {
+      "kind": "reporter",
+      "detail": "hasErrored → value",
+      "doc": "hasErrored"
+     }
+    ],
+    [
+     "isClosed",
+     {
+      "kind": "reporter",
+      "detail": "isClosed → value",
+      "doc": "isClosed"
+     }
+    ],
+    [
+     "isConnected",
+     {
+      "kind": "reporter",
+      "detail": "isConnected → value",
+      "doc": "isConnected"
+     }
+    ],
+    [
+     "isConnectionClosed",
+     {
+      "kind": "reporter",
+      "detail": "isConnectionClosed → value",
+      "doc": "isClosed"
+     }
+    ],
+    [
+     "messageData",
+     {
+      "kind": "reporter",
+      "detail": "messageData → value",
+      "doc": "messageData"
+     }
+    ],
+    [
+     "newInstance",
+     {
+      "kind": "command",
+      "detail": "newInstance(URL)",
+      "doc": "newInstance"
+     }
+    ],
+    [
+     "onClose",
+     {
+      "kind": "reporter",
+      "detail": "onClose()",
+      "doc": "event"
+     }
+    ],
+    [
+     "onError",
+     {
+      "kind": "reporter",
+      "detail": "onError()",
+      "doc": "event"
+     }
+    ],
+    [
+     "onMessage",
+     {
+      "kind": "reporter",
+      "detail": "onMessage()",
+      "doc": "event"
+     }
+    ],
+    [
+     "onOpen",
+     {
+      "kind": "reporter",
+      "detail": "onOpen()",
+      "doc": "event"
+     }
+    ],
+    [
+     "receivedMessageData",
+     {
+      "kind": "reporter",
+      "detail": "receivedMessageData → value",
+      "doc": "messageData"
+     }
+    ],
+    [
+     "sendMessage",
+     {
+      "kind": "command",
+      "detail": "sendMessage(PAYLOAD)",
+      "doc": "sendMessage"
+     }
+    ]
+   ]
+  },
+  "console": {
+   "members": [
+    [
+     "clear",
+     {
+      "kind": "command",
+      "detail": "clear()",
+      "doc": "Emptying"
+     }
+    ],
+    [
+     "debug",
+     {
+      "kind": "command",
+      "detail": "debug(string)",
+      "doc": "debug"
+     }
+    ],
+    [
+     "endLogTimer",
+     {
+      "kind": "command",
+      "detail": "endLogTimer(string)",
+      "doc": "Timeroff"
+     }
+    ],
+    [
+     "error",
+     {
+      "kind": "command",
+      "detail": "error(string)",
+      "doc": "Error"
+     }
+    ],
+    [
+     "group",
+     {
+      "kind": "command",
+      "detail": "group(string)",
+      "doc": "command"
+     }
+    ],
+    [
+     "groupCollapsed",
+     {
+      "kind": "command",
+      "detail": "groupCollapsed(string)",
+      "doc": "command"
+     }
+    ],
+    [
+     "groupEnd",
+     {
+      "kind": "command",
+      "detail": "groupEnd()",
+      "doc": "command"
+     }
+    ],
+    [
+     "info",
+     {
+      "kind": "command",
+      "detail": "info(string)",
+      "doc": "Information"
+     }
+    ],
+    [
+     "log",
+     {
+      "kind": "command",
+      "detail": "log(string)",
+      "doc": "Journal"
+     }
+    ],
+    [
+     "logTimer",
+     {
+      "kind": "command",
+      "detail": "logTimer(string)",
+      "doc": "Timerlog"
+     }
+    ],
+    [
+     "startLogTimer",
+     {
+      "kind": "command",
+      "detail": "startLogTimer(string)",
+      "doc": "Timeron"
+     }
+    ],
+    [
+     "warn",
+     {
+      "kind": "command",
+      "detail": "warn(string)",
+      "doc": "Warning"
+     }
+    ]
+   ]
+  },
+  "microbit": {
+   "members": [
+    [
+     "angle",
+     {
+      "kind": "reporter",
+      "detail": "angle(DIRECTION) → value",
+      "doc": "getTiltAngle"
+     }
+    ],
+    [
+     "buttonPressed",
+     {
+      "kind": "command",
+      "detail": "microbit.buttonPressed()",
+      "doc": "when [A] button pressed"
+     }
+    ],
+    [
+     "clearDisplay",
+     {
+      "kind": "command",
+      "detail": "clearDisplay()",
+      "doc": "displayClear"
+     }
+    ],
+    [
+     "display",
+     {
+      "kind": "command",
+      "detail": "display(MATRIX)",
+      "doc": "displaySymbol"
+     }
+    ],
+    [
+     "displayText",
+     {
+      "kind": "command",
+      "detail": "displayText(text)",
+      "doc": "command"
+     }
+    ],
+    [
+     "gesture",
+     {
+      "kind": "command",
+      "detail": "microbit.gesture()",
+      "doc": "when [moved] shaken or jumped"
+     }
+    ],
+    [
+     "pinConnected",
+     {
+      "kind": "command",
+      "detail": "microbit.pinConnected()",
+      "doc": "when pin [0] connected"
+     }
+    ],
+    [
+     "tiltAngle",
+     {
+      "kind": "reporter",
+      "detail": "tiltAngle(DIRECTION) → value",
+      "doc": "getTiltAngle"
+     }
+    ],
+    [
+     "tilted",
+     {
+      "kind": "command",
+      "detail": "microbit.tilted()",
+      "doc": "when tilted [front] back left or right"
+     }
+    ]
+   ]
+  }
+ },
+ "builtinNamespaces": [
+  "Clone",
+  "Control",
+  "Events",
+  "JSON",
+  "Lists",
+  "Looks",
+  "Motion",
+  "Music",
+  "Operators",
+  "Pen",
+  "Runtime",
+  "Sensing",
+  "Sound",
+  "Stage",
+  "Timer",
+  "Util",
+  "Variables",
+  "console"
+ ],
+ "listMethods": [
+  {
+   "label": "add",
+   "kind": "command",
+   "detail": "add(item)",
+   "doc": "Append an item."
+  },
+  {
+   "label": "append",
+   "kind": "command",
+   "detail": "append(item)",
+   "doc": "Append an item."
+  },
+  {
+   "label": "clear",
+   "kind": "command",
+   "detail": "clear()",
+   "doc": "Remove every item."
+  },
+  {
+   "label": "contains",
+   "kind": "reporter",
+   "detail": "contains(item) → value",
+   "doc": "True when the list holds the value (reporter)."
+  },
+  {
+   "label": "delete",
+   "kind": "command",
+   "detail": "delete(index)",
+   "doc": "Delete item n."
+  },
+  {
+   "label": "get",
+   "kind": "reporter",
+   "detail": "get(index) → value",
+   "doc": "Item n (reporter)."
+  },
+  {
+   "label": "indexOf",
+   "kind": "reporter",
+   "detail": "indexOf(item) → value",
+   "doc": "Position of a value (reporter)."
+  },
+  {
+   "label": "insert",
+   "kind": "command",
+   "detail": "insert(index, item)",
+   "doc": "Insert at position n."
+  },
+  {
+   "label": "length",
+   "kind": "reporter",
+   "detail": "length() → value",
+   "doc": "Number of items (reporter)."
+  },
+  {
+   "label": "push",
+   "kind": "command",
+   "detail": "push(item)",
+   "doc": "Append an item."
+  },
+  {
+   "label": "remove",
+   "kind": "command",
+   "detail": "remove(index)",
+   "doc": "Delete item n."
+  },
+  {
+   "label": "replace",
+   "kind": "command",
+   "detail": "replace(index, item)",
+   "doc": "Replace item n."
+  },
+  {
+   "label": "set",
+   "kind": "command",
+   "detail": "set(index, item)",
+   "doc": "Replace item n."
+  }
+ ],
+ "annotations": [
+  {
+   "label": "Sprite:",
+   "doc": "`// Sprite: name (x,y) size=… costume=…` — sprite metadata."
+  },
+  {
+   "label": "hook:",
+   "doc": "Turns a method into a hat: `// hook: when [space] key pressed`."
+  },
+  {
+   "label": "proccode",
+   "doc": "Overrides the custom-block label: `// proccode move camera %s %s`."
+  },
+  {
+   "label": "receiver at",
+   "doc": "Rebuilds a `when I receive` hat: `// receiver at x,y \"message\"`."
+  },
+  {
+   "label": "monitor",
+   "doc": "Variable/list monitor: `// monitor Stage.score default at 0,0 0x0 shown`."
+  },
+  {
+   "label": "watch",
+   "doc": "Alias of `// monitor`."
+  },
+  {
+   "label": "comment",
+   "doc": "Workspace comment attached to a script."
+  },
+  {
+   "label": "warp",
+   "doc": "Runs the block without screen refresh."
+  },
+  {
+   "label": "main thread",
+   "doc": "Runs the block on the main thread."
+  },
+  {
+   "label": "grouped",
+   "doc": "Marks a grouped block stack."
+  },
+  {
+   "label": "at",
+   "doc": "Source position hint used when rebuilding the workspace."
+  }
+ ],
+ "microbitConstants": [
+  {
+   "label": "back",
+   "value": "back"
+  },
+  {
+   "label": "buttonA",
+   "value": "A"
+  },
+  {
+   "label": "buttonB",
+   "value": "B"
+  },
+  {
+   "label": "front",
+   "value": "front"
+  },
+  {
+   "label": "jumped",
+   "value": "jumped"
+  },
+  {
+   "label": "left",
+   "value": "left"
+  },
+  {
+   "label": "moved",
+   "value": "moved"
+  },
+  {
+   "label": "pin0",
+   "value": "0"
+  },
+  {
+   "label": "pin1",
+   "value": "1"
+  },
+  {
+   "label": "pin2",
+   "value": "2"
+  },
+  {
+   "label": "right",
+   "value": "right"
+  },
+  {
+   "label": "shaken",
+   "value": "shaken"
+  }
+ ],
+ "monitorModes": [
+  {
+   "label": "list",
+   "kind": "constant",
+   "doc": "Shows the list monitor for the target."
+  },
+  {
+   "label": "large",
+   "kind": "constant",
+   "doc": "A large (read-only) variable readout."
+  },
+  {
+   "label": "slider",
+   "kind": "constant",
+   "doc": "A slider; add `range min..max`."
+  },
+  {
+   "label": "normal",
+   "kind": "constant",
+   "doc": "The default variable readout."
+  },
+  {
+   "label": "default",
+   "kind": "constant",
+   "doc": "Same as `normal`, but deleted when its target is deleted."
+  }
+ ],
+ "metadataWords": [
+  {
+   "label": "pos",
+   "kind": "keyword",
+   "doc": "Script position: `metadata Stage.tick pos 10,20;`."
+  },
+  {
+   "label": "at",
+   "kind": "keyword",
+   "doc": "Monitor position and size: `at 0,0 100x24`."
+  },
+  {
+   "label": "hidden",
+   "kind": "keyword",
+   "doc": "The monitor starts hidden."
+  },
+  {
+   "label": "shown",
+   "kind": "keyword",
+   "doc": "The monitor starts visible."
+  },
+  {
+   "label": "range",
+   "kind": "keyword",
+   "doc": "Slider bounds: `range 0..10`."
+  },
+  {
+   "label": "watchers",
+   "kind": "keyword",
+   "doc": "Whether more than one watcher may exist."
+  },
+  {
+   "label": "min",
+   "kind": "keyword",
+   "doc": "Lower bound for `range`."
+  },
+  {
+   "label": "max",
+   "kind": "keyword",
+   "doc": "Upper bound for `range`."
+  }
+ ],
+ "targetKeys": [
+  {
+   "label": "name",
+   "kind": "keyword",
+   "doc": "The name the project shows: `name=\"obj loader\"`."
+  },
+  {
+   "label": "x",
+   "kind": "keyword",
+   "doc": "Stage position, in project units."
+  },
+  {
+   "label": "y",
+   "kind": "keyword",
+   "doc": "Stage position, in project units."
+  },
+  {
+   "label": "size",
+   "kind": "keyword",
+   "doc": "Sprite size percentage."
+  },
+  {
+   "label": "direction",
+   "kind": "keyword",
+   "doc": "Rotation in degrees, 90 is to the right."
+  },
+  {
+   "label": "show",
+   "kind": "keyword",
+   "doc": "1 visible, 0 hidden."
+  },
+  {
+   "label": "costume",
+   "kind": "keyword",
+   "doc": "Index of the current costume."
+  },
+  {
+   "label": "volume",
+   "kind": "keyword",
+   "doc": "Sound volume percentage."
+  },
+  {
+   "label": "layer",
+   "kind": "keyword",
+   "doc": "Layer order; larger is nearer the viewer."
+  },
+  {
+   "label": "tempo",
+   "kind": "keyword",
+   "doc": "Stage tempo in bpm (stage only)."
+  },
+  {
+   "label": "video",
+   "kind": "keyword",
+   "doc": "\"on\" or \"off\" (stage only)."
+  },
+  {
+   "label": "videoTransparency",
+   "kind": "keyword",
+   "doc": "Video transparency percentage."
+  },
+  {
+   "label": "rotation",
+   "kind": "keyword",
+   "doc": "all, leftright or none."
+  },
+  {
+   "label": "draggable",
+   "kind": "keyword",
+   "doc": "1 if the sprite can be dragged."
+  },
+  {
+   "label": "namespace",
+   "kind": "keyword",
+   "doc": "Prefix for this class's public state and blocks."
+  }
+ ],
+ "assetWords": [
+  {
+   "label": "costume",
+   "kind": "keyword",
+   "doc": "The import is a costume."
+  },
+  {
+   "label": "sound",
+   "kind": "keyword",
+   "doc": "The import is a sound."
+  }
+ ],
+ "assetKeys": [
+  {
+   "label": "centerx",
+   "kind": "keyword",
+   "doc": "Costume rotation centre, in image pixels."
+  },
+  {
+   "label": "centery",
+   "kind": "keyword",
+   "doc": "Costume rotation centre, in image pixels."
+  },
+  {
+   "label": "res",
+   "kind": "keyword",
+   "doc": "Costume resolution multiplier."
+  },
+  {
+   "label": "rate",
+   "kind": "keyword",
+   "doc": "Sound sample rate in Hz."
+  },
+  {
+   "label": "samples",
+   "kind": "keyword",
+   "doc": "Number of sample frames."
+  }
+ ],
+ "keyNames": [
+  {
+   "label": "any",
+   "kind": "key",
+   "detail": "key name",
+   "doc": ""
+  },
+  {
+   "label": "backspace",
+   "kind": "key",
+   "detail": "key name",
+   "doc": ""
+  },
+  {
+   "label": "caps lock",
+   "kind": "key",
+   "detail": "key name",
+   "doc": ""
+  },
+  {
+   "label": "control",
+   "kind": "key",
+   "detail": "key name",
+   "doc": ""
+  },
+  {
+   "label": "delete",
+   "kind": "key",
+   "detail": "key name",
+   "doc": ""
+  },
+  {
+   "label": "down arrow",
+   "kind": "key",
+   "detail": "key name",
+   "doc": ""
+  },
+  {
+   "label": "end",
+   "kind": "key",
+   "detail": "key name",
+   "doc": ""
+  },
+  {
+   "label": "enter",
+   "kind": "key",
+   "detail": "key name",
+   "doc": ""
+  },
+  {
+   "label": "escape",
+   "kind": "key",
+   "detail": "key name",
+   "doc": ""
+  },
+  {
+   "label": "home",
+   "kind": "key",
+   "detail": "key name",
+   "doc": ""
+  },
+  {
+   "label": "insert",
+   "kind": "key",
+   "detail": "key name",
+   "doc": ""
+  },
+  {
+   "label": "left arrow",
+   "kind": "key",
+   "detail": "key name",
+   "doc": ""
+  },
+  {
+   "label": "page down",
+   "kind": "key",
+   "detail": "key name",
+   "doc": ""
+  },
+  {
+   "label": "page up",
+   "kind": "key",
+   "detail": "key name",
+   "doc": ""
+  },
+  {
+   "label": "right arrow",
+   "kind": "key",
+   "detail": "key name",
+   "doc": ""
+  },
+  {
+   "label": "scroll lock",
+   "kind": "key",
+   "detail": "key name",
+   "doc": ""
+  },
+  {
+   "label": "shift",
+   "kind": "key",
+   "detail": "key name",
+   "doc": ""
+  },
+  {
+   "label": "space",
+   "kind": "key",
+   "detail": "key name",
+   "doc": ""
+  },
+  {
+   "label": "up arrow",
+   "kind": "key",
+   "detail": "key name",
+   "doc": ""
+  }
+ ],
+ "hats": [
+  {
+   "label": "greenFlag",
+   "detail": "greenFlag()",
+   "doc": "when green flag clicked"
+  },
+  {
+   "label": "whenCloned",
+   "detail": "whenCloned()",
+   "doc": "when I start as a clone"
+  },
+  {
+   "label": "whenClicked",
+   "detail": "whenClicked()",
+   "doc": "when this sprite clicked"
+  },
+  {
+   "label": "whenStageClicked",
+   "detail": "whenStageClicked()",
+   "doc": "when stage clicked"
+  },
+  {
+   "label": "whenBackdropChanges",
+   "detail": "whenBackdropChanges()",
+   "doc": "when backdrop switches to …"
+  },
+  {
+   "label": "onSave",
+   "detail": "onSave()",
+   "doc": "before/after project save"
+  },
+  {
+   "label": "Events.keyPressed",
+   "detail": "Events.keyPressed(k)",
+   "doc": "when [key] key pressed"
+  },
+  {
+   "label": "microbit.buttonPressed",
+   "detail": "microbit.buttonPressed()",
+   "doc": "when [A] button pressed"
+  },
+  {
+   "label": "microbit.gesture",
+   "detail": "microbit.gesture()",
+   "doc": "when [moved] shaken or jumped"
+  },
+  {
+   "label": "microbit.tilted",
+   "detail": "microbit.tilted()",
+   "doc": "when tilted [front] back left or right"
+  },
+  {
+   "label": "microbit.pinConnected",
+   "detail": "microbit.pinConnected()",
+   "doc": "when pin [0] connected"
+  }
+ ]
+}

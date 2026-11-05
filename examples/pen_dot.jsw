@@ -1,0 +1,49 @@
+/*
+ * The pen, measured. Four single dots at known stage coordinates and one
+ * 8-pixel-wide glyph, so a screenshot can be converted into stage units:
+ * a dot at x = 0, 10, 20, 30 on y = 0, then the letter at the top-left.
+ */
+metadata note Stage at 50,50 350x170: "Configuration for https://turbowarp.org/\nYou can move, resize, and minimize this comment, but don't edit it by hand. This comment can be deleted to remove the stored settings.\n{\"width\":640,\"height\":480} // _twconfig_";
+
+public P.cellW = 8;
+public P.cellH = 15;
+public P.rows = [0, 0, 0, 24, 36, 36, 66, 66, 126, 66, 66, 66, 66, 0, 0];
+public P.dots = 0;
+
+class Pen {
+    public void penStart() { // hook: green flag
+        Looks.hide();
+        Pen.eraseAll();
+        Pen.setPenSize(1);
+        Pen.setPenColor(0);
+        // four dots ten stage units apart, on the centre line
+        dot(0, 0);
+        dot(10, 0);
+        dot(20, 0);
+        dot(30, 0);
+        // and the letter, top-left corner of the stage
+        _r = 0;
+        while (_r < P.cellH) {
+            _bits = P.rows.get(_r + 1);
+            _c = 0;
+            _v = _bits;
+            while (_c < P.cellW) {
+                _bit = Operators.math("floor", _v / 128);
+                _v = (_v % 128) * 2;
+                if (_bit == 1) {
+                    dot(-316 + _c, 236 - _r);
+                }
+                _c += 1;
+            }
+            _r += 1;
+        }
+    }
+
+    private void dot(px, py) { // warp
+        Motion.setXY(px, py);
+        Pen.penDown();
+        Motion.setXY(px + 0.01, py);
+        Pen.penUp();
+        P.dots += 1;
+    }
+}

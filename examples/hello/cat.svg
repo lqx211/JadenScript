@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="96" height="100" viewBox="0 0 96 100">
+  <!-- A cat drawn for this example: no external asset needed. -->
+  <path d="M78 84c10-4 14-14 10-22-2-4-7-5-9-2" fill="none" stroke="#f2a03d" stroke-width="7" stroke-linecap="round"/>
+  <ellipse cx="46" cy="76" rx="26" ry="20" fill="#f2a03d"/>
+  <ellipse cx="46" cy="80" rx="14" ry="13" fill="#ffd9a8"/>
+  <rect x="28" y="86" width="12" height="12" rx="5" fill="#ffd9a8"/>
+  <rect x="52" y="86" width="12" height="12" rx="5" fill="#ffd9a8"/>
+  <path d="M24 26 L22 6 L42 18 Z" fill="#f2a03d"/>
+  <path d="M68 26 L70 6 L50 18 Z" fill="#f2a03d"/>
+  <path d="M27 24 L26 12 L38 20 Z" fill="#e8899a"/>
+  <path d="M65 24 L66 12 L54 20 Z" fill="#e8899a"/>
+  <circle cx="46" cy="42" r="26" fill="#f2a03d"/>
+  <ellipse cx="46" cy="52" rx="15" ry="11" fill="#ffd9a8"/>
+  <ellipse cx="37" cy="38" rx="5.5" ry="6.5" fill="#ffffff"/>
+  <ellipse cx="55" cy="38" rx="5.5" ry="6.5" fill="#ffffff"/>
+  <ellipse cx="38" cy="39" rx="2.6" ry="3.4" fill="#2b2b2b"/>
+  <ellipse cx="56" cy="39" rx="2.6" ry="3.4" fill="#2b2b2b"/>
+  <path d="M46 47l-3.5-3h7z" fill="#e8899a"/>
+  <path d="M46 47v4" stroke="#2b2b2b" stroke-width="1.4" stroke-linecap="round"/>
+  <path d="M46 51c-2 3-6 3-7 0M46 51c2 3 6 3 7 0" fill="none" stroke="#2b2b2b" stroke-width="1.4" stroke-linecap="round"/>
+  <path d="M28 45H16M28 50l-12 3M64 45h12M64 50l12 3" stroke="#2b2b2b" stroke-width="1.2" stroke-linecap="round"/>
+</svg>

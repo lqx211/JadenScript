@@ -1,0 +1,11 @@
+class main {
+    public void mainThread(){
+        Looks.say('Hello, World!');
+    }
+}
+
+stage {
+    public void greenFlag(){
+        mainThread();
+    }
+}

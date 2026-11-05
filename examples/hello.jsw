@@ -1,0 +1,15 @@
+// Hello world in JadenScript.
+//   python3 -m jswc build examples/hello.jsw -o build/hello.sb3
+#enable_feature<commentMetadata>;
+
+stage { // Stage: costume=0 volume=100 layer=0 tempo=60 video=off videoTransparency=50
+    import "hello/backdrop.svg" as "backdrop1"; // costume centerx=240 centery=180 res=1
+}
+
+class main { // Sprite: main (0,0) size=100 direction=90 show=1 costume=0 volume=100 rotation=all draggable=0
+    import "hello/cat.svg" as "costume1"; // costume centerx=48 centery=50 res=1
+
+    public void greenFlag() { // at 0,0
+        Looks.say("Hello world");
+    }
+}

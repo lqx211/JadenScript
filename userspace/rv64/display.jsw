@@ -1,0 +1,487 @@
+/*
+ * display — the video card's rasteriser.
+ *
+ * The card itself is memory: two planes and a palette at 0x5000_0000, which the
+ * CPU writes like any other device. This sprite turns bytes into pixels, and it
+ * is the only sprite allowed to touch the pen.
+ *
+ * One pen dot is one stage pixel: the pen is size 1 and every dot is placed on
+ * a pixel *centre* (x = -319.5, -318.5, … for a 640 wide stage), so a glyph is
+ * its bitmap and nothing else -- no scaling, no strokes that fatten an edge.
+ *
+ *    text   80 x 30 cells of 8 x 15 glyphs in an 8 x 16 box
+ *    gfx    320 x 200 palette indices, 16 x 16 tiles, one dot per pixel
+ *
+ * Painting is incremental: the CPU marks a cell or a tile dirty and this loop
+ * redraws a few of them per frame, so a scrolling console costs a line, not a
+ * screen.
+ */
+public X.dispBase = 1342177280;  // 0x5000_0000
+public X.dispSize = 331776;      // 0x5_1000: text, a 640 x 480 plane, the palette, ctl
+public X.dispMode = 0;           // 0 text, 1 320x200, 2 640x480
+/* A mode set is a message, not a call: the core writes the control register and
+ * this module applies it on its next paint, which is how the split works. */
+public X.dispWantMode = 0;
+public X.dispWantSet = 0;
+public X.dispShown = -1;         // the mode the painter last drew
+public X.stageW = 640;
+public X.stageH = 480;
+public X.dispCols = 80;
+public X.dispRows = 30;
+public X.dispCellW = 8;
+public X.dispCellH = 16;         // an 8 x 15 glyph plus one blank row
+public X.dispGlyphH = 15;
+public X.dispGfxW = 320;
+public X.dispGfxH = 200;
+public X.dispGfxOff = 8192;      // past the 4800-byte text plane
+public X.dispPalOff = 327680;    // past a 640 x 480 plane, the largest mode
+public X.dispCtlOff = 328448;
+public X.dispTile = 16;
+public X.dispTilesX = 20;
+public X.dispTilesY = 13;
+public X.dispBooted = 0;        // 1 while the card's planes are usable
+/* The card is booted on *request*, not on its own green flag. A green flag in
+ * Scratch clears the pen layer, so a card that wiped the screen whenever its
+ * script started could wipe it after the guest had already drawn POST: the
+ * planes said everything was painted and the glass was black. Asking removes
+ * the race instead of hoping about thread order. */
+public X.dispReq = 0;           // the CPU asks the card to boot
+public X.dispAck = 0;           // the card says it has
+
+/* the sixteen EGA colours a fresh VGA starts with */
+public X.dispEga = [0, 170, 43520, 43690, 11141120, 11141290, 11162880, 11184810, 5592405, 5592575, 5635925, 5636095, 16733525, 16733695, 16777045, 16777215];
+/* attr 0..7 picks one of these as ink; bit 7 of the attr makes it the paper */
+/* The 16 EGA colours, in attribute order. A text cell's attribute is
+ * `paper * 16 + ink`, the way a VGA card stores it, so white on blue is 0x1F
+ * and light grey paper with black text is 0x70. */
+public X.dispColours = [0, 170, 43520, 43690, 11141120, 11141290, 11162880, 11184810,
+    5592405, 5592575, 5635925, 5636095, 16733525, 16733695, 16777045, 16777215];
+public X.dispPal = [];
+public X.dispPalDirty = 0;
+
+public X.dispText = [];
+/* what is on the glass: char * 256 + attr per cell, so a repaint can skip
+ * cells that did not change and only erase the ones that had ink */
+public X.dispTextNow = [];
+public X.dispTextDirty = [];
+public X.dispTextN = 0;
+public X.dispTextScan = 1;
+public X.dispGfx = [];
+public X.dispGfxDirty = [];
+public X.dispGfxN = 0;
+public X.dispGfxScan = 1;
+public X.dispPen = -1;
+public X.dispHex = 0;
+public X.dispPainted = 0;
+public X.dispDots = 0;           // dots drawn, the cost meter
+
+import "assets/lists/font.jsa" as font;
+
+class Display {
+    public void displayStart() { // hook: green flag
+        // Boot on request, never on this script's own start. The CPU asks, this
+        // loop answers, and the order the two green-flag scripts happen to run
+        // in stops mattering -- which it does, because a green flag clears the
+        // pen layer: a boot that ran late used to wipe the POST screen the
+        // guest had already drawn and leave the planes insisting it was there.
+        while (1) {
+            if (X.dispReq == 1) {
+                X.dispBooted = 0;
+                dispBoot();
+                X.dispReq = 0;
+                X.dispAck = 1;
+            }
+            paintSome();
+            Control.wait(0);
+        }
+    }
+
+    /* Blank planes, the EGA palette, and a black screen. */
+    private void dispBoot() { // warp
+        Looks.hide();
+        Pen.setPenSize(1);
+        clearScreen();
+        X.dispText.clear();
+        X.dispTextDirty.clear();
+        _i = 1;
+        while (_i <= X.dispCols * X.dispRows) {
+            X.dispText.add(32);      // a space...
+            X.dispText.add(0);       // ...in attr 0: white on black
+            X.dispTextDirty.add(0);
+            X.dispTextNow.add(-1);   // -1: the glass is blank, not a space
+            _i += 1;
+        }
+        X.dispGfx.clear();
+        X.dispGfxDirty.clear();
+        _i = 1;
+        while (_i <= 640 * 480) {       // the largest mode: a set never allocates
+            X.dispGfx.add(0);
+            _i += 1;
+        }
+        _i = 1;
+        while (_i <= X.dispTilesX * X.dispTilesY) {
+            X.dispGfxDirty.add(0);
+            _i += 1;
+        }
+        // 256-entry grey ramp, then the sixteen EGA colours on top of it
+        X.dispPal.clear();
+        _i = 0;
+        while (_i < 256) {
+            X.dispPal.add(_i);
+            X.dispPal.add(_i);
+            X.dispPal.add(_i);
+            _i += 1;
+        }
+        _i = 1;
+        while (_i <= 16) {
+            _hex = X.dispEga.get(_i);
+            X.dispPal.set(_i * 3 - 2, Operators.math("floor", _hex / 65536) % 256);
+            X.dispPal.set(_i * 3 - 1, Operators.math("floor", _hex / 256) % 256);
+            X.dispPal.set(_i * 3, _hex % 256);
+            _i += 1;
+        }
+        X.dispMode = 0;
+        X.dispShown = -1;
+        X.dispTextN = 0;
+        X.dispGfxN = 0;
+        X.dispPalDirty = 0;
+        X.dispPen = -1;
+        X.dispBooted = 1;
+    }
+
+    /*
+     * The screen itself: black, one pen stroke per row. The stroke runs from
+     * pixel centre to pixel centre, so with the pen at 1 its capsules cover
+     * exactly those 640 pixels and nothing else -- the size never changes.
+     */
+    private void clearScreen() { // warp
+        Pen.eraseAll();
+        Pen.setPenColor(0);
+        // 480 rows on integer centres, endpoints on integer columns: the caps
+        // reach half a pixel past each end, so the field is exactly 640 x 480
+        _y = X.stageH / 2 - 1;
+        while (_y >= 0 - X.stageH / 2) {
+            Motion.setXY(0 - X.stageW / 2, _y);
+            Pen.penDown();
+            Motion.setXY(X.stageW / 2 - 1, _y);
+            Pen.penUp();
+            _y -= 1;
+        }
+        X.dispPen = 0;
+        // The glass is black again, so nothing on it matches the plane any
+        // more. `-1` is exactly that: "this cell has not been drawn".
+        _i = 1;
+        while (_i <= X.dispCols * X.dispRows) {
+            X.dispTextNow.set(_i, -1);
+            _i += 1;
+        }
+    }
+
+    /*
+     * One screen pixel, in `hex`. `ix`/`iy` are *image* coordinates: (0,0) is
+     * the top-left of the 640 x 480 screen.
+     *
+     * Two facts decide this arithmetic, both measured on the pen's own buffer
+     * rather than guessed:
+     *
+     *   a dot at stage x lights skin column x + 320, and at stage y row 239 - y
+     *   -- so pixel *centres sit on integer* stage coordinates, not on halves;
+     *   a half-integer coordinate straddles two pixels and smears.
+     *
+     * and the pen has to *move*: `pen down` on a point and straight back up
+     * stamps nothing in TurboWarp's compiled runtime. Each dot is therefore a
+     * stroke a hundredth of a unit long, whose round cap is half a pixel past
+     * each end -- exactly the one pixel it starts on.
+     */
+    private void pixel(ix, iy, hex) { // warp
+        if (hex != X.dispPen) {
+            Pen.setPenColor(hex);
+            X.dispPen = hex;
+        }
+        _px = ix - X.stageW / 2;
+        _py = X.stageH / 2 - 1 - iy;
+        Motion.setXY(_px, _py);
+        Pen.penDown();
+        Motion.setXY(_px + 0.01, _py);
+        Pen.penUp();
+        X.dispDots += 1;
+    }
+
+    /*
+     * A horizontal run of `len` pixels starting at image (ix, iy). Same
+     * geometry as `pixel`, and used for the paper of a cell: with the pen at
+     * size 1 and integer centres, a stroke from x to x+len-1 covers exactly
+     * those pixels and the round caps reach half a pixel past each end.
+     */
+    private void pixelRun(ix, iy, len, hex) { // warp
+        if (hex != X.dispPen) {
+            Pen.setPenColor(hex);
+            X.dispPen = hex;
+        }
+        _px = ix - X.stageW / 2;
+        _py = X.stageH / 2 - 1 - iy;
+        Motion.setXY(_px, _py);
+        Pen.penDown();
+        Motion.setXY(_px + len - 1, _py);
+        Pen.penUp();
+        X.dispDots += len;
+    }
+
+    /* A few dirty cells, then return: the caller decides when to yield. */
+    private void paintSome() { // warp
+        if (X.dispBooted < 1) {
+            return;
+        }
+        if (X.dispWantSet == 1) {
+            X.dispWantSet = 0;
+            dispSetMode(X.dispWantMode);
+        }
+        if (X.dispMode != X.dispShown) {
+            _fresh = 0;
+            if (X.dispShown < 0) {
+                _fresh = 1;          // dispBoot has already erased the glass
+            }
+            X.dispShown = X.dispMode;
+            if (_fresh == 0) {
+                clearScreen();
+            }
+            dispInvalidate();
+        }
+        if (X.dispPalDirty == 1) {
+            X.dispPalDirty = 0;
+            _i = 1;
+            while (_i <= X.dispTilesX * X.dispTilesY) {
+                X.dispGfxDirty.set(_i, 1);
+                X.dispGfxN += 1;
+                _i += 1;
+            }
+        }
+        if (X.dispMode == 0) {
+            if (X.dispTextN < 1) {
+                return;
+            }
+            X.dispPainted = 0;
+            _limit = 6;
+            if (X.dispTextN > 800) {
+                _limit = 24;      // a whole screen changed: a setup screen
+            }
+            _s = 0;
+            while (_s < 200 && X.dispPainted < _limit && X.dispTextN > 0) {
+                _cell = X.dispTextScan;
+                if (X.dispTextDirty.get(_cell) == 1) {
+                    X.dispTextDirty.set(_cell, 0);
+                    X.dispTextN -= 1;
+                    paintCell(_cell - 1);
+                    X.dispPainted += 1;
+                }
+                _cell += 1;
+                if (_cell > X.dispCols * X.dispRows) {
+                    _cell = 1;
+                }
+                X.dispTextScan = _cell;
+                _s += 1;
+            }
+            return;
+        }
+        if (X.dispGfxN < 1) {
+            return;
+        }
+        X.dispPainted = 0;
+        _limit = 6;
+        _s = 0;
+        while (_s < 900 && X.dispPainted < _limit && X.dispGfxN > 0) {
+            _tile = X.dispGfxScan;
+            if (X.dispGfxDirty.get(_tile) == 1) {
+                X.dispGfxDirty.set(_tile, 0);
+                X.dispGfxN -= 1;
+                paintTile(_tile - 1);
+                X.dispPainted += 1;
+            }
+            _tile += 1;
+            if (_tile > X.dispTilesX * X.dispTilesY) {
+                _tile = 1;
+            }
+            X.dispGfxScan = _tile;
+            _s += 1;
+        }
+    }
+
+    /*
+     * A mode set, the way a VGA does one: new geometry, an empty plane, every
+     * tile dirty, and the glass cleared. The text and graphics planes keep
+     * their own geometry, so switching back is just another set.
+     */
+    public void dispSetMode(mode) { // warp
+        X.dispGfxW = 320;
+        X.dispGfxH = 200;
+        if (mode == 2) {
+            X.dispGfxW = 640;
+            X.dispGfxH = 480;
+        }
+        X.dispTilesX = X.dispGfxW / X.dispTile;
+        X.dispTilesY = X.dispGfxH / X.dispTile;
+        // The plane was built once, for the largest mode, and is *not* touched
+        // here: the guest writes it immediately after the mode set, and
+        // rebuilding 307200 entries inside a warp block froze the tab. Only the
+        // tile table is rebuilt, and it is 1200 entries at most.
+        X.dispGfxDirty.clear();
+        _i = 1;
+        while (_i <= X.dispTilesX * X.dispTilesY) {
+            X.dispGfxDirty.add(1);
+            _i += 1;
+        }
+        X.dispGfxN = X.dispTilesX * X.dispTilesY;
+        X.dispGfxScan = 1;
+        X.dispMode = mode;
+        X.dispShown = -1;
+        X.dispPainted = 0;
+        X.dispPen = -1;
+    }
+
+    /*
+     * Everything is stale: a fresh boot, a mode switch, or a palette reload.
+     *
+     * The decision comes from the *plane*, not from the shadow: after an erase
+     * the shadow is blank, so a cell that is dirty but has never been drawn
+     * would otherwise be dropped on the floor and stay invisible until the
+     * guest happened to write it again. That is what hid the POST screen.
+     */
+    private void dispInvalidate() { // warp
+        X.dispTextN = 0;
+        _i = 1;
+        while (_i <= X.dispCols * X.dispRows) {
+            _ch = X.dispText.get(_i * 2 - 1);
+            _at = X.dispText.get(_i * 2);
+            // blank on a black screen = a space that does not paint a paper
+            if ((_ch != 32 && _ch >= 32 && _ch <= 126) || _at >= 128) {
+                X.dispTextDirty.set(_i, 1);
+                X.dispTextN += 1;
+            } else {
+                X.dispTextDirty.set(_i, 0);
+            }
+            _i += 1;
+        }
+        X.dispGfxN = 0;
+        _i = 1;
+        while (_i <= X.dispTilesX * X.dispTilesY) {
+            X.dispGfxDirty.set(_i, 1);
+            X.dispGfxN += 1;
+            _i += 1;
+        }
+    }
+
+    /*
+     * One text cell: the background is dotted pixel by pixel, then the 8 x 15
+     * glyph on top of it. attr bit 7 swaps ink and paper.
+     */
+    private void paintCell(index) { // warp
+        _col = index % X.dispCols;
+        _row = Operators.math("floor", index / X.dispCols);
+        _x0 = _col * X.dispCellW;              // image columns of the cell
+        _y0 = _row * X.dispCellH;              // image rows of the cell
+        _ch = X.dispText.get(index * 2 + 1) + 0;
+        _at = X.dispText.get(index * 2 + 2);
+        // One byte per cell and one glyph per byte: the table is CP437-shaped,
+        // so 0xB3 is a vertical bar and 0x1A is a right arrow, the same codes a
+        // PC uses. Anything outside a byte is not a character at all.
+        if (_ch < 0) {
+            _ch = 32;
+        }
+        if (_ch > 255) {
+            _ch = 32;
+        }
+        _now = _ch * 256 + _at;
+        _was = X.dispTextNow.get(index + 1);
+        X.dispTextNow.set(index + 1, _now);
+        if (_was == _now) {
+            return;
+        }
+        // attribute nibbles: high = paper, low = ink, both EGA 0..15
+        _ink = X.dispColours.get(_at % 16 + 1);
+        _paper = X.dispColours.get(Operators.math("floor", _at / 16) % 16 + 1);
+        // A blank cell on a blank screen is nothing to draw. Anything else has
+        // to be erased first, which is also what makes spaces erase.
+        _blank = 0;
+        if (_ch == 32 && _paper == 0) {
+            _blank = 1;
+        }
+        if (_blank == 1 && _was < 0) {
+            return;
+        }
+        // Paper is only worth drawing when it is not black (the glass under it
+        // already is) or when something has to be erased.
+        if (_paper != 0 || _was >= 0) {
+            // one stroke per row instead of eight dots: a coloured cell costs
+            // 16 pen moves, not 128, which is what makes a blue screen worth
+            // painting at all
+            _y = 0;
+            while (_y < X.dispCellH) {
+                pixelRun(_x0, _y0 + _y, X.dispCellW, _paper);
+                _y += 1;
+            }
+        }
+        if (_blank == 1) {
+            return;
+        }
+        // the block cursor fills the whole cell. The glyph table is fifteen rows
+        // and a cell is sixteen, so a 0xDB would leave a line of paper showing.
+        if (_ch == 219 && _at == 7) {
+            // rows 1..15, the same box the glyphs use: they are drawn with one
+            // blank row on top, so a cursor that filled row 0 sat a line high
+            _y = 1;
+            while (_y < X.dispCellH) {
+                pixelRun(_x0, _y0 + _y, X.dispCellW, _ink);
+                _y += 1;
+            }
+            return;
+        }
+        _base = _ch * X.dispGlyphH;
+        _gr = 0;
+        while (_gr < X.dispGlyphH) {
+            _bits = font.get(_base + _gr + 1) + 0;
+            _c = 0;
+            _v = _bits;
+            while (_c < X.dispCellW) {
+                _bit = Operators.math("floor", _v / 128);
+                _v = (_v % 128) * 2;
+                if (_bit == 1) {
+                    // the baseline sits on the last row of the box, one blank
+                    // row on top, so glyph row gr is image row _y0 + 15 - gr
+                    pixel(_x0 + _c, _y0 + X.dispGlyphH - _gr, _ink);
+                }
+                _c += 1;
+            }
+            _gr += 1;
+        }
+    }
+
+    /* One 16 x 16 tile of the graphics plane, one dot per pixel. */
+    private void paintTile(index) { // warp
+        _tx = index % X.dispTilesX;
+        _ty = Operators.math("floor", index / X.dispTilesX);
+        _px0 = _tx * X.dispTile;
+        _py0 = _ty * X.dispTile;
+        // the graphics plane sits in the middle of the screen
+        _gx = (X.stageW - X.dispGfxW) / 2;
+        _gy = (X.stageH - X.dispGfxH) / 2;
+        _py = 0;
+        while (_py < X.dispTile && _py0 + _py < X.dispGfxH) {
+            _px = 0;
+            while (_px < X.dispTile && _px0 + _px < X.dispGfxW) {
+                _idx = X.dispGfx.get((_py0 + _py) * X.dispGfxW + _px0 + _px + 1);
+                paletteRGB(_idx);
+                pixel(_gx + _px0 + _px, _gy + _py0 + _py, X.dispHex);
+                _px += 1;
+            }
+            _py += 1;
+        }
+    }
+
+    /* Palette entry `index` into X.dispHex. */
+    private void paletteRGB(index) { // warp
+        _r = X.dispPal.get(index * 3 + 1);
+        _g = X.dispPal.get(index * 3 + 2);
+        _b = X.dispPal.get(index * 3 + 3);
+        X.dispHex = _r * 65536 + _g * 256 + _b;
+    }
+}

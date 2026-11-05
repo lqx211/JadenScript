@@ -1,0 +1,2512 @@
+#enable_feature<useTempVariables>;
+
+/*
+ * anim3d — a pen-only 3D renderer with a shot timeline.
+ *
+ * Modelled on how wem_example drives a frame: the picture is a pure function of
+ * the song clock, a shot list decides which scene is on screen, keyframes drive
+ * the camera, and easing shapes the gaps between keys. Nothing here counts
+ * frames or relies on how often the VM happens to run.
+ *
+ * The clock is `Tick.tick`, the same variable NP4.26's `Ticker()` advances once
+ * per beat subdivision. 16 ticks per beat (Tick.wait = 4) and 64 per bar.
+ *
+ *   D3.pos   x,y,z,x,y,z,...        model space, rebuilt by the scene each frame
+ *   D3.idx   a,b, a,b, ...          1-based vertex indices, static per scene
+ *   D3.proj  sx,sy,depth,flag,...   per-frame projection buffer
+ *
+ * A scene only has to fill `D3.pos` and `D3.idx`; `render()` projects once and
+ * strokes every edge. Add a scene by writing a `buildX(t)` builder and a `case`
+ * in `drawScene`.
+ */
+
+/* ---- clock ---------------------------------------------------------- */
+public Tick.tick = 0;      // the player's clock; the test project drives it
+public D3.ticksPerBeat = 16;
+public D3.ticksPerBar = 64;
+public D3.beatPhase = 0;      // 0..1 inside the current beat
+public D3.barPhase = 0;       // 0..1 inside the current bar
+public D3.pulseBeat = 0;      // 1 on the beat, decaying until the next one
+public D3.pulseBar = 0;
+
+/* ---- show ------------------------------------------------------------ */
+/*
+ * The running order, lifted from the example film's own timeline: which scene
+ * is on screen and from which tick. `tools/gen_anim3d_show.py` writes the block
+ * below from `wem_example/data/timing.json`; the motifs it names live further
+ * down in `drawScene`.
+ *
+ * A shot row is `startTick, motifId, fadeTicks, param`. A key row is
+ * `tick, yaw, pitch, dist, easeId`.
+ */
+public D3.showOrigin = 0;     // the tick the show started at
+public D3.showTick = 0;       // Tick.tick - showOrigin, in ticks
+
+/*
+ * Linux.jsw's terminal font, decoded: 95 ASCII glyphs, each 8 px wide and 15
+ * rows tall, one row per entry as an 8-bit mask with the leftmost pixel in bit
+ * 7. Row 0 is the baseline row of the cell, row 14 the top. The glyphs were
+ * rasterised by emulating `drawGlyph` in Linux.jsw, which walks the
+ * run-length strings in assets/lists/font.jsa down each column.
+ */
+public D3.cellW = 8;
+public D3.cellH = 15;
+/* The 95 printable ASCII characters, in the order of the glyph table. */
+public D3.glyphChars = " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~";
+public D3.gfont = [
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 16, 16, 0, 16, 16, 16, 16,
+    16, 16, 16, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 68, 68, 68, 68, 0, 0, 0, 72,
+    72, 72, 126, 36, 36, 126, 18, 18, 18, 0, 0, 0, 0, 0, 16, 124, 146, 18, 28, 112, 144, 146, 124, 16,
+    0, 0, 0, 0, 0, 140, 82, 82, 44, 16, 16, 104, 148, 148, 98, 0, 0, 0, 0, 0, 114, 140, 132, 138,
+    82, 48, 40, 68, 68, 56, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 16, 16, 16, 16, 0,
+    0, 8, 16, 16, 32, 32, 32, 32, 32, 32, 16, 16, 8, 0, 0, 0, 32, 16, 16, 8, 8, 8, 8, 8,
+    8, 16, 16, 32, 0, 0, 0, 0, 0, 16, 146, 84, 56, 84, 146, 16, 0, 0, 0, 0, 0, 0, 0, 0,
+    16, 16, 16, 254, 16, 16, 16, 0, 0, 0, 0, 0, 16, 8, 8, 24, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 60, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 24, 24, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 64, 64, 32, 16, 16, 8, 8, 4, 2, 2, 0, 0, 0,
+    0, 0, 24, 36, 66, 98, 82, 74, 70, 66, 36, 24, 0, 0, 0, 0, 0, 124, 16, 16, 16, 16, 16, 16,
+    80, 48, 16, 0, 0, 0, 0, 0, 126, 64, 64, 32, 16, 12, 2, 66, 66, 60, 0, 0, 0, 0, 0, 60,
+    66, 66, 2, 2, 28, 2, 66, 66, 60, 0, 0, 0, 0, 0, 4, 4, 4, 126, 68, 68, 36, 20, 12, 4,
+    0, 0, 0, 0, 0, 60, 66, 2, 2, 2, 124, 64, 64, 64, 126, 0, 0, 0, 0, 0, 60, 66, 66, 66,
+    66, 124, 64, 64, 32, 28, 0, 0, 0, 0, 0, 8, 8, 8, 8, 4, 4, 4, 2, 2, 126, 0, 0, 0,
+    0, 0, 60, 66, 66, 66, 66, 60, 66, 66, 66, 60, 0, 0, 0, 0, 0, 56, 4, 2, 2, 2, 62, 66,
+    66, 66, 60, 0, 0, 0, 0, 0, 0, 24, 24, 0, 0, 0, 24, 24, 0, 0, 0, 0, 0, 0, 16, 8,
+    8, 24, 0, 0, 0, 24, 24, 0, 0, 0, 0, 0, 0, 0, 4, 8, 16, 32, 64, 32, 16, 8, 4, 0,
+    0, 0, 0, 0, 0, 0, 0, 126, 0, 0, 0, 126, 0, 0, 0, 0, 0, 0, 0, 0, 64, 32, 16, 8,
+    4, 8, 16, 32, 64, 0, 0, 0, 0, 0, 0, 8, 8, 0, 8, 8, 4, 2, 66, 66, 60, 0, 0, 0,
+    0, 0, 30, 32, 78, 82, 82, 82, 86, 74, 34, 28, 0, 0, 0, 0, 0, 66, 66, 66, 66, 126, 66, 66,
+    36, 36, 24, 0, 0, 0, 0, 0, 124, 66, 66, 66, 66, 124, 66, 66, 66, 124, 0, 0, 0, 0, 0, 60,
+    66, 66, 64, 64, 64, 64, 66, 66, 60, 0, 0, 0, 0, 0, 120, 68, 66, 66, 66, 66, 66, 66, 68, 120,
+    0, 0, 0, 0, 0, 126, 64, 64, 64, 64, 124, 64, 64, 64, 126, 0, 0, 0, 0, 0, 64, 64, 64, 64,
+    64, 124, 64, 64, 64, 126, 0, 0, 0, 0, 0, 58, 70, 66, 66, 78, 64, 64, 66, 66, 60, 0, 0, 0,
+    0, 0, 66, 66, 66, 66, 66, 126, 66, 66, 66, 66, 0, 0, 0, 0, 0, 124, 16, 16, 16, 16, 16, 16,
+    16, 16, 124, 0, 0, 0, 0, 0, 112, 136, 136, 8, 8, 8, 8, 8, 8, 62, 0, 0, 0, 0, 0, 66,
+    68, 72, 80, 96, 96, 80, 72, 68, 66, 0, 0, 0, 0, 0, 126, 64, 64, 64, 64, 64, 64, 64, 64, 64,
+    0, 0, 0, 0, 0, 66, 66, 66, 66, 90, 90, 102, 102, 66, 66, 0, 0, 0, 0, 0, 66, 70, 70, 74,
+    74, 82, 82, 98, 98, 66, 0, 0, 0, 0, 0, 60, 66, 66, 66, 66, 66, 66, 66, 66, 60, 0, 0, 0,
+    0, 0, 64, 64, 64, 64, 64, 124, 66, 66, 66, 124, 0, 0, 0, 0, 6, 120, 204, 180, 132, 132, 132, 132,
+    132, 132, 120, 0, 0, 0, 0, 0, 66, 66, 68, 68, 72, 124, 66, 66, 66, 124, 0, 0, 0, 0, 0, 60,
+    66, 66, 2, 12, 48, 64, 66, 66, 60, 0, 0, 0, 0, 0, 16, 16, 16, 16, 16, 16, 16, 16, 16, 254,
+    0, 0, 0, 0, 0, 60, 66, 66, 66, 66, 66, 66, 66, 66, 66, 0, 0, 0, 0, 0, 16, 16, 40, 40,
+    68, 68, 68, 130, 130, 130, 0, 0, 0, 0, 0, 66, 66, 102, 102, 90, 90, 66, 66, 66, 66, 0, 0, 0,
+    0, 0, 66, 66, 36, 36, 24, 24, 36, 36, 66, 66, 0, 0, 0, 0, 0, 16, 16, 16, 16, 16, 40, 68,
+    68, 130, 130, 0, 0, 0, 0, 0, 126, 64, 64, 32, 16, 8, 4, 2, 2, 126, 0, 0, 0, 0, 56, 32,
+    32, 32, 32, 32, 32, 32, 32, 32, 32, 56, 0, 0, 0, 0, 2, 2, 4, 8, 8, 16, 16, 32, 64, 64,
+    0, 0, 0, 0, 56, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 56, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 66, 36, 24, 0, 0, 254, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 8, 16, 32, 0, 0, 58, 70, 66, 66, 62, 2, 66,
+    60, 0, 0, 0, 0, 0, 0, 0, 92, 98, 66, 66, 66, 66, 98, 92, 64, 64, 64, 0, 0, 0, 0, 60,
+    66, 64, 64, 64, 64, 66, 60, 0, 0, 0, 0, 0, 0, 0, 58, 70, 66, 66, 66, 66, 70, 58, 2, 2,
+    2, 0, 0, 0, 0, 60, 66, 64, 64, 126, 66, 66, 60, 0, 0, 0, 0, 0, 0, 0, 16, 16, 16, 16,
+    16, 16, 124, 16, 16, 16, 12, 0, 0, 60, 66, 66, 60, 32, 56, 68, 68, 68, 58, 2, 0, 0, 0, 0,
+    0, 0, 66, 66, 66, 66, 66, 66, 98, 92, 64, 64, 64, 0, 0, 0, 0, 124, 16, 16, 16, 16, 16, 16,
+    48, 0, 16, 16, 0, 0, 48, 72, 4, 4, 4, 4, 4, 4, 4, 12, 0, 4, 4, 0, 0, 0, 0, 66,
+    68, 72, 80, 96, 80, 72, 68, 64, 64, 64, 0, 0, 0, 0, 124, 16, 16, 16, 16, 16, 16, 16, 16, 16,
+    48, 0, 0, 0, 0, 146, 146, 146, 146, 146, 146, 146, 236, 0, 0, 0, 0, 0, 0, 0, 66, 66, 66, 66,
+    66, 66, 98, 92, 0, 0, 0, 0, 0, 0, 0, 60, 66, 66, 66, 66, 66, 66, 60, 0, 0, 0, 0, 0,
+    64, 64, 92, 98, 66, 66, 66, 66, 98, 92, 0, 0, 0, 0, 0, 2, 2, 58, 70, 66, 66, 66, 66, 70,
+    58, 0, 0, 0, 0, 0, 0, 0, 64, 64, 64, 64, 64, 66, 98, 92, 0, 0, 0, 0, 0, 0, 0, 60,
+    66, 2, 12, 48, 64, 66, 60, 0, 0, 0, 0, 0, 0, 0, 12, 16, 16, 16, 16, 16, 124, 16, 16, 16,
+    0, 0, 0, 0, 0, 58, 70, 66, 66, 66, 66, 66, 66, 0, 0, 0, 0, 0, 0, 0, 24, 24, 36, 36,
+    36, 66, 66, 66, 0, 0, 0, 0, 0, 0, 0, 108, 146, 146, 146, 146, 146, 146, 130, 0, 0, 0, 0, 0,
+    0, 0, 66, 66, 36, 24, 24, 36, 66, 66, 0, 0, 0, 0, 0, 60, 2, 2, 26, 38, 66, 66, 66, 66,
+    66, 0, 0, 0, 0, 0, 0, 0, 126, 64, 32, 16, 8, 4, 2, 126, 0, 0, 0, 0, 0, 12, 16, 16,
+    8, 8, 16, 32, 16, 8, 8, 16, 16, 12, 0, 0, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16,
+    16, 16, 0, 48, 8, 8, 16, 16, 8, 4, 8, 16, 16, 8, 8, 48, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 140, 146, 98, 0, 0
+];
+
+// >>> show-data BEGIN — generated by tools/gen_anim3d_show.py from wem_example/data/timing.json
+public D3.totalTicks = 7346;   // 211.91 s at 129.999 BPM
+public D3.tickRate = 34.6664;      // ticks per second (129.999 BPM / 16ths)
+
+// every section of the song, so the read-out can say where the show is
+public D3.sectionNames = "INTRO INST1 V1 PRE1 C1 V2 PRE2 C2 C2X BRIDGE INST2 CHANT C3 LOVE OUTRO END";
+public D3.sections = [
+        0,   522,   // intro
+      522,  1034,   // inst1
+     1034,  1546,   // v1
+     1546,  2058,   // pre1
+     2058,  2570,   // c1
+     2570,  3082,   // v2
+     3082,  3594,   // pre2
+     3594,  4106,   // c2
+     4106,  4362,   // c2x
+     4362,  4618,   // bridge
+     4618,  5130,   // inst2
+     5130,  5642,   // chant
+     5642,  6154,   // c3
+     6154,  6666,   // love
+     6666,  7178,   // outro
+     7178,  7346   // end
+];
+
+public D3.shots = [
+    // intro        0.00s ..   15.07s  (19 shots)
+        0, 16,  9,  4, "",   // cursor
+       29, 17,  9,  0, "view  top . orthographic",   // trace
+       42, 18,  9,  9, "",   // current
+       58,  6,  9,  4, "",   // boundary
+       97,  7,  9,  2, "view  top . orthographic",   // ringTop
+      115,  6,  9,  6, "",   // protection
+      178,  0,  9,  0, "",   // icosaFall
+      186,  9,  9,  1, "view  top . solids.js",   // row
+      228,  5,  9,  0, "",   // creation
+      239,  7,  9,  1, "",   // birth
+      266,  9,  9,  9, "",   // panel
+      314,  3,  9,  9, "",   // dye
+      330,  5,  9,  1, "",   // null
+      356,  4,  9,  3, "",   // init
+      362,  7,  9,  1, "",   // wake
+      378,  3,  9,  7, "",   // unroll
+      410,  3,  9,  4, "",   // terrain
+      442,  1,  9,  9, "",   // vista
+      490,  5,  9,  2, "",   // simulation
+    // v1          29.84s ..   44.61s  (23 shots)
+     1034,  0,  9,  7, "",   // orbit
+     1066,  0,  9,  0, "",   // macro
+     1082,  1,  9,  1, "",   // top
+     1098,  6,  9,  8, "view  front . orthographic",   // dim1
+     1106,  6,  9,  6, "view  top . orthographic",   // dim2
+     1114,  6,  9,  4, "",   // dim3
+     1115,  6,  9,  8, "",   // dims
+     1116, 13,  9,  2, "",   // split
+     1117,  7,  9,  0, "view  front . orthographic",   // circleDraw
+     1194,  7,  9,  3, "",   // circleMacro
+     1226, 10,  9,  2, "view  text mode . 17 px cells",   // rollWide
+     1242, 10,  9,  2, "",   // rollTrack
+     1243, 10,  9,  9, "",   // roll
+     1244,  0,  9,  2, "",   // circumference
+     1245,  3,  9,  1, "view  front . orthographic",   // sineProj
+     1322,  3,  9,  5, "view  thermal . y > heat",   // sineSheet
+     1354,  0,  9,  9, "",   // youRide
+     1386,  0,  9,  1, "",   // youClose
+     1387,  0,  9,  5, "view  front . orthographic",   // tangents
+     1388,  2,  9,  5, "view  1 bit . float64 exhausted",   // fly
+     1389,  0,  9,  5, "semi-log . 3 cycles",   // asymptote
+     1390,  1,  9,  9, "",   // limit
+     1530,  0,  9,  5, "",   // gap
+    // pre1        44.61s ..   59.38s  (22 shots)
+     1546, 11,  9,  8, "",   // arc
+     1578,  8,  9,  0, "view  front . orthographic . schematic",   // circuit
+     1602,  3,  9,  7, "",   // scope
+     1642,  3,  9,  3, "",   // rectify
+     1650,  3,  9,  8, "view  front . 5 ms/div . 0.5 V/div",   // filter
+     1660,  7,  9,  4, "",   // iris
+     1706,  7,  9,  8, "",   // blind
+     1729,  7,  9,  1, "",   // dizzy1
+     1738,  7,  9,  9, "",   // dizzy2
+     1769,  7,  9,  7, "",   // dizzy3
+     1790,  2,  9,  7, "",   // tunnel
+     1832,  2,  9,  8, "",   // travel
+     1857, 19,  9,  8, "",   // trails
+     1898, 20,  9,  6, "view  zenith . pole",   // trailsTop
+     1917,  7,  9,  5, "",   // binary
+     1944,  7,  9,  8, "",   // youClose
+     1964,  2,  9,  6, "view  edge-on . orbit plane",   // tighten
+     1985, 10,  9,  4, "",   // helix
+     2010, 10,  9,  3, "",   // helixMacro
+     2026, 10,  9,  6, "view  axial . t > past",   // helixTop
+     2042,  4,  9,  5, "",   // spin
+     2050,  4,  9,  0, "",   // spin2
+    // c1          59.38s ..   74.14s  (29 shots)
+     2058, 10,  9,  1, "",   // unwind
+     2074,  8,  9,  6, "",   // inject
+     2090,  8,  9,  7, "",   // propagate
+     2106,  8,  9,  7, "",   // nodeMacro
+     2122,  9,  9,  8, "",   // tokens
+     2138,  3,  9,  6, "",   // thermal
+     2154,  8,  9,  7, "",   // stimulations
+     2170,  8,  9,  4, "",   // heads
+     2186,  7,  9,  2, "RLHF . reward model . orthographic",   // reward
+     2202,  7,  9,  2, "",   // rewardMacro
+     2221, 14,  9,  9, "view  front . orthographic",   // gauge
+     2239, 14,  9,  8, "",   // gaugeTilt
+     2257, 14,  9,  5, "",   // gaugeMacro
+     2275, 14,  9,  9, "",   // gaugeOnly
+     2294,  8,  9,  8, "view  halftone . 45 lpi",   // satisfaction
+     2312,  9,  9,  7, "view  front . orthographic . 48 x 96 threads",   // wall
+     2330,  9,  9,  6, "",   // wallOblique
+     2346,  8,  9,  3, "",   // barMacro
+     2362,  9,  9,  7, "",   // wallLow
+     2378,  8,  9,  7, "",   // waiting
+     2394,  8,  9,  9, "",   // waiting2
+     2410,  8,  9,  9, "",   // execution
+     2426,  8,  9,  1, "view  aerial . ground = city.js",   // aerial
+     2450, 13,  9,  4, "",   // sandbox
+     2474, 13,  9,  6, "",   // glass
+     2490,  8,  9,  1, "",   // pullback
+     2506, 13,  9,  9, "",   // cell
+     2530,  8,  9,  3, "view  text mode . 16 px cells",   // simulation
+     2554,  1,  9,  8, "",   // pushIn
+    // v2          74.14s ..   88.91s  (27 shots)
+     2570, 13,  9,  0, "",   // cell
+     2602,  9,  9,  0, "",   // calligram
+     2628,  9,  9,  2, "",   // decompile
+     2654,  8,  9,  8, "",   // sankey
+     2679,  8,  9,  1, "",   // nutrients
+     2705,  0,  9,  0, "",   // prism
+     2730,  9,  9,  3, "",   // absorb
+     2754, 13,  9,  7, "",   // skeletal
+     2778,  9,  9,  8, "",   // standUp
+     2805,  9,  9,  1, "",   // antiox
+     2832,  4,  9,  1, "",   // box
+     2858,  7,  9,  5, "",   // fringes
+     2882,  6,  9,  4, "",   // bloch
+     2906, 14,  9,  5, "",   // geiger
+     2907, 14,  9,  9, "",   // measure
+     2908,  3,  9,  9, "",   // tabby
+     2909,  3,  9,  3, "",   // stripes
+     2910,  3,  9,  9, "",   // purr
+     2911,  3,  9,  5, "",   // youPurr
+     2926,  9,  9,  4, "",   // enjoyment
+     2946,  9,  9,  2, "",   // catTurn
+     2966,  5,  9,  3, "",   // cosmic
+     2986,  7,  9,  6, "",   // halo
+     3008,  9,  9,  6, "",   // you
+     3030,  9,  9,  2, "",   // proof
+     3052,  9,  9,  8, "",   // exists
+     3074,  9,  9,  3, "",   // qed
+    // pre2        88.91s ..  103.68s  (21 shots)
+     3082,  1,  9,  6, "",   // square
+     3109,  9,  9,  1, "",   // glyphF
+     3136,  9,  9,  6, "",   // bitsF
+     3156, 13,  9,  7, "",   // switch
+     3176,  9,  9,  9, "",   // glyphM
+     3196, 14,  9,  1, "",   // clock
+     3226, 14,  9,  0, "",   // cover
+     3262, 14,  9,  7, "",   // ampm
+     3290, 14,  9,  8, "",   // dialTop
+     3325, 13,  9,  9, "",   // formation
+     3354,  9,  9,  9, "",   // formSide
+     3394,  9,  9,  0, "",   // swap
+     3418, 10,  9,  5, "",   // braid
+     3434, 10,  9,  3, "",   // lead
+     3449,  7,  9,  1, "",   // gate
+     3482,  7,  9,  2, "",   // moire
+     3521,  2,  9,  5, "",   // tunnel
+     3546,  2,  9,  5, "",   // tunnel2
+     3562,  7,  9,  1, "",   // moireMacro
+     3578,  1,  9,  3, "",   // squareEnd
+     3586,  1,  9,  0, "",   // plate
+    // c2         103.68s ..  118.45s  (18 shots)
+     3594,  1,  9,  7, "",   // plate
+     3626, 13,  9,  7, "",   // blueprint
+     3658,  1,  9,  1, "",   // plate2
+     3659,  3,  9,  1, "",   // strings
+     3666,  3,  9,  9, "",   // spectrum
+     3694,  3,  9,  8, "",   // vibrations
+     3722,  3,  9,  8, "",   // scope
+     3754,  3,  9,  9, "",   // thermal
+     3770, 14,  9,  2, "",   // panel
+     3794,  8,  9,  4, "",   // converge
+     3829,  7,  9,  6, "",   // completion
+     3864,  5,  9,  9, "",   // rise
+     3898,  9,  9,  8, "",   // chat
+     3933,  7,  9,  0, "",   // ping
+     3968,  3,  9,  4, "",   // presence
+     4002, 15,  9,  6, "",   // pointer
+     4037, 15,  9,  9, "",   // prompt
+     4072,  3,  9,  9, "",   // isolation
+    // c2x        118.45s ..  125.84s  (11 shots)
+     4106, 12,  4,  5, "",   // memory
+     4130, 13,  4,  0, "",   // defrag
+     4153, 13,  4,  2, "",   // defragIso
+     4176, 12,  4,  2, "",   // dissolve
+     4199, 12,  4,  3, "",   // fragments
+     4223,  5,  4,  2, "",   // drift
+     4246, 13,  4,  9, "",   // assemble
+     4269, 11,  4,  6, "",   // heart
+     4292, 12,  4,  9, "",   // crack
+     4316, 11,  4,  6, "",   // dishearten
+     4339,  1,  4,  6, "",   // land
+    // bridge     125.84s ..  133.22s  (13 shots)
+     4362,  8,  4,  4, "",   // spread
+     4378,  9,  4,  4, "",   // decompile
+     4394, 17,  4,  7, "",   // trace
+     4410, 17,  4,  4, "",   // traceMacro
+     4426,  9,  4,  8, "",   // assert
+     4458,  9,  4,  7, "",   // bits
+     4482,  3,  4,  2, "",   // nan
+     4506,  3,  4,  6, "",   // nanWide
+     4522,  9,  4,  5, "",   // dialogs
+     4538,  9,  4,  8, "",   // dialogs2
+     4562, 12,  4,  4, "",   // illegal
+     4586, 13,  4,  7, "",   // split
+     4602,  3,  4,  6, "",   // flood
+    // inst2      133.22s ..  147.99s  (12 shots)
+     4618,  4,  4,  7, "",   // collapse
+     4682,  4,  4,  4, "",   // collapseSide
+     4714,  4,  4,  9, "",   // collapseAscii
+     4746,  9,  4,  3, "",   // codeFall
+     4810, 12,  4,  1, "",   // crackMacro
+     4842, 12,  4,  9, "",   // crackGraze
+     4874, 12,  4,  8, "",   // crackWide
+     4922, 12,  4,  4, "",   // crackDither
+     4938,  1,  4,  8, "",   // floorTear
+     4970,  1,  4,  5, "",   // floorUnder
+     4986,  1,  4,  7, "",   // floorTop
+     5114, 16,  4,  2, "",   // cursor
+    // chant      147.99s ..  162.76s  (11 shots)
+     5130,  7,  4,  3, "",   // ignite
+     5177,  9,  4,  3, "view  front . orthographic",   // ein
+     5223,  9,  4,  6, "view  top . orthographic",   // dos
+     5270,  9,  4,  6, "view  isometric . orthographic",   // trois
+     5316,  7,  4,  9, "orthographic . three views",   // net
+     5363,  7,  4,  1, "",   // fem
+     5410,  7,  4,  9, "",   // liu
+     5456,  7,  4,  8, "view  dither . armed",   // arm1
+     5503,  7,  4,  6, "",   // arm2
+     5549,  7,  4,  9, "",   // boom
+     5596, 12,  4,  3, "",   // debris
+    // c3         162.76s ..  177.53s  (22 shots)
+     5642, 12,  9,  5, "",   // dead
+     5670, 15,  9,  6, "view  edges . sobel",   // input
+     5698,  8,  9,  2, "view  thermal",   // neuron
+     5726,  4,  9,  9, "",   // collapse
+     5754, 12,  9,  6, "view  aerial",   // ruins
+     5780, 12,  9,  5, "view  dashboard",   // crash
+     5806, 12,  9,  5, "",   // crashMacro
+     5831,  3,  9,  1, "view  perspective",   // nan
+     5857,  9,  9,  4, "view  front . orthographic . 48 x 96 threads",   // errors
+     5882, 12,  9,  9, "view  1-bit . bayer 8x8",   // errOblique
+     5898,  8,  9,  8, "",   // gather
+     5914, 13,  9,  7, "",   // fit
+     5934,  9,  9,  8, "",   // missing
+     5953, 12,  9,  1, "",   // jitter
+     5972,  1,  9,  2, "",   // run
+     5991,  4,  9,  4, "",   // execute
+     6010, 12,  9,  8, "",   // ashes
+     6026,  2,  9,  1, "",   // tighten
+     6042,  9,  9,  3, "",   // walls
+     6064, 13,  9,  2, "",   // lattice
+     6085, 12,  9,  0, "",   // slow
+     6106, 12,  9,  9, "",   // fade
+    // love       177.53s ..  192.30s  (23 shots)
+     6154, 11,  9,  8, "",   // dots
+     6194,  9,  9,  5, "",   // notebook
+     6234,  1,  9,  7, "",   // nbZoom
+     6262,  7,  9,  4, "",   // warm
+     6290, 11,  9,  7, "",   // ask
+     6318, 11,  9,  5, "",   // ask2
+     6346,  1,  9,  8, "",   // landscape
+     6374,  8,  9,  7, "",   // answerAll
+     6402, 11,  9,  9, "",   // cardioid
+     6430, 11,  9,  6, "",   // penWide
+     6458, 11,  9,  1, "",   // penMacro
+     6490, 13,  9,  6, "",   // blueprint
+     6505, 11,  9,  9, "",   // venus
+     6520,  6,  9,  2, "",   // inflate
+     6534, 11,  9,  2, "",   // rose
+     6549, 11,  9,  5, "",   // youFree
+     6564, 11,  9,  9, "",   // youGone
+     6578, 11,  9,  7, "",   // youFar
+     6593,  1,  9,  7, "",   // frame
+     6608, 13,  9,  4, "",   // trapped
+     6622, 13,  9,  9, "",   // trapV
+     6637, 13,  9,  6, "",   // pressed
+     6652, 11,  9,  7, "",   // finale
+    // outro      192.30s ..  207.07s  (9 shots)
+     6666, 12,  9,  5, "",   // dissolve
+     6698,  5,  9,  4, "",   // lift
+     6730, 10,  9,  2, "",   // rollback
+     6762, 10,  9,  1, "view  top . orthographic",   // rollTop
+     6858,  4,  9,  5, "",   // unbox
+     6890,  4,  9,  6, "",   // unboxTop
+     6986,  5,  9,  3, "view  top . orthographic",   // point
+     7050,  7,  9,  5, "",   // period
+     7178,  5,  9,  2, "",   // end
+     7346,  0,  9,  0, ""    // end
+];
+
+public D3.keys = [
+        0,    86.0,  26,  5.0, 3,
+       29,   112.0,  10,  6.2, 6,
+       42,   219.0,  12,  5.0, 6,
+       58,   281.0,  26,  4.2, 3,
+       97,   325.0,  18,  3.8, 3,
+      115,   405.0,  34,  4.2, 6,
+      178,   431.0,  10,  4.4, 6,
+      186,   466.0,  14,  4.4, 3,
+      228,   492.0,  10,  3.2, 6,
+      239,   527.0,  14,  3.8, 3,
+      266,   634.0,  12,  4.4, 6,
+      314,   741.0,  12,  4.6, 6,
+      330,   776.0,  14,  3.2, 3,
+      356,   829.0,  22,  5.0, 6,
+      362,   864.0,  14,  3.8, 3,
+      378,   953.0,  38,  4.6, 3,
+      410,  1015.0,  26,  4.6, 3,
+      442,  1122.0,  12,  5.6, 6,
+      490,  1166.0,  18,  3.2, 3,
+     1034,  1255.0,  38,  4.4, 3,
+     1066,  1281.0,  10,  4.4, 6,
+     1082,  1316.0,  14,  5.6, 3,
+     1098,  1414.0,  42,  4.2, 3,
+     1106,  1494.0,  34,  4.2, 6,
+     1114,  1556.0,  26,  4.2, 3,
+     1115,  1654.0,  42,  4.2, 3,
+     1116,  1698.0,  18,  6.0, 3,
+     1117,  1724.0,  10,  3.8, 6,
+     1194,  1777.0,  22,  3.8, 6,
+     1226,  1821.0,  18,  5.4, 3,
+     1242,  1865.0,  18,  5.4, 3,
+     1243,  1972.0,  12,  5.4, 6,
+     1244,  2016.0,  18,  4.4, 3,
+     1245,  2051.0,  14,  4.6, 3,
+     1322,  2122.0,  30,  4.6, 3,
+     1354,  2229.0,  12,  4.4, 6,
+     1386,  2264.0,  14,  4.4, 3,
+     1387,  2335.0,  30,  4.4, 3,
+     1388,  2406.0,  30,  3.0, 3,
+     1389,  2477.0,  30,  4.4, 3,
+     1390,  2584.0,  12,  5.6, 6,
+     1530,  2655.0,  30,  4.4, 3,
+     1546,  2753.0,  42,  3.6, 3,
+     1578,  2779.0,  10,  5.2, 6,
+     1602,  2868.0,  38,  4.6, 3,
+     1642,  2921.0,  22,  4.6, 6,
+     1650,  3019.0,  42,  4.6, 3,
+     1660,  3081.0,  26,  3.8, 3,
+     1706,  3179.0,  42,  3.8, 3,
+     1729,  3214.0,  14,  3.8, 3,
+     1738,  3321.0,  12,  3.8, 6,
+     1769,  3410.0,  38,  3.8, 3,
+     1790,  3499.0,  38,  3.0, 3,
+     1832,  3597.0,  42,  3.0, 3,
+     1857,  3695.0,  42,  3.4, 3,
+     1898,  3775.0,  34,  3.4, 6,
+     1917,  3846.0,  30,  3.8, 3,
+     1944,  3944.0,  42,  3.8, 3,
+     1964,  4024.0,  34,  3.0, 6,
+     1985,  4086.0,  26,  5.4, 3,
+     2010,  4139.0,  22,  5.4, 6,
+     2026,  4219.0,  34,  5.4, 6,
+     2042,  4290.0,  30,  5.0, 3,
+     2050,  4316.0,  10,  5.0, 6,
+     2058,  4351.0,  14,  5.4, 3,
+     2074,  4431.0,  34,  5.2, 6,
+     2090,  4520.0,  38,  5.2, 3,
+     2106,  4609.0,  38,  5.2, 3,
+     2122,  4707.0,  42,  4.4, 3,
+     2138,  4787.0,  34,  4.6, 6,
+     2154,  4876.0,  38,  5.2, 3,
+     2170,  4938.0,  26,  5.2, 3,
+     2186,  4982.0,  18,  3.8, 3,
+     2202,  5026.0,  18,  3.8, 3,
+     2221,  5133.0,  12,  3.4, 6,
+     2239,  5231.0,  42,  3.4, 3,
+     2257,  5302.0,  30,  3.4, 3,
+     2275,  5409.0,  12,  3.4, 6,
+     2294,  5507.0,  42,  5.2, 3,
+     2312,  5596.0,  38,  4.4, 3,
+     2330,  5676.0,  34,  4.4, 6,
+     2346,  5729.0,  22,  5.2, 6,
+     2362,  5818.0,  38,  4.4, 3,
+     2378,  5907.0,  38,  5.2, 3,
+     2394,  6014.0,  12,  5.2, 6,
+     2410,  6121.0,  12,  5.2, 6,
+     2426,  6156.0,  14,  5.2, 3,
+     2450,  6218.0,  26,  6.0, 3,
+     2474,  6298.0,  34,  6.0, 6,
+     2490,  6333.0,  14,  5.2, 3,
+     2506,  6440.0,  12,  6.0, 6,
+     2530,  6493.0,  22,  5.2, 6,
+     2554,  6591.0,  42,  5.6, 3,
+     2570,  6617.0,  10,  6.0, 6,
+     2602,  6643.0,  10,  4.4, 6,
+     2628,  6687.0,  18,  4.4, 3,
+     2654,  6785.0,  42,  5.2, 3,
+     2679,  6820.0,  14,  5.2, 3,
+     2705,  6846.0,  10,  4.4, 6,
+     2730,  6899.0,  22,  4.4, 6,
+     2754,  6988.0,  38,  6.0, 3,
+     2778,  7086.0,  42,  4.4, 3,
+     2805,  7121.0,  14,  4.4, 3,
+     2832,  7156.0,  14,  5.0, 3,
+     2858,  7227.0,  30,  3.8, 3,
+     2882,  7289.0,  26,  4.2, 3,
+     2906,  7360.0,  30,  3.4, 3,
+     2907,  7467.0,  12,  3.4, 6,
+     2908,  7574.0,  12,  4.6, 6,
+     2909,  7627.0,  22,  4.6, 6,
+     2910,  7734.0,  12,  4.6, 6,
+     2911,  7805.0,  30,  4.6, 3,
+     2926,  7867.0,  26,  4.4, 3,
+     2946,  7911.0,  18,  4.4, 3,
+     2966,  7964.0,  22,  3.2, 6,
+     2986,  8044.0,  34,  3.8, 6,
+     3008,  8124.0,  34,  4.4, 6,
+     3030,  8168.0,  18,  4.4, 3,
+     3052,  8266.0,  42,  4.4, 3,
+     3074,  8319.0,  22,  4.4, 6,
+     3082,  8399.0,  34,  5.6, 6,
+     3109,  8434.0,  14,  4.4, 3,
+     3136,  8514.0,  34,  4.4, 6,
+     3156,  8603.0,  38,  6.0, 3,
+     3176,  8710.0,  12,  4.4, 6,
+     3196,  8745.0,  14,  3.4, 3,
+     3226,  8771.0,  10,  3.4, 6,
+     3262,  8860.0,  38,  3.4, 3,
+     3290,  8958.0,  42,  3.4, 3,
+     3325,  9065.0,  12,  6.0, 6,
+     3354,  9172.0,  12,  4.4, 6,
+     3394,  9198.0,  10,  4.4, 6,
+     3418,  9269.0,  30,  5.4, 3,
+     3434,  9322.0,  22,  5.4, 6,
+     3449,  9357.0,  14,  3.8, 3,
+     3482,  9401.0,  18,  3.8, 3,
+     3521,  9472.0,  30,  3.0, 3,
+     3546,  9543.0,  30,  3.0, 3,
+     3562,  9578.0,  14,  3.8, 3,
+     3578,  9631.0,  22,  5.6, 6,
+     3586,  9657.0,  10,  5.6, 6,
+     3594,  9746.0,  38,  5.6, 3,
+     3626,  9835.0,  38,  6.0, 3,
+     3658,  9870.0,  14,  5.6, 3,
+     3659,  9905.0,  14,  4.6, 3,
+     3666, 10012.0,  12,  4.6, 6,
+     3694, 10110.0,  42,  4.6, 3,
+     3722, 10208.0,  42,  4.6, 3,
+     3754, 10315.0,  12,  4.6, 6,
+     3770, 10359.0,  18,  3.4, 3,
+     3794, 10421.0,  26,  5.2, 3,
+     3829, 10501.0,  34,  3.8, 6,
+     3864, 10608.0,  12,  3.2, 6,
+     3898, 10706.0,  42,  4.4, 3,
+     3933, 10732.0,  10,  3.8, 6,
+     3968, 10794.0,  26,  4.6, 3,
+     4002, 10874.0,  34,  4.0, 6,
+     4037, 10981.0,  12,  4.0, 6,
+     4072, 11088.0,  12,  4.6, 6,
+     4106, 11159.0,  30,  4.6, 3,
+     4130, 11185.0,  10,  6.0, 6,
+     4153, 11229.0,  18,  6.0, 3,
+     4176, 11273.0,  18,  4.6, 3,
+     4199, 11326.0,  22,  4.6, 6,
+     4223, 11370.0,  18,  3.2, 3,
+     4246, 11477.0,  12,  6.0, 6,
+     4269, 11557.0,  34,  3.6, 6,
+     4292, 11664.0,  12,  4.6, 6,
+     4316, 11744.0,  34,  3.6, 6,
+     4339, 11824.0,  34,  5.6, 6,
+     4362, 11886.0,  26,  5.2, 3,
+     4378, 11948.0,  26,  4.4, 3,
+     4394, 12037.0,  38,  6.2, 3,
+     4410, 12099.0,  26,  6.2, 3,
+     4426, 12197.0,  42,  4.4, 3,
+     4458, 12286.0,  38,  4.4, 3,
+     4482, 12330.0,  18,  4.6, 3,
+     4506, 12410.0,  34,  4.6, 6,
+     4522, 12481.0,  30,  4.4, 3,
+     4538, 12579.0,  42,  4.4, 3,
+     4562, 12641.0,  26,  4.6, 3,
+     4586, 12730.0,  38,  6.0, 3,
+     4602, 12810.0,  34,  4.6, 6,
+     4618, 12899.0,  38,  5.0, 3,
+     4682, 12961.0,  26,  5.0, 3,
+     4714, 13068.0,  12,  5.0, 6,
+     4746, 13121.0,  22,  4.4, 6,
+     4810, 13156.0,  14,  4.6, 3,
+     4842, 13263.0,  12,  4.6, 6,
+     4874, 13361.0,  42,  4.6, 3,
+     4922, 13423.0,  26,  4.6, 3,
+     4938, 13521.0,  42,  5.6, 3,
+     4970, 13592.0,  30,  5.6, 3,
+     4986, 13681.0,  38,  5.6, 3,
+     5114, 13725.0,  18,  5.0, 3,
+     5130, 13778.0,  22,  3.8, 6,
+     5177, 13831.0,  22,  4.4, 6,
+     5223, 13911.0,  34,  4.4, 6,
+     5270, 13991.0,  34,  4.4, 6,
+     5316, 14098.0,  12,  3.8, 6,
+     5363, 14133.0,  14,  3.8, 3,
+     5410, 14240.0,  12,  3.8, 6,
+     5456, 14338.0,  42,  3.8, 3,
+     5503, 14418.0,  34,  3.8, 6,
+     5549, 14525.0,  12,  3.8, 6,
+     5596, 14578.0,  22,  4.6, 6,
+     5642, 14649.0,  30,  4.6, 3,
+     5670, 14729.0,  34,  4.0, 6,
+     5698, 14773.0,  18,  5.2, 3,
+     5726, 14880.0,  12,  5.0, 6,
+     5754, 14960.0,  34,  4.6, 6,
+     5780, 15031.0,  30,  4.6, 3,
+     5806, 15102.0,  30,  4.6, 3,
+     5831, 15137.0,  14,  4.6, 3,
+     5857, 15199.0,  26,  4.4, 3,
+     5882, 15306.0,  12,  4.6, 6,
+     5898, 15404.0,  42,  5.2, 3,
+     5914, 15493.0,  38,  6.0, 3,
+     5934, 15591.0,  42,  4.4, 3,
+     5953, 15626.0,  14,  4.6, 3,
+     5972, 15670.0,  18,  5.6, 3,
+     5991, 15732.0,  26,  5.0, 3,
+     6010, 15830.0,  42,  4.6, 3,
+     6026, 15865.0,  14,  3.0, 3,
+     6042, 15918.0,  22,  4.4, 6,
+     6064, 15962.0,  18,  6.0, 3,
+     6085, 15988.0,  10,  4.6, 6,
+     6106, 16095.0,  12,  4.6, 6,
+     6154, 16193.0,  42,  3.6, 3,
+     6194, 16264.0,  30,  4.4, 3,
+     6234, 16353.0,  38,  5.6, 3,
+     6262, 16415.0,  26,  3.8, 3,
+     6290, 16504.0,  38,  3.6, 3,
+     6318, 16575.0,  30,  3.6, 3,
+     6346, 16673.0,  42,  5.6, 3,
+     6374, 16762.0,  38,  5.2, 3,
+     6402, 16869.0,  12,  3.6, 6,
+     6430, 16949.0,  34,  3.6, 6,
+     6458, 16984.0,  14,  3.6, 3,
+     6490, 17064.0,  34,  6.0, 6,
+     6505, 17171.0,  12,  3.6, 6,
+     6520, 17215.0,  18,  4.2, 3,
+     6534, 17259.0,  18,  3.6, 3,
+     6549, 17330.0,  30,  3.6, 3,
+     6564, 17437.0,  12,  3.6, 6,
+     6578, 17526.0,  38,  3.6, 3,
+     6593, 17615.0,  38,  5.6, 3,
+     6608, 17677.0,  26,  6.0, 3,
+     6622, 17784.0,  12,  6.0, 6,
+     6637, 17864.0,  34,  6.0, 6,
+     6652, 17953.0,  38,  3.6, 3,
+     6666, 18024.0,  30,  4.6, 3,
+     6698, 18086.0,  26,  3.2, 3,
+     6730, 18130.0,  18,  5.4, 3,
+     6762, 18165.0,  14,  5.4, 3,
+     6858, 18236.0,  30,  5.0, 3,
+     6890, 18316.0,  34,  5.0, 6,
+     6986, 18369.0,  22,  3.2, 6,
+     7050, 18440.0,  30,  3.8, 3,
+     7178, 18484.0,  18,  3.2, 3,
+     7346, 18510.0,  10,  3.2, 3
+];
+// <<< show-data END
+
+/* ---- shot ------------------------------------------------------------ */
+public D3.shotStride = 5;
+public D3.keyStride = 5;
+public D3.shotIndex = 1;
+public D3.shotId = 1;
+public D3.shotParam = 0;
+public D3.shotCaption = "";   // the film's bottom-right overlay text
+public D3.shotT0 = 0;
+public D3.shotT1 = 1;
+public D3.shotP = 0;          // 0..1 through the current shot
+public D3.fade = 0;           // ticks spent collapsing into / out of a cut
+
+/* ---- camera ---------------------------------------------------------- */
+public D3.kfRow = 1;          // index of the key the clock is in
+public D3.kfK = 0;            // 0..1 across the gap to the next key
+public D3.camYaw = 20;
+public D3.camPitch = 18;
+public D3.camRoll = 0;
+public D3.camDist = 5.2;
+// The film renders a 1920 x 1080 canvas; a Scratch stage is 480 x 360, so one
+// design pixel is a quarter of a stage pixel. The focal length is the film's
+// 330 design px scaled by that 0.25. It was left at 330, which projected every
+// scene four times too large - the geometry spent most of its life off the edge
+// of the stage, which is what "lines floating everywhere" was.
+public D3.camFocal = 82.5;
+
+/* ---- trails motif (pre1 "To A.D to B.C") ---------------------------- */
+public D3.trailN = 200;      // particles running round the ring
+public D3.trailSeg = 72;     // ring segments; 360/seg degrees apart
+public D3.trailPx = 95;      // ring radius in stage pixels, camera-independent
+public D3.trailTurns = 2.4;  // turns the band makes over one shot
+public D3.trailBand = 0.80;   // particle radius as a fraction of the ring
+public D3.shake = 0;
+public D3.orbit = 1;          // 1 = turn around the origin, 0 = fly along +Z
+public D3.active = 1;         // 0 stops the renderer and leaves the pen alone
+public D3.onFrame = 0;        // 1 broadcasts D3.afterFrame once per rendered frame
+public D3.baseYaw = 0;        // per-scene view offset, on top of the keyframes
+public D3.basePitch = 0;
+public D3.viewBias = 0;       // per-scene camera pull-back
+public D3.ortho = 0;          // 1 = project flat, `orthoScale` stage px per world unit
+public D3.orthoScale = 0;
+public D3.nearZ = 0.25;       // clip anything closer than this, in world units
+public D3.clipR = 900;        // drop vertices projected further out than this, in px
+public D3.wScale = 1;         // global projection scale (transitions, punch-ins)
+
+/* ---- output ---------------------------------------------------------- */
+public D3.penColor = "#7fd1ff";
+public D3.penSize = 2;
+public D3.space = 0;       // 0 draws into the world buffer, 1 straight to the pen
+public D3.bit = 0;         // result slot for bitAt, like D3.ease for easings
+public D3.hud = 0;         // 1 asks drawHud for a read-out after the strokes
+public D3.lit = 0;         // the beat blink, shared by the cursor motif
+public D3.hops = 0;        // how many sixteenths of the net have been laid
+public D3.ring = 0;        // 0..1, how far the power ring has closed
+public D3.copper = 0;      // total drawn copper length, for the read-out
+public D3.pulses = 0;      // live current pulses, for the read-out
+public D3.out2 = "00";     // zero-padded counter, for the read-out
+public D3.seed = 0;        // result slot for hashSeed
+public D3.sectionName = "INTRO";  // the song section the show is in
+public D3.sectionNo = 1;
+public D3.sig = -1;        // what the last static frame drew, so it can be skipped
+public D3.textScale = 0.5; // multiplier on every read-out glyph, for size
+public D3.holdTick = -1;   // >= 0 pins the show on one tick, for review
+public D3.startTick = 0;   // first tick of the show; set before the green flag
+public D3.stopTick = -1;   // last tick to draw, -1 for the whole show
+public D3.typed = "";      // the source line, typed as far as the clock has reached
+
+/*
+ * A few real lines from this very file. The film types its own source on screen;
+ * so does this one — the read-out is not decoration, it is the program.
+ */
+public D3.code = [
+    "public D3.shots = [",
+    "if (_now == lastTick)",
+    "    return;",
+    "drawScene(shotId)",
+    "render();",
+    "D3.drawn += 1;"
+];
+/*
+ * The board from `buildNetwork()` in `src/ch/intro/trace.js`, transcribed: four
+ * Manhattan arms, two of them bus runs with a parallel pair either side, each
+ * with two spurs that end in a via. A lane is `t0, width, count` followed by
+ * `count` x/z pairs; `t0` is the sixteenth it starts on and `STEP` world units
+ * are laid down per sixteenth. Vias are `x, z, radius`.
+ */
+public D3.netStep = 0.17;
+public D3.nlanes = 16;
+public D3.net = [
+    0.0, 3.2, 4, 0.13, 0, 0.62, 0, 0.82, 0.2, 1.5, 0.2, 3.382,
+    1.8, 3, 0.635, -0.053, 0.832, 0.146, 1.5, 0.145, 3.382, 1.8, 3, 0.605,
+    0.053, 0.808, 0.254, 1.5, 0.255, 5.226, 1.6, 3, 0.99, 0.2, 1.09, 0.3,
+    1.09, 0.38, 6.626, 1.6, 3, 1.228, 0.2, 1.328, 0.1, 1.328, 0.02, 0.0,
+    3.2, 4, -0.13, 0, -0.55, 0, -0.8, -0.25, -1.5, -0.25, 2.971, 1.8,
+    3, -0.569, 0.052, -0.814, -0.197, -1.5, -0.195, 2.971, 1.8, 3, -0.531, -0.052,
+    -0.786, -0.303, -1.5, -0.305, 5.236, 1.6, 3, -0.975, -0.25, -1.075, -0.35, -1.075,
+    -0.43, 6.677, 1.6, 3, -1.22, -0.25, -1.32, -0.15, -1.32, -0.07, 1.588, 3.2,
+    4, 0.4, 0, 0.4, -0.5, 0.65, -0.75, 0.65, -1.5, 7.342, 1.6, 3,
+    0.65, -0.938, 0.75, -1.038, 0.83, -1.038, 8.886, 1.6, 3, 0.65, -1.2, 0.55,
+    -1.3, 0.47, -1.3, 1.471, 3.2, 4, -0.38, 0, -0.38, 0.45, -0.62, 0.69,
+    -0.62, 1.5, 6.959, 1.6, 3, -0.62, 0.892, -0.72, 0.992, -0.8, 0.992, 8.627,
+    1.6, 3, -0.62, 1.176, -0.52, 1.276, -0.44, 1.276
+];
+public D3.nvias = 10;
+public D3.vias = [
+    1.09, 0.38, 0.022, 1.328, 0.02, 0.022, -1.075, -0.43, 0.022, -1.32, -0.07, 0.022,
+    0.4, 0, 0.03, 0.83, -1.038, 0.022, 0.47, -1.3, 0.022, -0.38, 0, 0.03,
+    -0.8, 0.992, 0.022, -0.44, 1.276, 0.022
+];
+public D3.nv = 0;             // vertices the current scene wrote
+public D3.ne = 0;             // edges the current scene wrote
+public D3.maxVerts = 2048;  // two 20-char text lines are ~700 segments
+public D3.maxEdges = 768;
+
+/* ---- frame gate ------------------------------------------------------ */
+public D3.lastTick = -1;      // the tick this frame was drawn for
+public D3.tickAt = 0;         // when that tick landed, in timer seconds
+public D3.lastFrac = 0;       // sub-tick position of the last drawn frame
+public D3.lastDraw = -1;      // wall clock of the last redraw, in seconds
+public D3.frameInterval = 0.0166; // 1/60 — the backend budget, not the VM rate
+public D3.drawn = 0;          // frames actually re-stroked
+
+/* ---- easing ---------------------------------------------------------- */
+public D3.ease = 0;           // shared result slot: procedures cannot return
+public D3.easeLinear = 0;
+public D3.easeInQuad = 1;
+public D3.easeOutQuad = 2;
+public D3.easeInOutQuad = 3;
+public D3.easeInCubic = 4;
+public D3.easeOutCubic = 5;
+public D3.easeInOutCubic = 6;
+public D3.easeInExpo = 7;
+public D3.easeOutExpo = 8;
+public D3.easeInOutSine = 9;
+public D3.easeOutBack = 10;
+public D3.easeOutElastic = 11;
+
+metadata note Stage at 51,54 350x170: "{\"framerate\":180,\"runtimeOptions\":{\"maxClones\":Infinity,\"miscLimits\":false,\"fencing\":false},\"turbo\":true,\"hq\":true} // _twconfig_";
+// This metadata is important that it can improve performance. Do not remove.
+
+/*
+ * Test clock. Inside NotePlayer this comes from the player's own tick engine
+ * (`Ticker` in NP4.26 advances `Tick.tick` once per beat subdivision), so delete
+ * this block and the `public Tick.tick` above when embedding — the renderer only
+ * reads the variable, it never advances it.
+ */
+stage {
+    public void greenFlag() { // hook: green flag
+        // The show is 7346 ticks over 211.9 s, i.e. 34.6664 ticks a second, so
+        // the clock cannot simply add one per frame: at 180 FPS that ran the
+        // whole film more than five times too fast. Accumulate real time and
+        // release whole ticks instead, which keeps the rate right whatever the
+        // frame rate turns out to be.
+        _last = Sensing.timer();
+        _acc = 0;
+        while (1) {
+            _nowT = Sensing.timer();
+            _acc += (_nowT - _last) * D3.tickRate;
+            _last = _nowT;
+            while (_acc >= 1) {
+                Tick.tick += 1;
+                _acc -= 1;
+            }
+            Control.wait(0.004);
+        }
+    }
+}
+
+D3: name="D3", x=0, y=0, size=100, direction=90, show=0, costume=0, volume=100, layer=1, rotation="all", draggable=0, namespace="D3";
+class D3 {
+    private yaw = 0;
+    private pitch = 0;
+    public D3.pos = [];
+    public D3.idx = [];
+    public D3.proj = [];
+
+    public void greenFlag() { // hook: green flag
+        Looks.hide();
+        prepare();
+        // startTick offsets the clock, so a review can begin at any shot
+        D3.showOrigin = Tick.tick - D3.startTick;
+        Motion.setXY(0, 0);
+        D3.lastTick = -1;
+        D3.lastDraw = -1;
+        D3.drawn = 0;
+        while (1) {
+            frame();
+        }
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* frame                                                              */
+    /* ------------------------------------------------------------------ */
+
+    private void frame() { // warp
+        if (D3.active == 0) {
+            return;
+        }
+        // `Tick.tick` is whole beats of the sequencer: at 34.6664 ticks a second
+        // it only moves 35 times, while the pen is asked to draw 60 times. That
+        // is 25 redundant frames a second and visible judder on anything that
+        // slides. So the tick is the *music* clock and the picture runs on
+        // `showTick`, which is that tick plus how far the wall clock has moved
+        // into the next one. Nothing downstream has to know: `shotAt`,
+        // `applyKeys` and the motifs all take a fractional tick already.
+        _now = Tick.tick;
+        _clock = Sensing.timer();
+        if (_now != D3.lastTick) {
+            D3.lastTick = _now;
+            D3.tickAt = _clock;
+        }
+        // Never more than ~60 redraws a second, even though Turbo Mode calls
+        // this 180 times. A 60 FPS frame lands only ~16.7 ms after the last one,
+        // so compare against a slightly looser budget than 1/60 or timer jitter
+        // eats every second pose.
+        if (_clock - D3.lastDraw < D3.frameInterval * 0.9) {
+            return;
+        }
+        D3.lastDraw = _clock;
+
+        // How far into the current tick we are, 0 just after it landed and
+        // just under 1 before the next one. Clamped because a host that pauses
+        // its sequencer would otherwise run the fraction away to infinity.
+        _frac = (_clock - D3.tickAt) * D3.tickRate;
+        if (_frac < 0) {
+            _frac = 0;
+        }
+        if (_frac > 0.999) {
+            _frac = 0.999;
+        }
+        // A stopped sequencer leaves the fraction pinned at its ceiling, so the
+        // pose stops changing. Drawing it sixty times a second anyway is pure
+        // waste; one frame at the ceiling is enough until the next tick lands.
+        if (_frac > 0.99 && D3.lastFrac > 0.99) {
+            return;
+        }
+        D3.lastFrac = _frac;
+
+        // The show is relative to when it started, so it looks the same whether
+        // it runs standalone or inside a player whose clock is already at 2159.
+        // A player reset moves the clock backwards: re-origin instead of
+        // rendering a wild jump.
+        if (_now - D3.showOrigin < 0) {
+            D3.showOrigin = _now - D3.startTick;
+        }
+        D3.showTick = _now - D3.showOrigin + _frac;
+        if (D3.holdTick >= 0) {
+            D3.showTick = D3.holdTick;
+        }
+        if (D3.showTick > D3.totalTicks) {
+            return;
+        }
+        // stopTick closes the window a review plays, so the frame after it holds
+        // whatever was drawn last instead of running on into the next show
+        if (D3.stopTick >= 0 && D3.showTick > D3.stopTick) {
+            return;
+        }
+        // the beat follows the song clock, not the show position, so a pinned
+        // frame still blinks in time; the fraction keeps the pulses smooth
+        beatClock(_now + _frac);
+
+        shotAt(D3.showTick);
+        if (D3.shotId == 16) {
+            _lit = 0;
+            if (D3.beatPhase < 0.5) {
+                _lit = 1;
+            }
+            seg(D3.showTick - D3.shotT0, 2, 16);
+            _a1 = floor(D3.ease * 40);
+            seg(D3.showTick - D3.shotT0, 16, 26);
+            _a2 = floor(D3.ease * 40);
+            _sig = _lit * 10000 + _a1 * 100 + _a2;
+            if (_sig == D3.sig) {
+                return;
+            }
+            D3.sig = _sig;
+        }
+        D3.shotP = (D3.showTick - D3.shotT0) / (D3.shotT1 - D3.shotT0);
+        applyKeys(D3.showTick);
+
+        // The transition is a collapse: the outgoing shot shrinks to a point
+        // over the last `fade` ticks, the incoming one grows out of it over the
+        // first `fade`. One scene is drawn per frame, never two.
+        D3.wScale = 1;
+        if (D3.fade > 0) {
+            if (D3.showTick >= D3.shotT1 - D3.fade) {
+                _q = (D3.showTick - (D3.shotT1 - D3.fade)) / D3.fade;
+                easeBy(0, _q);
+                D3.wScale = 1 - D3.ease * 0.92;
+            } else {
+                if (D3.showTick < D3.shotT0 + D3.fade) {
+                    _q = (D3.showTick - D3.shotT0) / D3.fade;
+                    easeBy(0, _q);
+                    D3.wScale = 0.08 + D3.ease * 0.92;
+                }
+            }
+        }
+        if (D3.wScale < 0.02) {
+            D3.wScale = 0.02;
+        }
+
+        D3.hud = 0;
+        sectionAt(D3.showTick);
+        drawScene(D3.shotId, D3.showTick, D3.shotParam);
+        // the film's `overlays()` caption is drawn over every shot that has one
+        if (D3.shotCaption != "") {
+            D3.hud = 1;
+        }
+        render();
+        if (D3.hud == 1) {
+            drawHud(D3.shotId, D3.showTick);
+        }
+        D3.drawn += 1;
+        // The pen layer is project-wide, so anything that has to sit on top of
+        // the scene has to be drawn again here. A host opts in by listening for
+        // this broadcast; with nobody listening it costs nothing but the send.
+        if (D3.onFrame == 1) {
+            call D3.afterFrame();
+        }
+    }
+
+    /* Beat position and the two decaying pulses, straight off the tick. */
+    private void beatClock(t) { // warp
+        D3.beatPhase = (t % D3.ticksPerBeat) / D3.ticksPerBeat;
+        D3.barPhase = (t % D3.ticksPerBar) / D3.ticksPerBar;
+        D3.pulseBeat = exp((0 - D3.beatPhase) * 5);
+        D3.pulseBar = exp((0 - D3.barPhase) * 3.2);
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* shot timeline                                                       */
+    /* ------------------------------------------------------------------ */
+
+    /*
+     * The shot whose window contains t. Shots are sorted by start tick; each one
+     * ends where the next begins and the last ends at `totalTicks`.
+     */
+    private void shotAt(t) { // warp
+        _n = D3.shots.length() / D3.shotStride;
+        D3.shotIndex = 1;
+        if (_n < 1) {
+            D3.shotId = 1;
+            D3.shotT0 = 0;
+            D3.shotT1 = D3.totalTicks;
+            D3.fade = 0;
+            D3.shotCaption = "";
+            return;
+        }
+        _i = 1;
+        _best = 1;
+        while (_i <= _n) {
+            if (t >= D3.shots.get((_i - 1) * D3.shotStride + 1)) {
+                _best = _i;
+            }
+            _i += 1;
+        }
+        D3.shotIndex = _best;
+        D3.shotId = D3.shots.get((_best - 1) * D3.shotStride + 2);
+        D3.fade = D3.shots.get((_best - 1) * D3.shotStride + 3);
+        D3.shotParam = D3.shots.get((_best - 1) * D3.shotStride + 4);
+        D3.shotCaption = D3.shots.get((_best - 1) * D3.shotStride + 5);
+        D3.shotT0 = D3.shots.get((_best - 1) * D3.shotStride + 1);
+        if (_best < _n) {
+            D3.shotT1 = D3.shots.get(_best * D3.shotStride + 1);
+        } else {
+            D3.shotT1 = D3.totalTicks;
+        }
+        if (D3.shotT1 <= D3.shotT0) {
+            D3.shotT1 = D3.shotT0 + 1;
+        }
+        // A fade may never eat more than a quarter of its own shot: at nine
+        // ticks in and nine out, a twenty-tick shot would never reach full size
+        // and the fast sections would read as one long collapse.
+        if (D3.fade > (D3.shotT1 - D3.shotT0) / 4) {
+            D3.fade = (D3.shotT1 - D3.shotT0) / 4;
+        }
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* keyframes                                                           */
+    /* ------------------------------------------------------------------ */
+
+    /*
+     * Key rows are `tick, yaw, pitch, dist, easeId`. Find the row the clock is
+     * in and how far it has crossed the gap to the next one; a clock before the
+     * first key holds it, a clock past the last one holds that.
+     */
+    private void kfAt(t) { // warp
+        _n = D3.keys.length() / D3.keyStride;
+        D3.kfRow = 1;
+        D3.kfK = 0;
+        if (_n < 2) {
+            return;
+        }
+        _i = 1;
+        while (_i < _n) {
+            _ta = D3.keys.get((_i - 1) * D3.keyStride + 1);
+            _tb = D3.keys.get(_i * D3.keyStride + 1);
+            if (t < _tb) {
+                if (t <= _ta) {
+                    D3.kfRow = _i;
+                    D3.kfK = 0;
+                } else {
+                    D3.kfRow = _i;
+                    D3.kfK = (t - _ta) / (_tb - _ta);
+                }
+                return;
+            }
+            _i += 1;
+        }
+        D3.kfRow = _n - 1;
+        D3.kfK = 1;
+    }
+
+    private void applyKeys(t) { // warp
+        if (D3.keys.length() < D3.keyStride) {
+            return;
+        }
+        kfAt(t);
+        _a = (D3.kfRow - 1) * D3.keyStride + 1;
+        _b = D3.kfRow * D3.keyStride + 1;
+        // The ease id lives on the destination key: the shape belongs to the
+        // move you are making, not the one you came from.
+        easeBy(D3.keys.get(_b + 4), D3.kfK);
+        D3.camYaw = D3.keys.get(_a + 1) + (D3.keys.get(_b + 1) - D3.keys.get(_a + 1)) * D3.ease;
+        D3.camPitch = D3.keys.get(_a + 2) + (D3.keys.get(_b + 2) - D3.keys.get(_a + 2)) * D3.ease;
+        D3.camDist = D3.keys.get(_a + 3) + (D3.keys.get(_b + 3) - D3.keys.get(_a + 3)) * D3.ease;
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* easing                                                              */
+    /* ------------------------------------------------------------------ */
+
+    /*
+     * A Scratch custom block cannot return a value (E0051), so every easing
+     * writes the shared `ease` slot. Read it immediately after the call.
+     * `case _` is linear, so an unknown id degrades to a straight line instead
+     * of a wrong curve.
+     */
+    public void easeBy(id, p) { // warp
+        _e = p;
+        if (_e < 0) {
+            _e = 0;
+        }
+        if (_e > 1) {
+            _e = 1;
+        }
+        switch (id) {
+            case 1 { D3.ease = _e * _e; }
+            case 2 { D3.ease = 1 - (1 - _e) * (1 - _e); }
+            case 3 {
+                if (_e < 0.5) {
+                    D3.ease = 2 * _e * _e;
+                } else {
+                    D3.ease = 1 - (2 - 2 * _e) * (2 - 2 * _e) / 2;
+                }
+            }
+            case 4 { D3.ease = _e * _e * _e; }
+            case 5 { D3.ease = 1 - (1 - _e) * (1 - _e) * (1 - _e); }
+            case 6 {
+                if (_e < 0.5) {
+                    D3.ease = 4 * _e * _e * _e;
+                } else {
+                    D3.ease = 1 - (2 - 2 * _e) * (2 - 2 * _e) * (2 - 2 * _e) / 2;
+                }
+            }
+            case 7 {
+                if (_e == 0) {
+                    D3.ease = 0;
+                } else {
+                    D3.ease = exp((10 * _e - 10) * 0.6931472);
+                }
+            }
+            case 8 {
+                if (_e == 1) {
+                    D3.ease = 1;
+                } else {
+                    D3.ease = 1 - exp(0 - 10 * _e * 0.6931472);
+                }
+            }
+            case 9 { D3.ease = (1 - cos(_e * 180)) / 2; }
+            case 10 { easeBack(_e); }
+            case 11 { easeElastic(_e); }
+            case _ { D3.ease = _e; }
+        }
+    }
+
+    /* outBack and outElastic have no scratch variables of their own to reuse. */
+    private void easeBack(p) { // warp
+        _x = p - 1;
+        D3.ease = 1 + 2.70158 * _x * _x * _x + 1.70158 * _x * _x;
+    }
+
+    private void easeElastic(p) { // warp
+        if (p == 0) {
+            D3.ease = 0;
+        } else {
+            if (p == 1) {
+                D3.ease = 1;
+            } else {
+                D3.ease = 1 + sin((10 * p - 0.75) * 120) * exp(0 - 10 * p * 0.6931472);
+            }
+        }
+    }
+
+    /* Stable pseudo-random in [0,1) for an integer key — the same key, same value. */
+    public void hash01(n) { // warp
+        D3.ease = (n * 12.9898 + 78.233);
+        D3.ease = (sin(D3.ease) * 43758.5453) % 1;
+        if (D3.ease < 0) {
+            D3.ease = D3.ease + 1;
+        }
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* scenes                                                              */
+    /* ------------------------------------------------------------------ */
+
+    /*
+     * One motif per scene id. `par` is the shot's own knob: the same motif ten
+     * ways instead of one shape for the whole film.
+     */
+    private void drawScene(id, t, par) { // warp
+        _v = 1;
+        _e = 1;
+        D3.nv = 0;
+        D3.ne = 0;
+        D3.shotParam = par;
+        switch (id) {
+            case 1 { buildGrid(t); }
+            case 2 { buildTunnel(t); }
+            case 3 { buildWave(t); }
+            case 4 { buildCube(t); }
+            case 5 { buildStars(t, par); }
+            case 6 { buildSphere(t, par); }
+            case 7 { buildRings(t, par); }
+            case 8 { buildNetwork(t, par); }
+            case 9 { buildGlyphs(t, par); }
+            case 10 { buildHelix(t, par); }
+            case 11 { buildCurve(t, par); }
+            case 12 { buildShards(t, par); }
+            case 13 { buildLattice(t, par); }
+            case 14 { buildDial(t, par); }
+            case 15 { buildArrow(t, par); }
+            case 16 { buildCursor(t, par); }
+            case 17 { buildTrace(t, par); }
+            case 18 { buildCurrent(t, par); }
+            case 19 { buildTrails(t, par); }
+            case 20 { buildTrailsTop(t, par); }
+            case _ { buildPoly(t); }
+        }
+    }
+
+    /* Append one vertex; `nv` counts them so edges can name the last two. */
+    public void v3(x, y, z) { // warp
+        D3.pos.set(_v, x);
+        D3.pos.set(_v + 1, y);
+        D3.pos.set(_v + 2, z);
+        _v += 3;
+        D3.nv += 1;
+    }
+
+    public void e2(a, b) { // warp
+        D3.idx.set(_e, a);
+        D3.idx.set(_e + 1, b);
+        _e += 2;
+        D3.ne += 1;
+    }
+
+    /* An icosahedron: twelve vertices, thirty edges, breathing. */
+    private void buildPoly(t) { // warp
+        D3.penColor = "#7fd1ff";
+        D3.penSize = 2;
+        view(1, 0, 0, 0.25, 0);
+        _r = 1 + 0.14 * D3.pulseBeat;
+        _g = (1 + sqrt(5)) / 2 * _r * 0.62;
+        v3(0 - _r * 0.62, _g, 0); v3(_r * 0.62, _g, 0);
+        v3(0 - _r * 0.62, 0 - _g, 0); v3(_r * 0.62, 0 - _g, 0);
+        v3(0, 0 - _r * 0.62, _g); v3(0, _r * 0.62, _g);
+        v3(0, 0 - _r * 0.62, 0 - _g); v3(0, _r * 0.62, 0 - _g);
+        v3(_g, 0, 0 - _r * 0.62); v3(_g, 0, _r * 0.62);
+        v3(0 - _g, 0, 0 - _r * 0.62); v3(0 - _g, 0, _r * 0.62);
+        e2(1, 2); e2(1, 6); e2(1, 8); e2(1, 11); e2(1, 12);
+        e2(2, 6); e2(2, 8); e2(2, 9); e2(2, 10);
+        e2(3, 4); e2(3, 5); e2(3, 7); e2(3, 11); e2(3, 12);
+        e2(4, 5); e2(4, 7); e2(4, 9); e2(4, 10);
+        e2(5, 6); e2(5, 10); e2(5, 12);
+        e2(6, 10); e2(6, 12);
+        e2(7, 8); e2(7, 9); e2(7, 11);
+        e2(8, 9); e2(8, 11);
+        e2(9, 10); e2(11, 12);
+    }
+
+    /*
+     * A floor plane running away from the camera: lines across it, lines along
+     * it, and a few posts so the plane reads as having height.
+     */
+    private void buildGrid(t) { // warp
+        D3.penColor = "#59e0a8";
+        D3.penSize = 2;
+        view(0, 22, 2.5, 3, 0);
+        _cols = 7;
+        _rows = 5;
+        _z0 = 0 - (t * 0.06 + D3.pulseBar * 0.6) % 2;
+        _i = 0;
+        while (_i < _rows) {
+            _z = _z0 + _i * 2.5 + 1;
+            v3(0 - 9, 0 - 2, _z); v3(9, 0 - 2, _z); e2(D3.nv - 1, D3.nv);
+            _i += 1;
+        }
+        _j = 0;
+        while (_j < _cols) {
+            _x = 0 - 9 + _j * 3;
+            v3(_x, 0 - 2, _z0 + 1); v3(_x, 0 - 2, _z0 + 13); e2(D3.nv - 1, D3.nv);
+            _j += 1;
+        }
+        _p = 0;
+        while (_p < 4) {
+            _x = 0 - 6 + _p * 4;
+            v3(_x, 0 - 2, 3); v3(_x, 2.5, 3); e2(D3.nv - 1, D3.nv);
+            _p += 1;
+        }
+    }
+
+    /* Six octagonal rings receding down a tunnel, each one turning a little. */
+    private void buildTunnel(t) { // warp
+        D3.penColor = "#ffb454";
+        D3.penSize = 2;
+        view(0, 0, 0, 1.2, 0);
+        _rings = 6;
+        _sides = 8;
+        _slip = t * 0.05 % 2;
+        _i = 0;
+        while (_i < _rings) {
+            _z = 0.8 + _i * 2.2 - _slip;
+            _rad = 2.35 + 0.35 * sin(_i * 47 + t * 7);
+            _base = _i * 11 + t * 1.7;
+            _s = 0;
+            while (_s < _sides) {
+                _ang = _base + _s * 45;
+                v3(cos(_ang) * _rad, sin(_ang) * _rad, _z);
+                _s += 1;
+            }
+            _s = 0;
+            while (_s < _sides) {
+                e2(D3.nv - _sides + _s + 1, D3.nv - _sides + ((_s + 1) % _sides) + 1);
+                _s += 1;
+            }
+            _i += 1;
+        }
+    }
+
+    /* A sine sheet, rippling on the beat. */
+    private void buildWave(t) { // warp
+        D3.penColor = "#7fd1ff";
+        D3.penSize = 2;
+        view(0, 18, 1.5, 1.5, 0);
+        _rows = 4;
+        _cols = 5;
+        _i = 0;
+        while (_i <= _rows) {
+            _z = _i * 2 - 2;
+            _j = 0;
+            while (_j <= _cols) {
+                _x = _j * 1.2 - 3;
+                _y = 0.9 * sin(_x * 55 + t * 9) * cos(_z * 40 - t * 6) + D3.pulseBeat * 0.45;
+                v3(_x, _y, _z);
+                _j += 1;
+            }
+            _i += 1;
+        }
+        _i = 0;
+        while (_i <= _rows) {
+            _j = 0;
+            while (_j < _cols) {
+                e2(_i * (_cols + 1) + _j + 1, _i * (_cols + 1) + _j + 2);
+                _j += 1;
+            }
+            _i += 1;
+        }
+        _i = 0;
+        while (_i < _rows) {
+            _j = 0;
+            while (_j <= _cols) {
+                e2(_i * (_cols + 1) + _j + 1, (_i + 1) * (_cols + 1) + _j + 1);
+                _j += 1;
+            }
+            _i += 1;
+        }
+    }
+
+    /* Two nested cubes, the inner one tumbling the other way. */
+    private void buildCube(t) { // warp
+        D3.penColor = "#c78bff";
+        D3.penSize = 2;
+        view(1, 0, 0, 0.25, 0);
+        pivot(0, 0, 1.35);
+        corner(); corner(); corner(); corner();
+        corner(); corner(); corner(); corner();
+        e2(1, 2); e2(2, 3); e2(3, 4); e2(4, 1);
+        e2(5, 6); e2(6, 7); e2(7, 8); e2(8, 5);
+        e2(1, 5); e2(2, 6); e2(3, 7); e2(4, 8);
+        pivot(t * 2.2, t * 1.4, 0.7 + 0.12 * D3.pulseBeat);
+        corner(); corner(); corner(); corner();
+        corner(); corner(); corner(); corner();
+        e2(9, 10); e2(10, 11); e2(11, 12); e2(12, 9);
+        e2(13, 14); e2(14, 15); e2(15, 16); e2(16, 13);
+        e2(9, 13); e2(10, 14); e2(11, 15); e2(12, 16);
+        e2(1, 9); e2(2, 10); e2(3, 11); e2(4, 12);
+    }
+
+    /* Set the rotation and scale the next eight `corner()` calls use. */
+    private void pivot(ay, ax, sc) { // warp
+        _c1 = cos(ay); _s1 = sin(ay);
+        _c2 = cos(ax); _s2 = sin(ax);
+        _sc = sc;
+    }
+
+    /*
+     * The eight corners of a unit cube, yawed then pitched then scaled. Called
+     * eight times in a row, it writes vertex 1..8 — or 9..16 the second time.
+     */
+    private void corner() { // warp
+        _q = D3.nv % 8;
+        _x = 1;
+        _y = 1;
+        _z = 1;
+        if (_q == 0) { _y = 0 - 1; _z = 0 - 1; }
+        if (_q == 1) { _x = 0 - 1; _y = 0 - 1; _z = 0 - 1; }
+        if (_q == 2) { _x = 0 - 1; _z = 0 - 1; }
+        if (_q == 3) { _y = 0 - 1; }
+        if (_q == 4) { _z = 0 - 1; }
+        if (_q == 5) { _x = 0 - 1; _z = 0 - 1; }
+        if (_q == 6) { _x = 0 - 1; }
+        _x1 = _x * _c1 + _z * _s1;
+        _z1 = _z * _c1 - _x * _s1;
+        _y1 = _y * _c2 - _z1 * _s2;
+        _z2 = _z1 * _c2 + _y * _s2;
+        v3(_x1 * _sc, _y1 * _sc, _z2 * _sc);
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* motif helpers                                                       */
+    /* ------------------------------------------------------------------ */
+
+    /*
+     * One call sets the whole camera mode for a motif, so a scene can never
+     * inherit the previous shot's clipping or pitch.
+     */
+    private void view(orb, pit, bias, nz, damp) { // warp
+        D3.orbit = orb;
+        // `damp` cancels the keyframe yaw: a flat motif that kept it would end
+        // up edge-on for a third of the film and draw almost nothing.
+        D3.baseYaw = 0 - D3.camYaw * damp;
+        D3.basePitch = pit;
+        D3.viewBias = bias;
+        D3.nearZ = nz;
+        D3.ortho = 0;
+    }
+
+    /* Six hues, rotated by the shot so one motif is never one colour all film. */
+    private void tint(k) { // warp
+        _m = k % 6;
+        if (_m < 0) {
+            _m += 6;
+        }
+        switch (_m) {
+            case 1 { D3.penColor = "#59e0a8"; }
+            case 2 { D3.penColor = "#ffb454"; }
+            case 3 { D3.penColor = "#c78bff"; }
+            case 4 { D3.penColor = "#ff7f9e"; }
+            case 5 { D3.penColor = "#e6e6e6"; }
+            case _ { D3.penColor = "#7fd1ff"; }
+        }
+        D3.penSize = 2;
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* motifs                                                              */
+    /* ------------------------------------------------------------------ */
+
+    /* A point field streaming towards the camera; each star is a short tick. */
+    private void buildStars(t, par) { // warp
+        view(0, 8, 0, 0.6, 0);
+        tint(par);
+        _n = 22 + par;
+        _i = 0;
+        while (_i < _n) {
+            hash01(_i * 17 + 3);
+            _sp = 3 + D3.ease * 5;
+            _z = 11 - (D3.ease * 11 + t * 0.35 * _sp) % 11;
+            // Spread the field with depth, so a star keeps its place on screen
+            // instead of flying off the side as it comes towards the camera.
+            _fan = _z + D3.camDist;
+            hash01(_i * 7 + 1);
+            _x = (D3.ease - 0.5) * _fan * 0.55;
+            hash01(_i * 13 + 2);
+            _y = (D3.ease - 0.5) * _fan * 0.38;
+            hash01(_i * 23 + 4);
+            _len = 0.45 + D3.ease * 0.75;
+            v3(_x, _y, _z);
+            v3(_x + _len, _y + _len * 0.5, _z);
+            e2(D3.nv - 1, D3.nv);
+            _i += 1;
+        }
+    }
+
+    /* Latitude rings plus a few meridians. */
+    private void buildSphere(t, par) { // warp
+        view(1, 12 + par * 3, 0, 0.3, 0);
+        tint(par + 6);
+        _lat = 3;
+        _seg = 10;
+        _r = 1.5;
+        _i = 0;
+        while (_i < _lat) {
+            _y = (0 - 1.0) + _i * 1.0;
+            _rr = sqrt(_r * _r - _y * _y);
+            _s = 0;
+            while (_s < _seg) {
+                _a = _s * 36 + t * (1.6 + par * 0.2);
+                v3(cos(_a) * _rr, _y, sin(_a) * _rr);
+                _s += 1;
+            }
+            _s = 0;
+            while (_s < _seg) {
+                e2(D3.nv - _seg + _s + 1, D3.nv - _seg + ((_s + 1) % _seg) + 1);
+                _s += 1;
+            }
+            _i += 1;
+        }
+        _m = 3;
+        _i = 0;
+        while (_i < _m) {
+            _a0 = _i * 60 + t * 2.2;
+            _s = 0;
+            while (_s < 6) {
+                _y = 0 - 1.4 + _s * 0.56;
+                _rr = sqrt(_r * _r - _y * _y);
+                v3(cos(_a0) * _rr, _y, sin(_a0) * _rr);
+                _s += 1;
+            }
+            _s = 0;
+            while (_s < 5) {
+                e2(D3.nv - 5 + _s, D3.nv - 5 + _s + 1);
+                _s += 1;
+            }
+            _i += 1;
+        }
+    }
+
+    /* Concentric rings breathing in and out of the plane. */
+    private void buildRings(t, par) { // warp
+        view(0, 26 + par * 3, 0, 0.3, 0.12);
+        tint(par + 12);
+        _n = 5;
+        _seg = 10;
+        _i = 0;
+        while (_i < _n) {
+            _rad = 0.7 + _i * 0.42 + D3.pulseBeat * 0.15;
+            _z = sin(t * (2 + par) + _i * 40) * 0.45;
+            _s = 0;
+            while (_s < _seg) {
+                _a = _s * 36 + _i * 9;
+                v3(cos(_a) * _rad, sin(_a) * _rad, _z);
+                _s += 1;
+            }
+            _s = 0;
+            while (_s < _seg) {
+                e2(D3.nv - _seg + _s + 1, D3.nv - _seg + ((_s + 1) % _seg) + 1);
+                _s += 1;
+            }
+            _i += 1;
+        }
+    }
+
+    /* A drifting node graph: no shapes, only links. */
+    private void buildNetwork(t, par) { // warp
+        view(1, 10 + par * 3, 0, 0.4, 0);
+        tint(par + 18);
+        _n = 10;
+        _i = 0;
+        while (_i < _n) {
+            hash01(_i * 11 + 5);
+            _x = (D3.ease - 0.5) * 4.2;
+            hash01(_i * 19 + 6);
+            _y = (D3.ease - 0.5) * 3.2;
+            hash01(_i * 29 + 7);
+            _z = (D3.ease - 0.5) * 4.0 + sin(t * 1.5 + _i * 30) * 0.3;
+            v3(_x, _y, _z);
+            _i += 1;
+        }
+        _i = 0;
+        while (_i < _n) {
+            e2(_i + 1, ((_i + 3) % _n) + 1);
+            e2(_i + 1, ((_i + 6) % _n) + 1);
+            _i += 1;
+        }
+    }
+
+    /* A wall of code ticks: short vertical marks on a receding plane. */
+    private void buildGlyphs(t, par) { // warp
+        view(0, 12 + par, 1.5, 2.2, 0.12);
+        tint(par + 24);
+        _cols = 8;
+        _rows = 4;
+        _i = 0;
+        while (_i < _rows) {
+            _y = 2.0 - _i * 1.35;
+            _j = 0;
+            while (_j < _cols) {
+                hash01(_i * 31 + _j * 7 + 9);
+                _x = 0 - 4.2 + _j * 1.2 + (D3.ease - 0.5) * 0.35;
+                _z = 2.6 + _i * 0.7 + sin(t * 2 + _i * 20 + _j * 13) * 0.2;
+                pulseHeight(_i, _j, par);
+                _h = 0.5 + D3.ease * 0.7;
+                v3(_x, _y - _h, _z);
+                v3(_x, _y + _h, _z);
+                e2(D3.nv - 1, D3.nv);
+                _j += 1;
+            }
+            _i += 1;
+        }
+    }
+
+    /* Two strands of a double helix, with rungs. */
+    private void buildHelix(t, par) { // warp
+        view(0, 4 + par * 2, 0, 1.0, 0);
+        tint(par + 30);
+        _n = 12;
+        _turn = 26 + par * 2;
+        _i = 0;
+        while (_i < _n) {
+            _a = _i * _turn + t * 3;
+            _z = _i * 0.55 - 2.5;
+            _r = 1.05;
+            v3(cos(_a) * _r, sin(_a) * _r, _z);
+            v3(cos(_a + 180) * _r, sin(_a + 180) * _r, _z);
+            _i += 1;
+        }
+        _i = 0;
+        while (_i < _n - 1) {
+            e2(_i * 2 + 1, _i * 2 + 3);
+            e2(_i * 2 + 2, _i * 2 + 4);
+            _i += 1;
+        }
+        _i = 0;
+        while (_i < _n - 2) {
+            e2(_i * 2 + 1, _i * 2 + 2);
+            _i += 2;
+        }
+    }
+
+    /* A closed polar curve, doubled and counter-rotating. */
+    private void buildCurve(t, par) { // warp
+        view(0, 8 + par * 3, 0, 0.3, 0.12);
+        tint(par + 36);
+        _n = 22;
+        _k = 2 + par % 4;
+        _i = 0;
+        while (_i < _n) {
+            _a = _i * (360 / _n);
+            _r = 1.55 + 0.85 * cos(_a * _k);
+            v3(cos(_a) * _r, sin(_a) * _r, 0.35 * sin(_a * 2 + t * 2));
+            v3(cos(_a + 180) * _r * 0.62, sin(_a + 180) * _r * 0.62, 0 - 0.35 * sin(_a * 2 + t * 2));
+            _i += 1;
+        }
+        _i = 0;
+        while (_i < _n) {
+            e2(_i * 2 + 1, (((_i + 1) % _n) * 2) + 1);
+            e2(_i * 2 + 2, (((_i + 1) % _n) * 2) + 2);
+            _i += 1;
+        }
+    }
+
+    /* Scattered fragments, drifting apart and snapping back. */
+    private void buildShards(t, par) { // warp
+        view(1, 6 + par * 4, 0, 0.3, 0);
+        tint(par + 42);
+        _n = 20;
+        _i = 0;
+        while (_i < _n) {
+            hash01(_i * 13 + 11);
+            _x = (D3.ease - 0.5) * 5.0;
+            hash01(_i * 17 + 12);
+            _y = (D3.ease - 0.5) * 4.0;
+            hash01(_i * 19 + 13);
+            _z = (D3.ease - 0.5) * 3.0;
+            hash01(_i * 23 + 14);
+            _dx = (D3.ease - 0.5) * 1.5;
+            hash01(_i * 29 + 15);
+            _dy = (D3.ease - 0.5) * 1.5;
+            _d = 0.4 + D3.pulseBeat * 0.8;
+            v3(_x + _dx, _y + _dy, _z);
+            v3(_x - _dx, _y - _dy, _z + _d);
+            e2(D3.nv - 1, D3.nv);
+            _i += 1;
+        }
+    }
+
+    /* Three stacked 3x3 grids joined at the corners: a box of wire. */
+    private void buildLattice(t, par) { // warp
+        view(1, 16 + par * 3, 0, 0.3, 0);
+        tint(par + 48);
+        _g = 2.6;
+        _layer = 0;
+        while (_layer < 3) {
+            _y = (0 - 1.0) + _layer * 1.0;
+            _i = 0;
+            while (_i < 3) {
+                _j = 0;
+                while (_j < 3) {
+                    v3((_i - 1) * _g, _y, (_j - 1) * _g + sin(t * 1.4 + _layer) * 0.15);
+                    _j += 1;
+                }
+                _i += 1;
+            }
+            _layer += 1;
+        }
+        _layer = 0;
+        while (_layer < 3) {
+            _b = _layer * 9;
+            _i = 0;
+            while (_i < 3) {
+                e2(_b + _i * 3 + 1, _b + _i * 3 + 2);
+                e2(_b + _i * 3 + 2, _b + _i * 3 + 3);
+                _i += 1;
+            }
+            e2(_b + 1, _b + 4);
+            e2(_b + 4, _b + 7);
+            if (_layer < 2) {
+                e2(_b + 1, _b + 10);
+                e2(_b + 3, _b + 12);
+                e2(_b + 7, _b + 16);
+                e2(_b + 9, _b + 18);
+            }
+            _layer += 1;
+        }
+    }
+
+    /* A gauge: ticks on an arc, a needle, and a track chord. */
+    private void buildDial(t, par) { // warp
+        view(0, 6 + par * 2, 0, 0.3, 0.12);
+        tint(par + 54);
+        _n = 14;
+        _i = 0;
+        while (_i < _n) {
+            _a = 150 + _i * (240 / _n);
+            _hit = D3.pulseBeat > 0.55;
+            if (_hit) { _r0 = 1.7; } else { _r0 = 1.9; }
+            v3(cos(_a) * _r0, sin(_a) * _r0, 0);
+            v3(cos(_a) * 2.4, sin(_a) * 2.4, 0);
+            e2(D3.nv - 1, D3.nv);
+            _i += 1;
+        }
+        _a = 150 + D3.barPhase * 240;
+        v3(0, 0, 0.05);
+        v3(cos(_a) * 2.3, sin(_a) * 2.3, 0.05);
+        e2(D3.nv - 1, D3.nv);
+        _i = 0;
+        while (_i < 10) {
+            _a = 150 + _i * 24;
+            v3(cos(_a) * 2.5, sin(_a) * 2.5, 0);
+            _i += 1;
+        }
+        _i = 0;
+        while (_i < 9) {
+            e2(D3.nv - 9 + _i, D3.nv - 9 + _i + 1);
+            _i += 1;
+        }
+    }
+
+    /* Chevrons stacking up, the film's "prompt" mark. */
+    private void buildArrow(t, par) { // warp
+        view(0, 0, 0, 0.8, 0.12);
+        tint(par + 60);
+        _n = 4;
+        _i = 0;
+        while (_i < _n) {
+            _z = 1.0 + _i * 1.3 - (t * 0.12) % 1.3;
+            _w = 1.5;
+            _h = 1.0;
+            _k = _i * 0.35;
+            v3(0 - _w, _h, _z + _k);
+            v3(0, 0 - _h, _z + _k);
+            v3(0, 0 - _h, _z + _k);
+            v3(0 - _w, 0 - _h - _h, _z + _k);
+            _i += 1;
+        }
+        _i = 0;
+        while (_i < _n) {
+            e2(_i * 4 + 1, _i * 4 + 2);
+            e2(_i * 4 + 3, _i * 4 + 4);
+            _i += 1;
+        }
+    }
+
+    /* A per-mark height so the glyph wall is not a comb. */
+    private void pulseHeight(i, j, par) { // warp
+        hash01(i * 41 + j * 17 + par * 3);
+        D3.ease = D3.ease * 0.35;
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* text                                                                */
+    /* ------------------------------------------------------------------ */
+
+    /*
+     * A glyph row is three bits; emit one segment per run of set cells. `plot`
+     * decides where the segment goes: the world buffer during a scene, the pen
+     * directly during the read-out pass.
+     */
+    private void plot(x1, y1, x2, y2) { // warp
+        if (D3.space == 1) {
+            Motion.setXY(x1, y1);
+            Pen.penDown();
+            Motion.setXY(x2, y2);
+            Pen.penUp();
+        } else {
+            v3(x1, y1, 0);
+            v3(x2, y2, 0);
+            e2(D3.nv - 1, D3.nv);
+        }
+    }
+
+    /*
+     * A line of text at the pen, in the terminal's own geometry: 8 px per
+     * cell, 15 rows tall, the top row sitting on `y`. `up` picks the upper or
+     * the lower case glyph for letters; Scratch compares strings without case,
+     * so a glyph cannot work that out for itself.
+     */
+    public void textAt(str, x, y, sc, up) { // warp
+        _sc = sc * D3.textScale;
+        _n = lengthOf(str);
+        _i = 1;
+        while (_i <= _n) {
+            cellGlyph(Operators.letterOf(_i, str), x + (_i - 1) * D3.cellW * _sc, y, _sc, up);
+            _i += 1;
+        }
+    }
+
+    /* A segment in the floor plane: the board is drawn at y = 0. */
+    private void plotXZ(x1, z1, x2, z2) { // warp
+        v3(x1, 0, z1);
+        v3(x2, 0, z2);
+        e2(D3.nv - 1, D3.nv);
+    }
+
+    /* Bit `c` of an eight-bit row, most significant first. */
+    private void bitAt(bits, c) { // warp
+        D3.bit = 0;
+        if (c == 0) { D3.bit = floor(bits / 128) % 2; }
+        if (c == 1) { D3.bit = floor(bits / 64) % 2; }
+        if (c == 2) { D3.bit = floor(bits / 32) % 2; }
+        if (c == 3) { D3.bit = floor(bits / 16) % 2; }
+        if (c == 4) { D3.bit = floor(bits / 8) % 2; }
+        if (c == 5) { D3.bit = floor(bits / 4) % 2; }
+        if (c == 6) { D3.bit = floor(bits / 2) % 2; }
+        if (c == 7) { D3.bit = bits % 2; }
+    }
+
+    /* One glyph of the terminal font at (x, y): the top row sits on y. */
+    private void cellGlyph(ch, x, y, sc, up) { // warp
+        _idx = 0;
+        _k = 1;
+        while (_k <= 95) {
+            if (Operators.letterOf(_k, D3.glyphChars) == ch) {
+                if (_idx < 1) {
+                    _idx = _k;
+                }
+            }
+            _k += 1;
+        }
+        if (_idx < 1) {
+            return;
+        }
+        // the scan stops on the upper case twin of a letter, so step to the
+        // lower case glyph, 32 entries on, when that is what was asked for
+        if (up == 0 && _idx >= 34 && _idx <= 59) {
+            _idx += 32;
+        }
+        _base = (_idx - 1) * D3.cellH;
+        if (_base + D3.cellH > D3.gfont.length()) {
+            return;
+        }
+        _row = 0;
+        while (_row < D3.cellH) {
+            _bits = D3.gfont.get(_base + _row + 1);
+            if (_bits > 0) {
+                _y0 = y - (D3.cellH - 1 - _row) * sc;
+                _run = -1;
+                _c = 0;
+                while (_c < D3.cellW) {
+                    bitAt(_bits, _c);
+                    if (D3.bit == 1) {
+                        if (_run < 0) {
+                            _run = _c;
+                        }
+                    } else {
+                        if (_run >= 0) {
+                            plot(x + _run * sc, _y0, x + _c * sc, _y0);
+                            _run = -1;
+                        }
+                    }
+                    _c += 1;
+                }
+                if (_run >= 0) {
+                    plot(x + _run * sc, _y0, x + D3.cellW * sc, _y0);
+                }
+            }
+            _row += 1;
+        }
+    }
+
+    /* How far t has got from a to b, clamped: the typing progress. */
+    private void seg(t, a, b) { // warp
+        D3.ease = (t - a) / (b - a);
+        if (D3.ease < 0) { D3.ease = 0; }
+        if (D3.ease > 1) { D3.ease = 1; }
+    }
+
+    /* Which song section the clock is in, from the table the generator wrote. */
+    private void sectionAt(t) { // warp
+        _n = D3.sections.length() / 2;
+        D3.sectionNo = 1;
+        _i = 1;
+        while (_i <= _n) {
+            if (t >= D3.sections.get((_i - 1) * 2 + 1)) {
+                D3.sectionNo = _i;
+            }
+            _i += 1;
+        }
+        D3.sectionName = "";
+        _s = 1;
+        _k = 0;
+        _len = lengthOf(D3.sectionNames);
+        while (_s <= _len) {
+            _ch = Operators.letterOf(_s, D3.sectionNames);
+            if (_ch == " ") {
+                _k += 1;
+            } else {
+                if (_k == D3.sectionNo - 1) {
+                    D3.sectionName = join(D3.sectionName, _ch);
+                }
+            }
+            _s += 1;
+        }
+    }
+
+    /* The n-th source line, cut off where the typing has reached. */
+    private void typeLine(line, k) { // warp
+        _src = D3.code.get(line);
+        _cut = floor(k * lengthOf(_src));
+        if (_cut < 0) { _cut = 0; }
+        D3.typed = "";
+        _i = 1;
+        while (_i <= _cut) {
+            D3.typed = join(D3.typed, Operators.letterOf(_i, _src));
+            _i += 1;
+        }
+    }
+
+    public void pad2(n) { // warp
+        D3.out2 = "0" + n;
+        if (n >= 10) { D3.out2 = "" + n; }
+        if (n < 10) { D3.out2 = join("0", n); }
+    }
+
+    /*
+     * The read-out, drawn straight to the pen after the scene, so it does not
+     * move with the camera. Three rows in the top right, like the film's HUD.
+     */
+    private void drawHud(id, t) { // warp
+        D3.space = 1;
+        Pen.setPenSize(1);
+        if (D3.beatPhase < 0.5) {
+            Pen.setPenColorToColor("#e8f2ff");
+        } else {
+            Pen.setPenColorToColor("#6d7d8f");
+        }
+        // The film stamps `overlays(ctx, K, {br})` over the scene in almost
+        // every shot; the caption is right-aligned along the bottom edge.
+        if (D3.shotCaption != "") {
+            Pen.setPenColorToColor("#7f8b99");
+            textAt(D3.shotCaption, 232 - lengthOf(D3.shotCaption) * D3.cellW * D3.textScale, 0 - 172, 1, 0);
+            Pen.setPenColorToColor("#e8f2ff");
+        }
+        switch (id) {
+            case 17 {
+                pad2(floor(D3.hops));
+                textAt(D3.sectionName, 150, 168, 1, 1);
+                textAt("NET  VCC", 150, 152, 1, 1);
+                textAt(join("HOP  ", D3.out2), 150, 136, 1, 1);
+                textAt(join("COPPER ", D3.copper), 150, 120, 1, 1);
+            }
+            case 18 {
+                textAt(D3.sectionName, 150, 168, 1, 1);
+                textAt(join("PULSES ", D3.pulses), 150, 152, 1, 1);
+                textAt("V  1.70 U/S", 150, 136, 1, 1);
+            }
+            case 16 {
+                // `cursor` in 01_intro.js draws exactly one thing: cursorQuad()
+                // filled white, then `overlays(frame: 0)` and `look(vignette
+                // .55, grain)`. CUR is cx 960 cy 540 w 50.4 h 8.4 design px, so
+                // the block is 12.6 x 2.1 stage px at 0.25. blinkOn() lights it
+                // for the first half of every beat and nothing else is on
+                // screen - the code it types belongs to the next shot, not here.
+                if (D3.beatPhase < 0.5) {
+                    // the film blooms this bar hard (glow 18, bloom 1.05); a
+                    // wider dim stroke under a bright core is the pen's version
+                    Pen.setPenSize(7);
+                    Pen.setPenColorToColor("#4a5a7a");
+                    Motion.setXY(0 - 6.3, 0);
+                    Pen.penDown();
+                    Motion.setXY(6.3, 0);
+                    Pen.penUp();
+                    Pen.setPenSize(3);
+                    Pen.setPenColorToColor("#dbe6ff");
+                    Motion.setXY(0 - 6.3, 0);
+                    Pen.penDown();
+                    Motion.setXY(6.3, 0);
+                    Pen.penUp();
+                }
+                Pen.setPenSize(1);
+            }
+        }
+        D3.space = 0;
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* the film's first three shots                                        */
+    /* ------------------------------------------------------------------ */
+
+    /*
+     * Shot 1 — `cursor`. A black frame with a solid block blinking on the beat:
+     * lit for the first half of every beat, dark for the second. Everything here
+     * is read-out space, so the motif itself draws nothing.
+     */
+    private void buildCursor(t, par) { // warp
+        view(0, 0, 0, 0.5, 0.12);
+        tint(62 + par);
+        D3.hud = 1;
+        D3.space = 1;
+        D3.space = 0;
+    }
+
+    /*
+     * `traceState` from the film: hops is a continuous count of sixteenths,
+     * integer steps with an outExpo snap inside each one (`1 - 2^-10x` with x
+     * reaching 1 at 0.6 of the sixteenth).
+     */
+    private void hopsAt(t) { // warp
+        _x = (t - D3.shotT0) / (D3.ticksPerBeat / 4);
+        _f = floor(_x);
+        _fr = _x - _f;
+        if (_fr > 0.6) { _fr = 0.6; }
+        _e = 1 - exp(0 - 6.93147 * (_fr / 0.6));
+        D3.hops = 0;
+        if (_x > 0) {
+            D3.hops = _f + _e;
+        }
+    }
+
+    /* Growth of the board: one hop per sixteenth, eased fast inside each one. */
+    private void traceClock(t) { // warp
+        // one hop per sixteenth note, not per beat
+        _x = (t - D3.shotT0) / (D3.ticksPerBeat / 4);
+        _f = floor(_x);
+        _frac = _x - _f;
+        D3.hops = 0;
+        if (_x > 0) {
+            D3.hops = _f + 1 - exp(0 - _frac / 0.6 * 4);
+        }
+        D3.ring = 0;
+        if (_x > 0) {
+            D3.ring = (D3.hops - 1) / 2;
+        }
+        if (D3.ring < 0) { D3.ring = 0; }
+        if (D3.ring > 1) { D3.ring = 1; }
+    }
+
+    /*
+     * One lane of the board: a right-angled run of three segments in the floor
+     * plane, drawn only as far as the hop count has reached.
+     */
+    private void lane(i, hops, width, bright) { // warp
+        hashSeed(i, 1);
+        _a = D3.seed * 360;
+        hashSeed(i, 2);
+        _r = 1.1 + D3.seed * 1.9;
+        _p0x = 0;
+        _p0z = 0;
+        _p1x = cos(_a) * _r;
+        _p1z = sin(_a) * _r;
+        hashSeed(i, 3);
+        _b = _a + 90 * (1 + D3.seed);
+        hashSeed(i, 4);
+        _l2 = 0.8 + D3.seed * 1.4;
+        _p2x = _p1x + cos(_b) * _l2;
+        _p2z = _p1z + sin(_b) * _l2;
+        hashSeed(i, 5);
+        _c = _b + 90 * (2 * D3.seed - 1);
+        hashSeed(i, 6);
+        _l3 = 0.6 + D3.seed * 1.2;
+        _p3x = _p2x + cos(_c) * _l3;
+        _p3z = _p2z + sin(_c) * _l3;
+
+        _l1 = _r;
+        _d = (hops - (i - 1) * 0.55) * 0.95;
+        if (_d <= 0) {
+            return;
+        }
+        Pen.setPenSize(width);
+        Pen.setPenColorToColor("#8fd9c6");
+        if (bright < 1) {
+            Pen.setPenColorToColor("#4f8f86");
+        }
+        _rem = _d;
+        if (_rem > _l1) {
+            plot(_p0x, 0 - _p0z, _p1x, 0 - _p1z);
+            _rem -= _l1;
+            if (_rem > _l2) {
+                plot(_p1x, 0 - _p1z, _p2x, 0 - _p2z);
+                _rem -= _l2;
+                if (_rem > _l3) {
+                    plot(_p2x, 0 - _p2z, _p3x, 0 - _p3z);
+                    via(_p3x, _p3z, i);
+                } else {
+                    _k = _rem / _l3;
+                    plot(_p2x, 0 - _p2z, _p2x + (_p3x - _p2x) * _k, 0 - (_p2z + (_p3z - _p2z) * _k));
+                }
+            } else {
+                _k = _rem / _l2;
+                plot(_p1x, 0 - _p1z, _p1x + (_p2x - _p1x) * _k, 0 - (_p1z + (_p2z - _p1z) * _k));
+            }
+        } else {
+            _k = _rem / _l1;
+            plot(_p0x, 0 - _p0z, _p1x * _k, 0 - _p1z * _k);
+        }
+    }
+
+    /* A via: a small diamond ring at a bend, once the head has passed it. */
+    private void via(x, z, i) { // warp
+        Pen.setPenSize(1);
+        Pen.setPenColorToColor("#e8c46a");
+        _r = 0.09;
+        plot(x - _r, 0 - z, x + _r, 0 - z);
+    }
+
+    /* A hashed 0..1 from two integers, without disturbing D3.ease's caller. */
+    private void hashSeed(i, k) { // warp
+        hash01(i * 41 + k * 7);
+        D3.seed = D3.ease;
+    }
+
+    /*
+     * Shot 2 — `trace`. Straight down on the floor: the via grid, the board
+     * growing hop by hop, and the power ring closing over it.
+     */
+    /*
+     * Shot 2 `trace`, transcribed from `01_intro.js`. The camera is an
+     * orthographic plan view rising from h0 = CUR3.w * 1080 / CUR.w = 3.4286
+     * world units to 4.1 across the shot; the board is a fixed set of Manhattan
+     * lanes that grow one STEP per sixteenth with an outExpo snap inside each.
+     */
+    private void buildTrace(t, par) { // warp
+        view(0, 0, 0, 0.5, 0.12);
+        tint(1);
+        D3.hud = 1;
+        D3.ortho = 1;
+
+        // 1080 design px per world unit at a camera height of h, in stage px.
+        _q = (t - D3.shotT0) / (D3.shotT1 - D3.shotT0);
+        if (_q < 0) { _q = 0; }
+        if (_q > 1) { _q = 1; }
+        easeBy(9, _q);
+        _h = 3.4286 + (4.1 - 3.4286) * D3.ease;
+        D3.orthoScale = 270 / _h;
+
+        hopsAt(t);
+
+        // The via field: a 0.1 lattice in the film. Sampled at 0.22 here and
+        // pushed through the vertex buffer as zero-length edges - drawing dots
+        // straight to the pen happens before render(), which erases the stage,
+        // so they would be both invisible and a half-second of wasted work.
+        _gz = 0 - 2.2;
+        while (_gz <= 2.2) {
+            _gx = 0 - 2.2;
+            while (_gx <= 2.2) {
+                if (_gx * _gx + _gz * _gz < 4.84) {
+                    // a zero-length edge inks nothing, so each dot is a 1 px dash
+                    plotXZ(_gx, _gz, _gx + 0.015, _gz);
+                }
+                _gx += 0.22;
+            }
+            _gz += 0.22;
+        }
+
+        // The lanes, drawn up to the length the clock has reached.
+        Pen.setPenSize(2);
+        Pen.setPenColorToColor(D3.penColor);
+        _i = 1;
+        _k = 1;
+        while (_i <= D3.nlanes) {
+            _t0 = D3.net.get(_k);
+            _np = D3.net.get(_k + 2);
+            _drawn = (D3.hops - _t0) * D3.netStep;
+            if (_drawn > 0) {
+                _a = _k + 3;
+                _px = D3.net.get(_a);
+                _pz = D3.net.get(_a + 1);
+                _s = 1;
+                while (_s < _np) {
+                    _qx = D3.net.get(_a + _s * 2);
+                    _qz = D3.net.get(_a + _s * 2 + 1);
+                    _dx = _qx - _px;
+                    _dz = _qz - _pz;
+                    _seg = sqrt(_dx * _dx + _dz * _dz);
+                    if (_seg > 0) {
+                        if (_drawn >= _seg) {
+                            plotXZ(_px, _pz, _qx, _qz);
+                            _drawn -= _seg;
+                        } else {
+                            _f = _drawn / _seg;
+                            plotXZ(_px, _pz, _px + _dx * _f, _pz + _dz * _f);
+                            _drawn = 0;
+                        }
+                    }
+                    _px = _qx;
+                    _pz = _qz;
+                    _s += 1;
+                }
+            }
+            _k += 3 + _np * 2;
+            _i += 1;
+        }
+
+        // Vias: a small cross at each spur end.
+        Pen.setPenSize(2);
+        Pen.setPenColorToColor("#e8c46a");
+        _i = 1;
+        _k = 1;
+        while (_i <= D3.nvias) {
+            _vx = D3.vias.get(_k);
+            _vz = D3.vias.get(_k + 1);
+            _vr = D3.vias.get(_k + 2);
+            plotXZ(_vx - _vr, _vz, _vx + _vr, _vz);
+            plotXZ(_vx, _vz - _vr, _vx, _vz + _vr);
+            _k += 3;
+            _i += 1;
+        }
+
+        // The 3D cursor: CUR3 is 0.16 wide, 0.028 tall, sitting on the floor.
+        Pen.setPenSize(2);
+        Pen.setPenColorToColor("#ffffff");
+        plotXZ(0 - 0.08, 0, 0.08, 0);
+        plotXZ(0 - 0.01, 0 - 0.014, 0.01, 0.014);
+        Pen.setPenSize(1);
+    }
+
+    /*
+     * Shot 3 — `current`. The same board from a low perspective camera with
+     * current running outwards along every drawn lane.
+     */
+    private void buildCurrent(t, par) { // warp
+        view(0, 26, 1.2, 0.6, 0.12);
+        tint(66 + par);
+        D3.hud = 1;
+        traceClock(t);
+        _i = 0;
+        while (_i < 16) {
+            hash01(_i * 19 + 7);
+            _x = (D3.ease - 0.5) * 5.2;
+            hash01(_i * 31 + 11);
+            _z = (D3.ease - 0.5) * 5.2;
+            Pen.setPenSize(1);
+            Pen.setPenColorToColor("#5f6f7a");
+            plot(_x - 0.04, 0 - _z, _x + 0.04, 0 - _z);
+            _i += 1;
+        }
+        _i = 1;
+        while (_i <= 10) {
+            lane(_i, D3.hops, 2, 1);
+            _i += 1;
+        }
+        // current: pulses at a fixed spacing along each lane, phase-shifted per
+        // lane so they never march in step
+        D3.pulses = 0;
+        Pen.setPenSize(3);
+        Pen.setPenColorToColor("#ffd27f");
+        _i = 1;
+        while (_i <= 6) {
+            _d = (D3.hops - (_i - 1) * 0.55) * 0.95;
+            if (_d > 0.3) {
+                _ph = (t * 0.49 + _i * 0.137) % 0.26;
+                _s = _ph;
+                while (_s < _d) {
+                    _fx = cos(_i * 61) * _s;
+                    _fz = sin(_i * 61) * _s;
+                    plot(_fx, 0 - _fz - 0.07, _fx, 0 - _fz);
+                    D3.pulses += 1;
+                    _s += 0.26;
+                }
+            }
+            _i += 1;
+        }
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* projection + stroke                                                 */
+    /* ------------------------------------------------------------------ */
+
+    /*
+     * Project every vertex once, then stroke every edge from that buffer, so a
+     * shared corner is transformed once instead of once per edge.
+     */
+    /*
+     * `trails` / `trailsTop` — pre1, over "To A.D to B.C".
+     *
+     * The film (src/ch/pre1/sky.js) turns the whole star dome by
+     * `th1 = -(2026 - year) * .00118`, and `yearAt()` rewinds on a log clock,
+     * so the sky runs one way and keeps speeding up; `trailsTop` then looks
+     * straight up the pole and rolls the camera the other way. A dome costs
+     * thousands of points, so the pen version keeps the idea and drops the
+     * sphere: one flat ring facing the viewer with a band of particles running
+     * round it, which is the part the eye actually reads.
+     */
+    private void viewFlat() { // warp
+        // render() scales the orbit yaw by 0.12 and the pitch by 0.35; `view`'s
+        // damp already cancels the yaw, and nothing cancels the pitch, so undo
+        // it here or the ring turns into an ellipse as the keyframes move.
+        view(0, 0, 0, 0.3, 0.12);
+        D3.basePitch = 0 - D3.camPitch * 0.35;
+    }
+
+    /* The ring plus `D3.trailN` tangent dashes, all turned by `spin`. */
+    private void trailRing(spin) { // warp
+        _trR = D3.trailPx * D3.camDist / D3.camFocal;
+        _trR = _trR * (1 + D3.pulseBeat * 0.035);
+        // The band sits just inside the ring: on the ring itself the two are the
+        // same colour and the particles disappear into the line.
+        _trB = _trR * D3.trailBand;
+        // 200 particles on a 76 px band sit ~2.4 px apart, so a dash any longer
+        // than about 1.5 px merges its neighbours and the band reads as a blur.
+        _trDash = _trB * 0.02;
+        _trSeg = D3.trailSeg;
+        _trI = 0;
+        while (_trI < _trSeg) {
+            _trA = _trI * 360 / _trSeg;
+            v3(cos(_trA) * _trR, sin(_trA) * _trR, 0);
+            _trI += 1;
+        }
+        _trI = 0;
+        while (_trI < _trSeg) {
+            e2(D3.nv - _trSeg + _trI + 1, D3.nv - _trSeg + ((_trI + 1) % _trSeg) + 1);
+            _trI += 1;
+        }
+        // Each particle is a dash along the tangent, so it reads as travelling
+        // instead of as a stationary dot. `z` puts it in front of the ring.
+        _trN = D3.trailN;
+        _trI = 0;
+        while (_trI < _trN) {
+            _trA = _trI * 360 / _trN + spin;
+            _trX = sin(_trA) * _trDash;
+            _trY = cos(_trA) * _trDash;
+            v3(cos(_trA) * _trB - _trX, sin(_trA) * _trB - _trY, 0.02);
+            v3(cos(_trA) * _trB + _trX, sin(_trA) * _trB + _trY, 0.02);
+            e2(D3.nv - 1, D3.nv);
+            _trI += 1;
+        }
+    }
+
+    /* Before B.C: the band runs one way, accelerating with the year rewind. */
+    private void buildTrails(t, par) { // warp
+        viewFlat();
+        tint(par + 24);
+        trailRing(0 - D3.trailTurns * 360 * (D3.shotP ** 1.6));
+    }
+
+    /* On "B.C": pick up that angle, then run the other way and accelerate. */
+    private void buildTrailsTop(t, par) { // warp
+        viewFlat();
+        tint(par + 24);
+        trailRing(0 - D3.trailTurns * 360 + D3.trailTurns * 360 * 1.5 * (D3.shotP ** 2));
+    }
+
+    private void render() { // warp
+        // Orbit scenes sit near the origin, so the camera may swing right
+        // around them. Fly-through scenes run away along +Z, where a full turn
+        // would put most of the geometry behind the camera: they only get a
+        // gentle sway instead.
+        _oy = 0.12;
+        _op = 0.35;
+        if (D3.orbit == 1) {
+            _oy = 1;
+            _op = 1;
+        }
+        _ey = D3.camYaw * _oy + D3.baseYaw;
+        _ep = D3.camPitch * _op + D3.basePitch;
+        _cy = cos(_ey); _sy = sin(_ey);
+        _cp = cos(_ep); _sp = sin(_ep);
+        _cr = cos(D3.camRoll); _sr = sin(D3.camRoll);
+        _shx = D3.shake * sin(D3.showTick * 37.7);
+        _shy = D3.shake * sin(D3.showTick * 61.3);
+
+        _i = 1;
+        _k = 1;
+        _p = 1;
+        while (_i <= D3.nv) {
+            _x = D3.pos.get((_i - 1) * 3 + 1);
+            _y = D3.pos.get((_i - 1) * 3 + 2);
+            _z = D3.pos.get((_i - 1) * 3 + 3);
+
+            _x1 = _x * _cy + _z * _sy;
+            _z1 = _z * _cy - _x * _sy;
+            _y1 = _y * _cp + _z1 * _sp;
+            _z2 = _z1 * _cp - _y * _sp;
+            _rx = _x1 * _cr - _y1 * _sr;
+            _ry = _x1 * _sr + _y1 * _cr;
+
+            if (D3.ortho == 1) {
+                // An orthographic camera looking straight down: no perspective
+                // divide at all, so world units map straight to stage pixels.
+                D3.proj.set((_i - 1) * 4 + 1, _x * D3.orthoScale);
+                D3.proj.set((_i - 1) * 4 + 2, 0 - _z * D3.orthoScale);
+                D3.proj.set((_i - 1) * 4 + 3, 1);
+                D3.proj.set((_i - 1) * 4 + 4, 1);
+            } else {
+            _depth = _z2 + D3.camDist + D3.viewBias;
+            if (_depth < D3.nearZ) {
+                D3.proj.set((_i - 1) * 4 + 1, 0);
+                D3.proj.set((_i - 1) * 4 + 2, 0);
+                D3.proj.set((_i - 1) * 4 + 3, _depth);
+                D3.proj.set((_i - 1) * 4 + 4, 0);
+            } else {
+                _s = D3.camFocal * D3.wScale / _depth;
+                // _sx/_sy are the screen point. Do not reuse those names for
+                // anything the loop needs next time round: they started life as
+                // sin(yaw) and sin(pitch), and writing the screen y over the
+                // yaw sine fed a pixel coordinate back into the rotation, which
+                // turned every scene after its second vertex into spaghetti.
+                _px = _rx * _s + _shx;
+                _py = _ry * _s + _shy;
+                // A vertex just past the near plane divides by almost nothing
+                // and lands thousands of pixels away; its edge would streak
+                // right across the stage, so drop it instead.
+                if (_px > D3.clipR || _px < 0 - D3.clipR || _py > D3.clipR || _py < 0 - D3.clipR) {
+                    D3.proj.set((_i - 1) * 4 + 1, 0);
+                    D3.proj.set((_i - 1) * 4 + 2, 0);
+                    D3.proj.set((_i - 1) * 4 + 3, _depth);
+                    D3.proj.set((_i - 1) * 4 + 4, 0);
+                } else {
+                    D3.proj.set((_i - 1) * 4 + 1, _px);
+                    D3.proj.set((_i - 1) * 4 + 2, _py);
+                    D3.proj.set((_i - 1) * 4 + 3, _depth);
+                    D3.proj.set((_i - 1) * 4 + 4, 1);
+                }
+            }
+            }
+            _i += 1;
+            _k += 3;
+            _p += 4;
+        }
+        Pen.eraseAll();
+        // The film sits on near-black everywhere, so it is painted under every
+        // shot: fourteen thick strokes cover the stage and nothing has to fight
+        // with the host's sprites or its backdrop.
+        Pen.setPenSize(30);
+        Pen.setPenColorToColor("#05070a");
+        _by = 0 - 180;
+        while (_by <= 180) {
+            Motion.setXY(0 - 240, _by);
+            Pen.penDown();
+            Motion.setXY(240, _by);
+            Pen.penUp();
+            _by += 26;
+        }
+        Pen.setPenSize(D3.penSize);
+        Pen.setPenColorToColor(D3.penColor);
+
+        _j = 1;
+        _a = 1;
+        while (_j <= D3.ne) {
+            _ia = (D3.idx.get(_a) - 1) * 4 + 1;
+            _ib = (D3.idx.get(_a + 1) - 1) * 4 + 1;
+            if (D3.proj.get(_ia + 3) == 1) {
+                if (D3.proj.get(_ib + 3) == 1) {
+                    Motion.setXY(D3.proj.get(_ia), D3.proj.get(_ia + 1));
+                    Pen.penDown();
+                    Motion.setXY(D3.proj.get(_ib), D3.proj.get(_ib + 1));
+                    Pen.penUp();
+                }
+            }
+            _j += 1;
+            _a += 2;
+        }
+        Motion.setXY(0, 0);
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* buffers                                                             */
+    /* ------------------------------------------------------------------ */
+
+    /*
+     * ``replace item`` never appends: ``set`` on an empty list is a no-op and
+     * every read then answers "". Every buffer has to reach its final length
+     * before the first frame writes into it.
+     */
+    public void prepare() { // warp
+        D3.pos.clear();
+        D3.idx.clear();
+        D3.proj.clear();
+        _need = D3.maxVerts * 3;
+        while (D3.pos.length() < _need) {
+            D3.pos.add(0);
+        }
+        _need = D3.maxEdges * 2;
+        while (D3.idx.length() < _need) {
+            D3.idx.add(0);
+        }
+        _need = D3.maxVerts * 4;
+        while (D3.proj.length() < _need) {
+            D3.proj.add(0);
+        }
+    }
+}

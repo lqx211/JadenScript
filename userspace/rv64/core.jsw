@@ -1,0 +1,2605 @@
+/*
+ * core — the CPU, its memory map, and the device registers.
+ *
+ * Everything here is the machine: registers as 32-bit half pairs, RAM as one
+ * Stage list item per byte, and the three windows a program can touch (UART,
+ * disk, display). The CPU does not draw and does not talk to the network; it
+ * writes a device register and reads the answer back, exactly as it would on a
+ * board.
+ *
+ * The top-level `X.` state lives in rv64.jsw, which includes this file.
+ */
+class Core {
+    /*
+     * Batches of instructions, then a yield: one instruction per frame is 600
+     * a second in TurboWarp, and a batch of 2000 is a million.
+     */
+    public void coreStart() { // hook: green flag
+        Looks.hide();
+        // The video card has to be up before the first byte reaches it: a
+        // store into a plane that does not exist yet is a write to nothing.
+        // Asking for the boot and waiting for the acknowledgement is what makes
+        // that true whatever order the two green-flag scripts run in -- waiting
+        // on `dispBooted` alone cannot tell "booted for this run" from "still
+        // saying 1 from the last one", and the card then wiped the screen after
+        // the guest had drawn POST on it.
+        X.dispReq = 1;
+        while (X.dispAck < 1) {
+            Control.wait(0);
+        }
+        storageBoot();
+        X.resets = 0;
+        powerOn();
+        // `X.maxSteps` is 0 for "run until the guest halts"; a positive value
+        // is a debugger budget for one boot, not a per-frame one.
+        while (X.halted == 0 && X.err == "" && (X.maxSteps == 0 || X.steps < X.maxSteps)) {
+            // a frame is this machine's smallest unit of time: `mtime` moves
+            // here and nowhere else, so an interrupt can only arrive between
+            // frames, which is also when WFI stops waiting
+            clockTick();
+            X.waiting = 0;
+            runBatch();
+            if (X.resetWant == 1) {
+                // The guest pressed the board's reset button: give it the RAM
+                // it asked for and start again at the reset vector. The NVRAM
+                // is battery-backed, so the settings the setup screen just
+                // wrote are still there when POST runs a second time.
+                X.resetWant = 0;
+                X.resets += 1;
+                powerOn();
+                Control.wait(0);
+            }
+            if (X.waiting == 1) {
+                // `wait 0` only yields the rest of this frame's turn -- the
+                // thread is back before the frame ends, so a guest parked in
+                // WFI would spin here. Nothing can wake it before the next
+                // frame, so sleep for a whole one.
+                Control.wait(0.001);
+            } else {
+                Control.wait(0);
+            }
+        }
+        // Parked: keep answering the monitor without spinning a warp thread.
+        while (1) {
+            Control.wait(0.001);
+        }
+    }
+
+    /*
+     * N instructions under warp. Stops early on a halt, a fault, a disk wait or
+     * a WFI: the guest asked for the next interrupt, and the next one it can
+     * see is the next frame.
+     */
+    private void runBatch() { // warp
+        _n = 0;
+        while (_n < X.batch && X.halted == 0 && X.err == "" && X.diskWait == 0 && X.waiting == 0) {
+            step();
+            _n += 1;
+        }
+    }
+
+    public void powerOn() { // warp
+        X.steps = 0;
+        X.halted = 0;
+        X.err = "";
+        X.waiting = 0;
+        // a reset drops every machine-mode register, as the spec says
+        X.mtvec = 0;
+        X.mepc = 0;
+        X.mcauseLo = 0;
+        X.mcauseHi = 0;
+        X.mtval = 0;
+        X.mstatus = 0;
+        X.mie = 0;
+        X.mip = 0;
+        X.mscratch = 0;
+        X.priv = 3;
+        X.stvec = 0;
+        X.sscratch = 0;
+        X.sepc = 0;
+        X.scauseLo = 0;
+        X.scauseHi = 0;
+        X.stval = 0;
+        X.satpMode = 0;
+        X.satpPpn = 0;
+        X.pfault = 0;
+        X.sie = 0;
+        X.sip = 0;
+        X.medeleg = 0;
+        X.mideleg = 0;
+        X.traps = 0;
+        X.romWrites = 0;
+        X.nvramWrites = 0;
+        X.mtimeLo = 0;
+        X.mtimeHi = 0;
+        X.mtimecmpLo = 4294967295;
+        X.mtimecmpHi = 4294967295;
+        X.out = [];
+        X.trace = [];
+        _i = 1;
+        while (_i <= 64) {
+            X.reg.set(_i, 0);
+            _i += 1;
+        }
+        // The memory card, when the extension answered, is a typed array the
+        // browser owns: one gigabyte costs one allocation and no list items.
+        // Its size is the machine's own setting now, so a reset can give the
+        // guest a different amount of RAM -- which is what the setup screen's
+        // memory field asks the board to do.
+        // The chipset's number is only a request until it is spent here: this
+        // is where a nonsense value (zero, or more than the board promises)
+        // becomes a size the machine can actually run with.
+        if (X.memMiB < 1) {
+            X.memMiB = 1;
+        }
+        if (X.memMiB > X.memMaxMiB) {
+            X.memMiB = X.memMaxMiB;
+        }
+        // `alloc` answers what it actually got, not what was asked: a loaded
+        // browser can refuse a gigabyte, and the POST has to print the truth.
+        // Asking is also the only way to find out whether the card is there --
+        // `size` is zero until something has been allocated.
+        _n = Mem.alloc(X.memMiB * 1048576);
+        if (_n > 0) {
+            X.memExt = 1;
+            X.memMiB = Operators.math("floor", _n / 1048576);
+        } else {
+            // No card at all: fall back to the list, which is why the machine
+            // only ever asks that list for a size a list can actually hold.
+            X.memExt = 0;
+            if (X.memMiB > 8) {
+                X.memMiB = 8;
+            }
+        }
+        X.ramSize = X.memMiB * 1048576;
+        X.ram.clear();
+        if (X.memExt == 0) {
+            // The fallback: `replace item` does not append, so on an empty
+            // list it is a no-op and every later read answers "". The RAM
+            // therefore has to be grown with `add` before the image lands.
+            _i = 1;
+            while (_i <= X.ramSize) {
+                X.ram.add(0);
+                _i += 1;
+            }
+        }
+        _i = 1;
+        while (_i <= X.image.length()) {
+            if (X.memExt == 1) {
+                Mem.write8(_i - 1, X.image.get(_i) + 0);
+            } else {
+                X.ram.set(_i, X.image.get(_i) + 0);
+            }
+            _i += 1;
+        }
+        X.resetWant = 0;
+        X.pcLo = X.entry;
+        X.pcHi = 0;
+        X.diskWait = 0;
+        X.diskMiss = 0;
+        X.diskHit = 0;
+        X.diskFault = 0;
+        X.msgReady = 0;
+        X.diskCache.clear();
+        _i = 1;
+        while (_i <= X.diskSlots * X.diskBlk) {
+            X.diskCache.add(0);
+            _i += 1;
+        }
+        _i = 1;
+        while (_i <= X.diskSlots) {
+            X.diskTag.set(_i, -1);
+            _i += 1;
+        }
+        X.reqPending = 0;
+        X.reqSent = 0;
+    }
+
+
+    /* A byte into or out of the display window, and the dirty mark it earns. */
+    /*
+     * The network card: a transmit buffer, a receive buffer and two doorbells.
+     * The guest writes a frame, rings TXCTL, and `Net` hands it to the host
+     * bridge over the socket it already keeps open for the disk.
+     */
+    private void nic8(addr, value, isWrite) { // warp
+        _o = addr - X.nicBase;
+        if (isWrite == 1) {
+            if (_o == 0) {
+                if (value % 2 == 1 && X.nicTxLen > 0) {
+                    X.nicWant = 1;              // Net picks it up and sends it
+                }
+                return;
+            }
+            if (_o == 4) {
+                X.nicTxLen = value % 256;
+                return;
+            }
+            if (_o == 16) {
+                if (value % 2 == 1) {
+                    // take the frame the bridge left: it is already in the buffer
+                    X.nicRxLen = X.nicRxWant;
+                    X.nicRxWant = 0;
+                }
+                return;
+            }
+            if (_o >= 64 && _o < 64 + X.nicFrame) {
+                X.nicTxBuf.set(_o - 64 + 1, value % 256);
+                return;
+            }
+            return;
+        }
+        if (_o == 16) {
+            if (X.nicRxWant > 0) { X.lo = 1; } else { X.lo = 0; }
+            return;
+        }
+        if (_o == 20) {
+            X.lo = X.nicRxLen;
+            return;
+        }
+        if (_o >= 64 + X.nicFrame && _o < 64 + 2 * X.nicFrame) {
+            X.lo = X.nicRxBuf.get(_o - 64 - X.nicFrame + 1);
+            return;
+        }
+        if (_o >= 64 && _o < 64 + X.nicFrame) {
+            X.lo = X.nicTxBuf.get(_o - 64 + 1);
+            return;
+        }
+        X.lo = 0;
+    }
+
+    private void disp8(addr, value, isWrite) { // warp
+        _off = addr - X.dispBase;
+        _text = 0;
+        if (_off < X.dispCols * X.dispRows * 2) {
+            _text = 1;
+        } else {
+            if (_off >= X.dispGfxOff && _off < X.dispGfxOff + X.dispGfxW * X.dispGfxH) {
+                _text = 2;
+            }
+        }
+        if (isWrite == 0) {
+            X.lo = 0;
+            if (_text == 1) {
+                X.lo = X.dispText.get(_off + 1);
+                return;
+            }
+            if (_text == 2) {
+                X.lo = X.dispGfx.get(_off - X.dispGfxOff + 1);
+                return;
+            }
+            if (_off >= X.dispPalOff && _off < X.dispPalOff + 768) {
+                X.lo = X.dispPal.get(_off - X.dispPalOff + 1);
+                return;
+            }
+            if (_off == X.dispCtlOff) {
+                X.lo = X.dispWantMode;
+                return;
+            }
+            X.err = join("unmapped display load at ", addr);
+            return;
+        }
+        if (_text == 1) {
+            X.dispText.set(_off + 1, value % 256);
+            _cell = Operators.math("floor", _off / 2) + 1;
+            if (X.dispTextDirty.get(_cell) == 0) {
+                X.dispTextDirty.set(_cell, 1);
+                X.dispTextN += 1;
+            }
+            return;
+        }
+        if (_text == 2) {
+            _g = _off - X.dispGfxOff;
+            X.dispGfx.set(_g + 1, value % 256);
+            _row = Operators.math("floor", _g / X.dispGfxW);
+            _col = _g % X.dispGfxW;
+            _tile = Operators.math("floor", Operators.math("floor", _row / X.dispTile) * X.dispTilesX + Operators.math("floor", _col / X.dispTile)) + 1;
+            if (X.dispGfxDirty.get(_tile) == 0) {
+                X.dispGfxDirty.set(_tile, 1);
+                X.dispGfxN += 1;
+            }
+            return;
+        }
+        if (_off >= X.dispPalOff && _off < X.dispPalOff + 768) {
+            X.dispPal.set(_off - X.dispPalOff + 1, value % 256);
+            X.dispPalDirty = 1;
+            return;
+        }
+        if (_off == X.dispCtlOff) {
+            X.dispWantMode = value % 3;  // 0 text, 1 320x200, 2 640x480
+            X.dispWantSet = 1;           // the display applies it on its next paint
+            return;
+        }
+        if (_off == X.dispCtlOff + 1) {
+            // a board-level power switch: the payload is done, stop stepping
+            if (value % 2 == 1) {
+                X.halted = 1;
+            }
+            return;
+        }
+        X.err = join("unmapped display store at ", addr);
+    }
+
+
+    /*
+     * The PS/2 controller, 8042 style but polled: reading +0 takes the next
+     * byte out of the keyboard's output buffer and +4 is the status byte whose
+     * bit 0 says one is waiting. A real 8042 raises IRQ 1 instead; ours has no
+     * interrupt line yet, so a guest polls, which is what a BIOS does before it
+     * has set up a handler anyway.
+     */
+    private void ps2(addr, value, isWrite) { // warp
+        _off = addr - X.ps2;
+        if (_off == 0) {
+            if (isWrite == 1) {
+                // a command byte: 0xAE enables scanning, 0xF4 acks the keyb
+                if (value % 256 == 174) {
+                    K.enabled = 1;
+                }
+                X.lo = 0;
+                return;
+            }
+            if (K.fifo.length() > 0) {
+                X.lo = K.fifo.get(1) + 0;
+                K.fifo.delete(1);
+                return;
+            }
+            X.lo = 0;
+            return;
+        }
+        if (_off == 4) {
+            // status: bit 0 output buffer full, bit 2 = 1 (system flag)
+            X.lo = 4;
+            if (K.fifo.length() > 0) {
+                X.lo = 5;
+            }
+            return;
+        }
+        if (isWrite == 1) {
+            return;             // commands to +4 are accepted and ignored
+        }
+        X.lo = 0;
+    }
+
+    private void disk8(addr, value, isWrite) { // warp
+        _off = addr - X.diskBase;
+        _blk = Operators.math("floor", _off / X.diskBlk);
+        _win = _off % X.diskBlk;
+        _slot = _blk % X.diskSlots;
+        if (X.diskTag.get(_slot + 1) != _blk) {
+            if (isWrite == 1) {
+                // a write to an uncached block has nowhere to go yet
+                X.diskTag.set(_slot + 1, _blk);
+            } else {
+                X.diskFault += 1;
+                // A miss is a hardware stall: the block and slot go into the
+                // controller's registers, the request line goes up, and the
+                // instruction is re-run once the reply has landed.
+                X.reqBlock = _blk;
+                X.reqSlot = _slot;
+                X.reqPending = 1;
+                X.reqSent = 0;
+                X.diskMiss = 1;
+                X.diskWait = 1;
+                if (X.traceOn == 1) {
+                    X.trace.add(join("disk miss block ", _blk));
+                }
+                X.lo = -1;
+                return;
+            }
+        }
+        if (isWrite == 1) {
+            X.diskCache.set(_slot * X.diskBlk + _win + 1, value % 256);
+            return;
+        }
+        X.diskHit += 1;
+        X.lo = X.diskCache.get(_slot * X.diskBlk + _win + 1);
+    }
+
+
+    private void load8(addr) { // warp
+        X.lo = -1;
+        if (addr >= X.romBase && addr < X.romBase + X.romSize) {
+            rom8(addr, 0, 0);
+            return;
+        }
+        if (addr >= X.nvramBase && addr < X.nvramBase + X.nvramSize) {
+            nvram8(addr, 0, 0);
+            return;
+        }
+        if (addr >= X.boardBase && addr < X.boardBase + X.boardSize) {
+            board8(addr, 0, 0);
+            return;
+        }
+        if (addr >= X.clintBase && addr < X.clintBase + X.clintSize) {
+            clint(addr, 0, 0);
+            return;
+        }
+        if (addr >= X.diskBase && addr < X.diskBase + X.diskSlots * X.diskBlk) {
+            disk8(addr, 0, 0);
+            return;
+        }
+        if (addr >= X.ramBase && addr < X.ramBase + X.ramSize) {
+            if (X.memExt == 1) {
+                X.lo = Mem.read8(addr - X.ramBase);
+            } else {
+                X.lo = X.ram.get(addr - X.ramBase + 1);
+            }
+            return;
+        }
+        if (addr >= X.uart && addr < X.uart + 8) {
+            X.lo = 32;   // LSR: always ready to transmit
+            return;
+        }
+        if (addr >= X.ps2 && addr < X.ps2 + X.ps2Size) {
+            ps2(addr, 0, 0);
+            return;
+        }
+        if (addr >= X.nicBase && addr < X.nicBase + 4096) {
+            nic8(addr, 0, 0);
+            return;
+        }
+        if (addr >= X.dispBase && addr < X.dispBase + X.dispSize) {
+            disp8(addr, 0, 0);
+            return;
+        }
+    }
+
+
+    private void store8(addr, value) { // warp
+        if (addr >= X.romBase && addr < X.romBase + X.romSize) {
+            rom8(addr, value, 1);
+            return;
+        }
+        if (addr >= X.nvramBase && addr < X.nvramBase + X.nvramSize) {
+            nvram8(addr, value, 1);
+            return;
+        }
+        if (addr >= X.boardBase && addr < X.boardBase + X.boardSize) {
+            board8(addr, value, 1);
+            return;
+        }
+        if (addr >= X.clintBase && addr < X.clintBase + X.clintSize) {
+            clint(addr, value, 1);
+            return;
+        }
+        if (addr >= X.diskBase && addr < X.diskBase + X.diskSlots * X.diskBlk) {
+            disk8(addr, value, 1);
+            return;
+        }
+        if (addr >= X.ramBase && addr < X.ramBase + X.ramSize) {
+            if (X.memExt == 1) {
+                Mem.write8(addr - X.ramBase, value % 256);
+            } else {
+                X.ram.set(addr - X.ramBase + 1, value % 256);
+            }
+            return;
+        }
+        if (addr == X.uart) {
+            X.out.add(value % 256);
+            return;
+        }
+        if (addr >= X.uart && addr < X.uart + 8) {
+            return;
+        }
+        if (addr >= X.ps2 && addr < X.ps2 + X.ps2Size) {
+            ps2(addr, value, 1);
+            return;
+        }
+        if (addr >= X.nicBase && addr < X.nicBase + 4096) {
+            nic8(addr, value, 1);
+            return;
+        }
+        if (addr >= X.dispBase && addr < X.dispBase + X.dispSize) {
+            disp8(addr, value, 1);
+            return;
+        }
+        X.err = join("unmapped store at ", addr);
+    }
+
+
+    private void loadN(addr, size) { // warp
+        _accLo = 0;
+        _accHi = 0;
+        _k = 0;
+        while (_k < size) {
+            load8(addr + _k);
+            _b = X.lo;
+            if (_b < 0) {
+                if (X.diskMiss == 1) {
+                    // parking on a disk block is not a fault: the instruction
+                    // is abandoned here and re-run once the block has arrived
+                    X.lo = 0;
+                    X.hi = 0;
+                    return;
+                }
+                X.err = join("unmapped load at ", addr);
+                X.lo = 0;
+                X.hi = 0;
+                return;
+            }
+            if (_k < 4) {
+                _accLo = _accLo + _b * X.byteW.get(_k + 1);
+            } else {
+                _accHi = _accHi + _b * X.byteW.get(_k - 3);
+            }
+            _k += 1;
+        }
+        X.lo = _accLo;
+        X.hi = _accHi;
+    }
+
+
+    private void storeN(addr, size, lo, hi) { // warp
+        _k = 0;
+        while (_k < size) {
+            if (_k < 4) {
+                _b = Operators.math("floor", lo / X.byteW.get(_k + 1)) % 256;
+            } else {
+                _b = Operators.math("floor", hi / X.byteW.get(_k - 3)) % 256;
+            }
+            store8(addr + _k, _b);
+            _k += 1;
+        }
+    }
+
+
+    private void getReg(i) { // warp
+        if (i == 0) {
+            X.lo = 0;
+            X.hi = 0;
+        } else {
+            X.lo = X.reg.get(i * 2 + 1);
+            X.hi = X.reg.get(i * 2 + 2);
+        }
+    }
+
+    private void putReg(i, lo, hi) { // warp
+        if (i == 0) {
+            return;
+        }
+        X.reg.set(i * 2 + 1, lo % 4294967296);
+        X.reg.set(i * 2 + 2, hi % 4294967296);
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* 64-bit arithmetic on 32-bit halves                                  */
+    /* ------------------------------------------------------------------ */
+
+    private void add64(alo, ahi, blo, bhi) { // warp
+        X.lo = alo + blo;
+        X.c = 0;
+        if (X.lo > 4294967295) {
+            X.lo = X.lo - 4294967296;
+            X.c = 1;
+        }
+        X.hi = (ahi + bhi + X.c) % 4294967296;
+    }
+
+    private void sub64(alo, ahi, blo, bhi) { // warp
+        X.lo = alo - blo;
+        X.c = 0;
+        if (X.lo < 0) {
+            X.lo = X.lo + 4294967296;
+            X.c = 1;
+        }
+        X.hi = (ahi - bhi - X.c) % 4294967296;
+    }
+
+    /* Signed 64-bit compare: X.c = -1 / 0 / 1. */
+    private void cmp64(alo, ahi, blo, bhi) { // warp
+        X.c = 0;
+        _negA = 0;
+        _negB = 0;
+        if (ahi >= 2147483648) {
+            _negA = 1;
+        }
+        if (bhi >= 2147483648) {
+            _negB = 1;
+        }
+        if (_negA > _negB) {
+            X.c = -1;
+            return;
+        }
+        if (_negA < _negB) {
+            X.c = 1;
+            return;
+        }
+        if (ahi > bhi) {
+            X.c = 1;
+        }
+        if (ahi < bhi) {
+            X.c = -1;
+        }
+        if (ahi == bhi) {
+            if (alo > blo) {
+                X.c = 1;
+            }
+            if (alo < blo) {
+                X.c = -1;
+            }
+        }
+    }
+
+    /* Unsigned 64-bit compare: X.c = -1 / 0 / 1. */
+    private void cmpu64(alo, ahi, blo, bhi) { // warp
+        X.c = 0;
+        if (ahi > bhi) {
+            X.c = 1;
+        }
+        if (ahi < bhi) {
+            X.c = -1;
+        }
+        if (ahi == bhi) {
+            if (alo > blo) {
+                X.c = 1;
+            }
+            if (alo < blo) {
+                X.c = -1;
+            }
+        }
+    }
+
+    /* 32 -> 64 sign extension of `v` into X.lo / X.hi. */
+    private void sext32(v) { // warp
+        X.lo = v % 4294967296;
+        if (X.lo >= 2147483648) {
+            X.lo = X.lo + 0;
+            X.hi = 4294967295;
+        } else {
+            X.hi = 0;
+        }
+    }
+
+    /*
+     * Full 64x64 product into the eight 16-bit limbs of X.p, least significant
+     * first. Two 16-bit factors multiply to at most 2^32 and four of those add
+     * to at most 2^34, so every intermediate stays an exact double -- which is
+     * the whole reason for splitting the operands this way.
+     */
+    private void mul128(alo, ahi, blo, bhi) { // warp
+        _a0 = alo % 65536;
+        _a1 = Operators.math("floor", alo / 65536) % 65536;
+        _a2 = ahi % 65536;
+        _a3 = Operators.math("floor", ahi / 65536) % 65536;
+        _b0 = blo % 65536;
+        _b1 = Operators.math("floor", blo / 65536) % 65536;
+        _b2 = bhi % 65536;
+        _b3 = Operators.math("floor", bhi / 65536) % 65536;
+        X.p.set(1, _a0 * _b0);
+        X.p.set(2, _a0 * _b1 + _a1 * _b0);
+        X.p.set(3, _a0 * _b2 + _a1 * _b1 + _a2 * _b0);
+        X.p.set(4, _a0 * _b3 + _a1 * _b2 + _a2 * _b1 + _a3 * _b0);
+        X.p.set(5, _a1 * _b3 + _a2 * _b2 + _a3 * _b1);
+        X.p.set(6, _a2 * _b3 + _a3 * _b2);
+        X.p.set(7, _a3 * _b3);
+        _carry = 0;
+        _k = 1;
+        while (_k <= 8) {
+            _t = X.p.get(_k) + _carry;
+            X.p.set(_k, _t % 65536);
+            _carry = Operators.math("floor", _t / 65536);
+            _k += 1;
+        }
+    }
+
+    /* Low and high halves of the unsigned product into X.lo/X.hi and X.rLo/X.rHi. */
+    private void mulu64(alo, ahi, blo, bhi) { // warp
+        mul128(alo, ahi, blo, bhi);
+        X.lo = X.p.get(1) + X.p.get(2) * 65536;
+        X.hi = X.p.get(3) + X.p.get(4) * 65536;
+        X.rLo = X.p.get(5) + X.p.get(6) * 65536;
+        X.rHi = X.p.get(7) + X.p.get(8) * 65536;
+    }
+
+    /* Negate a 64-bit value in place: (lo, hi) -> X.lo, X.hi. */
+    private void neg64(lo, hi) { // warp
+        sub64(0, 0, lo, hi);
+    }
+
+    /*
+     * Shift X.lo/X.hi left by n (0..63). Written as halves because a 64-bit
+     * value has no single double that can hold it: shifting `hi` alone would
+     * drop every bit that crosses the boundary.
+     */
+    private void shl64(n) { // warp
+        if (n == 0) {
+            return;
+        }
+        if (n < 32) {
+            _lo = X.lo;
+            _hi = X.hi;
+            _cross = Operators.math("floor", _lo / X.pow2.get(32 - n + 1));
+            X.hi = (_hi * X.pow2.get(n + 1) + _cross) % 4294967296;
+            X.lo = (_lo * X.pow2.get(n + 1)) % 4294967296;
+        } else {
+            X.hi = (X.lo * X.pow2.get(n - 32 + 1)) % 4294967296;
+            X.lo = 0;
+        }
+    }
+
+    private void shr64(n) { // warp
+        if (n == 0) {
+            return;
+        }
+        if (n < 32) {
+            _lo = X.lo;
+            _hi = X.hi;
+            _cross = (_hi % X.pow2.get(n + 1)) * X.pow2.get(32 - n + 1);
+            X.lo = Operators.math("floor", _lo / X.pow2.get(n + 1)) + _cross;
+            X.hi = Operators.math("floor", _hi / X.pow2.get(n + 1));
+        } else {
+            X.lo = Operators.math("floor", X.hi / X.pow2.get(n - 32 + 1));
+            X.hi = 0;
+        }
+    }
+
+    /* Arithmetic shift right: shift the complement, then complement back. */
+    private void sar64(n) { // warp
+        if (n == 0) {
+            return;
+        }
+        X.lo = 4294967295 - X.lo;
+        X.hi = 4294967295 - X.hi;
+        shr64(n);
+        X.lo = 4294967295 - X.lo;
+        X.hi = 4294967295 - X.hi;
+    }
+
+
+    /*
+     * Unsigned 64/64 restoring division: quotient into X.qLo/X.qHi, remainder
+     * into X.rLo/X.rHi. The remainder is shifted one bit at a time, so the
+     * carry out of that shift has to be captured *before* it is lost -- when it
+     * is set the true remainder is 2^64 + rem, which is necessarily >= the
+     * divisor, so the subtraction becomes rem + (2^64 - d) instead.
+     */
+    private void divu64(nLo, nHi, dLo, dHi) { // warp
+        X.qLo = 0;
+        X.qHi = 0;
+        X.rLo = 0;
+        X.rHi = 0;
+        if (dLo == 0 && dHi == 0) {
+            return;
+        }
+        neg64(dLo, dHi);
+        _ndLo = X.lo;
+        _ndHi = X.hi;
+        _bit = 63;
+        while (_bit >= 0) {
+            _carry = 0;
+            if (X.rHi >= 2147483648) {
+                _carry = 1;
+            }
+            // remainder <<= 1
+            _cross = Operators.math("floor", X.rLo / 2147483648);
+            X.rHi = (X.rHi * 2 + _cross) % 4294967296;
+            X.rLo = (X.rLo * 2) % 4294967296;
+            // pull in the next dividend bit
+            _topBit(nLo, nHi, _bit);
+            X.rLo = X.rLo + X.c;
+            if (X.rLo >= 4294967296) {
+                X.rLo = X.rLo - 4294967296;
+                X.rHi = X.rHi + 1;
+            }
+            if (_carry == 1) {
+                add64(X.rLo, X.rHi, _ndLo, _ndHi);
+                X.rLo = X.lo;
+                X.rHi = X.hi;
+                _setBit(_bit);
+            } else {
+                cmpu64(X.rLo, X.rHi, dLo, dHi);
+                if (X.c >= 0) {
+                    sub64(X.rLo, X.rHi, dLo, dHi);
+                    X.rLo = X.lo;
+                    X.rHi = X.hi;
+                    _setBit(_bit);
+                }
+            }
+            _bit -= 1;
+        }
+        X.lo = X.qLo;
+        X.hi = X.qHi;
+    }
+
+    private void _topBit(lo, hi, bit) { // warp
+        X.c = 0;
+        if (bit < 32) {
+            if (Operators.math("floor", lo / X.pow2.get(bit + 1)) % 2 == 1) {
+                X.c = 1;
+            }
+        } else {
+            if (Operators.math("floor", hi / X.pow2.get(bit - 32 + 1)) % 2 == 1) {
+                X.c = 1;
+            }
+        }
+    }
+
+    private void _setBit(bit) { // warp
+        if (bit < 32) {
+            X.qLo = X.qLo + X.pow2.get(bit + 1);
+        } else {
+            X.qHi = X.qHi + X.pow2.get(bit - 32 + 1);
+        }
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* decode                                                              */
+    /* ------------------------------------------------------------------ */
+
+    public void step() { // warp
+        // An interrupt is taken between instructions, and `X.pcLo` still holds
+        // the instruction that has not run yet -- exactly what `mepc` wants.
+        trapPending();
+        if (_pend == 1) {
+            takeTrap(7, 1, X.pcLo, 0);
+            return;
+        }
+        _at = X.pcLo;
+        _atHi = X.pcHi;
+        fetch();
+        if (X.err != "") {
+            return;
+        }
+        // pc already points at the next instruction; branches add to the old one
+        // the instruction's own address, *before* fetch() bumped the pc:
+        // auipc and every branch offset are relative to this
+        _pc0Lo = _at;
+        _pc0Hi = _atHi;
+        X.pc0Lo = _at;
+        X.pc0Hi = _atHi;
+        if (X.pfault == 1) {
+            // the fetch itself faulted: the trap is taken and this instruction
+            // is retired against the handler's pc, exactly like the model
+            X.pfault = 0;
+            X.steps += 1;
+            return;
+        }
+        X.rd = Operators.math("floor", X.ir / 128) % 32;
+        X.f3 = Operators.math("floor", X.ir / 4096) % 8;
+        X.rs1 = Operators.math("floor", X.ir / 32768) % 32;
+        X.rs2 = Operators.math("floor", X.ir / 1048576) % 32;
+        X.f7 = Operators.math("floor", X.ir / 33554432) % 128;
+        _op = X.ir % 128;
+
+        getReg(X.rs1);
+        X.alo = X.lo;
+        X.ahi = X.hi;
+        getReg(X.rs2);
+        X.blo = X.lo;
+        X.bhi = X.hi;
+
+        if (_op == 55) { execLui(); }
+        if (_op == 23) { execAuipc(_pc0Lo, _pc0Hi); }
+        if (_op == 111) { execJal(_pc0Lo, _pc0Hi); }
+        if (_op == 103) { execJalr(_pc0Lo, _pc0Hi); }
+        if (_op == 99) { execBranch(_pc0Lo, _pc0Hi); }
+        if (_op == 3) { execLoad(); }
+        if (_op == 35) { execStore(); }
+        if (_op == 19) { execOpImm(); }
+        if (_op == 51) { execOp(); }
+        if (_op == 27) { execOpImm(); }
+        if (_op == 59) { execOp(); }
+        if (_op == 47) { execAmo(); }
+        if (_op == 15) { }
+        if (_op == 115) { execSystem(); }
+        if (X.diskMiss == 1) {
+            // the instruction stalled on a disk block: put the pc back and let
+            // the outer loop park until the reply lands, then run it again
+            X.pcLo = _at;
+            X.pcHi = _atHi;
+            X.diskMiss = 0;
+            return;
+        }
+        X.steps += 1;
+        // pc first: a trace recorded after the increment cannot say which
+        // instruction it belongs to when the target is wrong
+        if (X.traceOn == 1) {
+            X.trace.add(join(_at, ":", X.ir, ":", X.reg.get(11), ":", X.reg.get(12)));
+        }
+        X.reg.set(1, 0);
+        X.reg.set(2, 0);
+    }
+
+    /*
+     * pc moves by the length of the instruction that was there, and `X.ir`
+     * holds it as a 32-bit word either way: a compressed halfword is expanded
+     * into the instruction it means and the decoder below runs unchanged. The
+     * pc still moves by two, which is what makes `c.jalr`'s link register come
+     * out right without a special case, and it is why every modern RISC-V
+     * binary -- OpenSBI, Linux -- can run at all: they are all built with C.
+     */
+    private void fetch() { // warp
+        translate(X.pcLo, X.pcHi, 0);
+        if (X.trOk == 0) {
+            X.pfault = 1;
+            takeTrap(12, 0, X.pcLo, X.pcLo);      // instruction page fault
+            return;
+        }
+        _fa = X.trPa;
+        loadN(_fa, 2);
+        if (X.err != "") {
+            return;
+        }
+        _half = X.lo;
+        if (_half % 4 == 3) {
+            loadN(_fa, 4);
+            if (X.err != "") {
+                return;
+            }
+            X.ir = X.lo;
+            advancePc(4);
+            return;
+        }
+        expandC(_half);
+        if (X.ir < 1) {
+            X.err = join("unsupported compressed instruction at ", X.pcLo);
+            return;
+        }
+        advancePc(2);
+    }
+
+    private void advancePc(n) { // warp
+        X.pcLo = X.pcLo + n;
+        if (X.pcLo >= 4294967296) {
+            X.pcLo = X.pcLo - 4294967296;
+            X.pcHi = X.pcHi + 1;
+        }
+    }
+
+    /* ---- the C extension ---------------------------------------------- */
+
+    /*
+     * A halfword in, the 32-bit instruction it means out. `X.ir = 0` means
+     * "not a form this machine implements": a floating-point one (there is no
+     * FPU here), `c.jal` (RV32 only) or a reserved encoding.
+     *
+     * This is the same table `tools/rv64_rvc.py` uses, and that one is checked
+     * against the *assembler* -- 31 instruction pairs, each expanded here and
+     * assembled there, compared byte for byte. Mis-remembering an encoding
+     * cannot pass that. `tools/rv64_rvc_mirror.py` is this same arithmetic in
+     * Python, and the test suite diffs the two over all 49,152 halfwords.
+     */
+    private void expandC(half) { // warp
+        X.ir = 0;
+        _q = half % 4;
+        _cf3 = Operators.math("floor", half / 8192) % 8;
+        _cd = Operators.math("floor", half / 128) % 32;
+        _cs2 = Operators.math("floor", half / 4) % 32;
+        _csh = Operators.math("floor", half / 4) % 32 + Operators.math("floor", half / 4096) % 2 * 32;
+        if (_q == 0) {
+            expandC0(half, _cf3);
+            return;
+        }
+        if (_q == 1) {
+            expandC1(half, _cf3, _cd, _csh);
+            return;
+        }
+        if (_q == 2) {
+            expandC2(half, _cf3, _cd, _cs2, _csh);
+        }
+    }
+
+    private void expandC0(half, f3) { // warp
+        _p2 = Operators.math("floor", half / 4) % 8 + 8;        /* rd'  bits 4:2 */
+        _p1 = Operators.math("floor", half / 128) % 8 + 8;      /* rs1' bits 9:7 */
+        if (f3 == 0) {                                          /* c.addi4spn */
+            _u = Operators.math("floor", half / 128) % 16 * 64 + Operators.math("floor", half / 2048) % 4 * 16 + Operators.math("floor", half / 32) % 2 * 8 + Operators.math("floor", half / 64) % 2 * 4;
+            if (_u > 0) {
+                encI(19, _p2, 0, 2, _u);
+            }
+            return;
+        }
+        if (f3 == 2) {                                          /* c.lw */
+            _o = Operators.math("floor", half / 1024) % 8 * 8 + Operators.math("floor", half / 64) % 2 * 4 + Operators.math("floor", half / 32) % 2 * 64;
+            encI(3, _p2, 2, _p1, _o);
+            return;
+        }
+        if (f3 == 3) {                                          /* c.ld */
+            _o = Operators.math("floor", half / 1024) % 8 * 8 + Operators.math("floor", half / 32) % 4 * 64;
+            encI(3, _p2, 3, _p1, _o);
+            return;
+        }
+        if (f3 == 6) {                                          /* c.sw */
+            _o = Operators.math("floor", half / 1024) % 8 * 8 + Operators.math("floor", half / 64) % 2 * 4 + Operators.math("floor", half / 32) % 2 * 64;
+            encS(_p2, 2, _p1, _o);
+            return;
+        }
+        if (f3 == 7) {                                          /* c.sd */
+            _o = Operators.math("floor", half / 1024) % 8 * 8 + Operators.math("floor", half / 32) % 4 * 64;
+            encS(_p2, 3, _p1, _o);
+        }
+        /* f3 1 and 5 are the floating-point forms: no FPU, so no expansion */
+    }
+
+    private void expandC1(half, f3, rd, shamt) { // warp
+        _i6 = Operators.math("floor", half / 4) % 32 + Operators.math("floor", half / 4096) % 2 * 32;
+        if (_i6 > 31) {
+            _i6 = _i6 - 64;
+        }
+        if (f3 == 0) {                                          /* c.nop / c.addi */
+            encI(19, rd, 0, rd, _i6);
+            return;
+        }
+        if (f3 == 1) {                                          /* c.addiw */
+            if (rd > 0) {
+                encI(27, rd, 0, rd, _i6);
+            }
+            return;
+        }
+        if (f3 == 2) {                                          /* c.li */
+            encI(19, rd, 0, 0, _i6);
+            return;
+        }
+        if (f3 == 3) {
+            if (rd == 2) {                                      /* c.addi16sp */
+                _nz = Operators.math("floor", half / 4096) % 2 * 512 + Operators.math("floor", half / 8) % 4 * 128 + Operators.math("floor", half / 32) % 2 * 64 + Operators.math("floor", half / 4) % 2 * 32 + Operators.math("floor", half / 64) % 2 * 16;
+                if (_nz > 511) {
+                    _nz = _nz - 1024;
+                }
+                if (_nz != 0) {
+                    encI(19, 2, 0, 2, _nz);
+                }
+                return;
+            }
+            /* c.lui: nzimm[17:12] with the value sign-extended from bit 17 */
+            _nz = Operators.math("floor", half / 4) % 32;
+            if (_nz > 0 || Operators.math("floor", half / 4096) % 2 == 1) {
+                X.ir = (_nz + Operators.math("floor", half / 4096) % 2 * 32) * 4096 + rd * 128 + 55;
+                if (Operators.math("floor", half / 4096) % 2 == 1) {
+                    X.ir = X.ir + 4294705152;      /* bits 31:18 all ones */
+                }
+            }
+            return;
+        }
+        if (f3 == 4) {                                          /* the ALU group */
+            _f2 = Operators.math("floor", half / 1024) % 4;
+            _p1 = Operators.math("floor", half / 128) % 8 + 8;
+            _p2 = Operators.math("floor", half / 4) % 8 + 8;
+            if (_f2 == 0) {                                     /* c.srli */
+                encI(19, _p1, 5, _p1, shamt);
+                return;
+            }
+            if (_f2 == 1) {                                     /* c.srai */
+                encI(19, _p1, 5, _p1, shamt + 1024);
+                return;
+            }
+            if (_f2 == 2) {                                     /* c.andi */
+                encI(19, _p1, 7, _p1, _i6);
+                return;
+            }
+            _which = Operators.math("floor", half / 32) % 4;
+            _wide = Operators.math("floor", half / 4096) % 2;
+            if (_which == 0 && _wide == 0) {
+                encR(51, _p1, 0, _p1, _p2, 32);                 /* c.sub */
+                return;
+            }
+            if (_which == 0) {
+                encR(59, _p1, 0, _p1, _p2, 32);                 /* c.subw */
+                return;
+            }
+            if (_which == 1 && _wide == 1) {
+                encR(59, _p1, 0, _p1, _p2, 0);                  /* c.addw */
+                return;
+            }
+            if (_which == 1) {
+                encR(51, _p1, 4, _p1, _p2, 0);                  /* c.xor */
+                return;
+            }
+            if (_which == 2) {
+                encR(51, _p1, 6, _p1, _p2, 0);                  /* c.or */
+                return;
+            }
+            encR(51, _p1, 7, _p1, _p2, 0);                      /* c.and */
+            return;
+        }
+        if (f3 == 5) {                                          /* c.j */
+            _o = Operators.math("floor", half / 4096) % 2 * 2048 + Operators.math("floor", half / 2048) % 2 * 16 + Operators.math("floor", half / 512) % 4 * 256 + Operators.math("floor", half / 256) % 2 * 1024 + Operators.math("floor", half / 64) % 2 * 128 + Operators.math("floor", half / 128) % 2 * 64 + Operators.math("floor", half / 8) % 8 * 2 + Operators.math("floor", half / 4) % 2 * 32;
+            if (_o > 2047) {
+                _o = _o - 4096;
+            }
+            encJ(0, _o);
+            return;
+        }
+        _o = Operators.math("floor", half / 4096) % 2 * 256          /* c.beqz/c.bnez */ + Operators.math("floor", half / 1024) % 4 * 8 + Operators.math("floor", half / 32) % 4 * 64 + Operators.math("floor", half / 8) % 4 * 2 + Operators.math("floor", half / 4) % 2 * 32;
+        if (_o > 255) {
+            _o = _o - 512;
+        }
+        encB(Operators.math("floor", half / 128) % 8 + 8, f3 - 6, 0, _o);
+    }
+
+    private void expandC2(half, f3, rd, rs2, shamt) { // warp
+        if (f3 == 0) {                                          /* c.slli */
+            encI(19, rd, 1, rd, shamt);
+            return;
+        }
+        if (f3 == 2) {                                          /* c.lwsp */
+            _o = Operators.math("floor", half / 4096) % 2 * 32 + Operators.math("floor", half / 16) % 8 * 4 + Operators.math("floor", half / 4) % 4 * 64;
+            if (rd > 0) {
+                encI(3, rd, 2, 2, _o);
+            }
+            return;
+        }
+        if (f3 == 3) {                                          /* c.ldsp */
+            _o = Operators.math("floor", half / 4096) % 2 * 32 + Operators.math("floor", half / 32) % 4 * 8 + Operators.math("floor", half / 4) % 8 * 64;
+            if (rd > 0) {
+                encI(3, rd, 3, 2, _o);
+            }
+            return;
+        }
+        if (f3 == 4) {
+            if (Operators.math("floor", half / 4096) % 2 == 0) {
+                if (rs2 == 0) {                                 /* c.jr */
+                    if (rd > 0) {
+                        encI(103, 0, 0, rd, 0);
+                    }
+                    return;
+                }
+                encR(51, rd, 0, 0, rs2, 0);                     /* c.mv */
+                return;
+            }
+            if (rs2 == 0) {
+                if (rd == 0) {
+                    X.ir = 1048691;                             /* c.ebreak */
+                    return;
+                }
+                encI(103, 1, 0, rd, 0);                         /* c.jalr */
+                return;
+            }
+            encR(51, rd, 0, rd, rs2, 0);                        /* c.add */
+            return;
+        }
+        if (f3 == 6) {                                          /* c.swsp */
+            _o = Operators.math("floor", half / 512) % 16 * 4 + Operators.math("floor", half / 128) % 4 * 64;
+            encS(rs2, 2, 2, _o);
+            return;
+        }
+        if (f3 == 7) {                                          /* c.sdsp */
+            _o = Operators.math("floor", half / 1024) % 8 * 8 + Operators.math("floor", half / 128) % 8 * 64;
+            encS(rs2, 3, 2, _o);
+        }
+    }
+
+    /* ---- encoders: the four shapes a 32-bit instruction can have ------ */
+
+    private void encI(op, rd, f3, rs1, imm) { // warp
+        X.ir = imm % 4096 * 1048576 + rs1 * 32768 + f3 * 4096 + rd * 128 + op;
+    }
+
+    private void encR(op, rd, f3, rs1, rs2, f7) { // warp
+        X.ir = f7 * 33554432 + rs2 * 1048576 + rs1 * 32768 + f3 * 4096 + rd * 128 + op;
+    }
+
+    private void encS(rs2, f3, rs1, imm) { // warp
+        _e = imm % 4096;
+        X.ir = Operators.math("floor", _e / 32) % 128 * 33554432 + rs2 * 1048576 + rs1 * 32768 + f3 * 4096 + _e % 32 * 128 + 35;
+    }
+
+    private void encB(rs1, f3, rs2, off) { // warp
+        _e = off % 8192;
+        X.ir = Operators.math("floor", _e / 4096) % 2 * 2147483648 + Operators.math("floor", _e / 32) % 64 * 33554432 + rs2 * 1048576 + rs1 * 32768 + f3 * 4096 + Operators.math("floor", _e / 2) % 16 * 256 + Operators.math("floor", _e / 2048) % 2 * 128 + 99;
+    }
+
+    private void encJ(rd, off) { // warp
+        _e = off % 2097152;
+        X.ir = Operators.math("floor", _e / 1048576) % 2 * 2147483648 + Operators.math("floor", _e / 2) % 1024 * 2097152 + Operators.math("floor", _e / 2048) % 2 * 1048576 + Operators.math("floor", _e / 4096) % 256 * 4096 + rd * 128 + 111;
+    }    /* Sign-extend `bits` from `width` into X.imm / X.immHi. */
+    private void setImm(bits, width) { // warp
+        if (Operators.math("floor", bits / X.pow2.get(width - 1 + 1)) % 2 == 1) {
+            X.imm = bits + 4294967296 - X.pow2.get(width + 1);
+            X.imm += 0;
+            if (X.imm >= 4294967296) {
+                X.imm = X.imm - 4294967296;
+            }
+            X.immHi = 4294967295;
+        } else {
+            X.imm = bits % 4294967296;
+            X.immHi = 0;
+        }
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* control transfer                                                    */
+    /* ------------------------------------------------------------------ */
+
+    private void jump(offSigned) { // warp
+        if (offSigned >= 0) {
+            add64(X.pcLo, X.pcHi, offSigned % 4294967296, 0);
+        } else {
+            add64(X.pcLo, X.pcHi, offSigned + 4294967296, 4294967295);
+        }
+        X.pcLo = X.lo;
+        X.pcHi = X.hi;
+    }
+
+    private void execLui() { // warp
+        _bits = X.ir % 4294967296;
+        _bits = _bits - (_bits % 4096);
+        // LUI sign-extends bit 31 on RV64
+        if (_bits >= 2147483648) {
+            putReg(X.rd, _bits, 4294967295);
+        } else {
+            putReg(X.rd, _bits, 0);
+        }
+    }
+
+    private void execAuipc(pc0Lo, pc0Hi) { // warp
+        _bits = X.ir % 4294967296;
+        _bits = _bits - (_bits % 4096);
+        if (_bits >= 2147483648) {
+            add64(pc0Lo, pc0Hi, _bits, 4294967295);
+        } else {
+            add64(pc0Lo, pc0Hi, _bits, 0);
+        }
+        putReg(X.rd, X.lo, X.hi);
+    }
+
+    private void execJal(pc0Lo, pc0Hi) { // warp
+        _immJ();
+        _imm = X.c;
+        putReg(X.rd, X.pcLo, X.pcHi);
+        X.pcLo = pc0Lo;
+        X.pcHi = pc0Hi;
+        jump(_imm);
+    }
+
+    private void execJalr(pc0Lo, pc0Hi) { // warp
+        _immI();
+        _imm = X.c;
+        add64(X.alo, X.ahi, _imm % 4294967296, 0);
+        if (_imm < 0) {
+            add64(X.alo, X.ahi, _imm + 4294967296, 4294967295);
+        }
+        _target = X.lo - (X.lo % 2);
+        putReg(X.rd, X.pcLo, X.pcHi);
+        X.pcLo = _target;
+        X.pcHi = X.hi;
+    }
+
+    private void execBranch(pc0Lo, pc0Hi) { // warp
+        _immB();
+        _imm = X.c;
+        _take = 0;
+        if (X.f3 == 0 && X.alo == X.blo && X.ahi == X.bhi) { _take = 1; }
+        if (X.f3 == 1 && !(X.alo == X.blo && X.ahi == X.bhi)) { _take = 1; }
+        if (X.f3 == 4) {
+            cmp64(X.alo, X.ahi, X.blo, X.bhi);
+            if (X.c < 0) { _take = 1; }
+        }
+        if (X.f3 == 5) {
+            cmp64(X.alo, X.ahi, X.blo, X.bhi);
+            if (X.c >= 0) { _take = 1; }
+        }
+        if (X.f3 == 6) {
+            cmpu64(X.alo, X.ahi, X.blo, X.bhi);
+            if (X.c < 0) { _take = 1; }
+        }
+        if (X.f3 == 7) {
+            cmpu64(X.alo, X.ahi, X.blo, X.bhi);
+            if (X.c >= 0) { _take = 1; }
+        }
+        if (_take == 1) {
+            X.pcLo = pc0Lo;
+            X.pcHi = pc0Hi;
+            jump(_imm);
+        }
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* loads and stores                                                    */
+    /* ------------------------------------------------------------------ */
+
+    private void execLoad() { // warp
+        _immI();
+        _imm = X.c;
+        _size = 0;
+        if (X.f3 == 0) { _size = 1; }
+        if (X.f3 == 1) { _size = 2; }
+        if (X.f3 == 2) { _size = 4; }
+        if (X.f3 == 3) { _size = 8; }
+        if (X.f3 == 4) { _size = 1; }
+        if (X.f3 == 5) { _size = 2; }
+        if (X.f3 == 6) { _size = 4; }
+        if (_size == 0) {
+            X.err = join("bad load funct3 ", X.f3);
+            return;
+        }
+        if (_imm >= 0) {
+            add64(X.alo, X.ahi, _imm, 0);
+        } else {
+            add64(X.alo, X.ahi, _imm + 4294967296, 4294967295);
+        }
+        _ea = X.lo;
+        translate(_ea, X.hi, 1);
+        if (X.trOk == 0) {
+            takeTrap(13, 0, X.pc0Lo, _ea);        // load page fault, stval = the va
+            return;
+        }
+        loadN(X.trPa, _size);
+        if (X.err != "") {
+            return;
+        }
+        // funct3 0..3 sign-extend, 4..6 zero-extend
+        if (X.f3 == 0) { _signBytes(X.lo, 1); }
+        if (X.f3 == 1) { _signBytes(X.lo, 2); }
+        if (X.f3 == 2) { _signBytes(X.lo, 4); }
+        if (X.f3 == 3) { }
+        if (X.f3 == 4) { X.hi = 0; }
+        if (X.f3 == 5) { X.hi = 0; }
+        if (X.f3 == 6) { X.hi = 0; }
+        putReg(X.rd, X.lo, X.hi);
+    }
+
+    /* funct3 0..3 sign-extend the loaded value; 4..6 zero-extend it. */
+    private void _signBytes(lo, size) { // warp
+        if (Operators.math("floor", lo / X.pow2.get(size * 8 - 1 + 1)) % 2 == 1) {
+            // sign-extend to a full 64 bits: the high half and the high bits of
+            // the low half both fill with ones (lb of 0xFF is 0xFFFF_FFFF_FFFF_FFFF)
+            X.lo = lo + 4294967296 - X.pow2.get(size * 8 + 1);
+            X.hi = 4294967295;
+        } else {
+            X.lo = lo;
+            X.hi = 0;
+        }
+    }
+
+    private void execStore() { // warp
+        _immS();
+        _imm = X.c;
+        _size = 0;
+        if (X.f3 == 0) { _size = 1; }
+        if (X.f3 == 1) { _size = 2; }
+        if (X.f3 == 2) { _size = 4; }
+        if (X.f3 == 3) { _size = 8; }
+        if (_size == 0) {
+            X.err = join("bad store funct3 ", X.f3);
+            return;
+        }
+        if (_imm >= 0) {
+            add64(X.alo, X.ahi, _imm, 0);
+        } else {
+            add64(X.alo, X.ahi, _imm + 4294967296, 4294967295);
+        }
+        _ea = X.lo;
+        translate(_ea, X.hi, 2);
+        if (X.trOk == 0) {
+            takeTrap(15, 0, X.pc0Lo, _ea);        // store page fault, stval = the va
+            return;
+        }
+        storeN(X.trPa, _size, X.blo, X.bhi);
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* immediate fields                                                    */
+    /* ------------------------------------------------------------------ */
+
+    private void _immI() { // warp
+        X.c = Operators.math("floor", X.ir / 1048576) % 4096;
+        if (X.c >= 2048) {
+            X.c = X.c - 4096;
+        }
+    }
+
+    private void _immS() { // warp
+        X.c = (Operators.math("floor", X.ir / 33554432) % 128) * 32 + (Operators.math("floor", X.ir / 128) % 32);
+        if (X.c >= 2048) {
+            X.c = X.c - 4096;
+        }
+    }
+
+    private void _immB() { // warp
+        _b12 = Operators.math("floor", X.ir / 2147483648) % 2;
+        _b11 = Operators.math("floor", X.ir / 128) % 2;
+        _b10_5 = Operators.math("floor", X.ir / 33554432) % 64;
+        _b4_1 = Operators.math("floor", X.ir / 256) % 16;
+        X.c = _b12 * 4096 + _b11 * 2048 + _b10_5 * 32 + _b4_1 * 2;
+        if (X.c >= 4096) {
+            X.c = X.c - 8192;
+        }
+    }
+
+    private void _immJ() { // warp
+        _b20 = Operators.math("floor", X.ir / 2147483648) % 2;
+        _b19_12 = Operators.math("floor", X.ir / 4096) % 256;
+        _b11 = Operators.math("floor", X.ir / 1048576) % 2;
+        _b10_1 = Operators.math("floor", X.ir / 2097152) % 1024;
+        X.c = _b20 * 1048576 + _b19_12 * 4096 + _b11 * 2048 + _b10_1 * 2;
+        if (X.c >= 1048576) {
+            X.c = X.c - 2097152;
+        }
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* bitwise                                                             */
+    /* ------------------------------------------------------------------ */
+
+    /*
+     * Scratch has no bitwise operators, so these are rebuilt a bit at a time
+     * from division and addition. Slow, but exact, and only a handful of
+     * instructions in any real payload need them.
+     */
+    private void bitop(aLo, aHi, bLo, bHi, mode) { // warp
+        _rLo = 0;
+        _rHi = 0;
+        _k = 0;
+        while (_k < 64) {
+            _bitOf(aLo, aHi, _k);
+            _x = X.c;
+            _bitOf(bLo, bHi, _k);
+            _y = X.c;
+            _hit = 0;
+            if (mode == 0) {
+                if (_x == 1 && _y == 1) { _hit = 1; }
+            }
+            if (mode == 1) {
+                if (_x == 1 || _y == 1) { _hit = 1; }
+            }
+            if (mode == 2) {
+                if (_x != _y) { _hit = 1; }
+            }
+            if (_hit == 1) {
+                if (_k < 32) {
+                    _rLo = _rLo + X.pow2.get(_k + 1);
+                } else {
+                    _rHi = _rHi + X.pow2.get(_k - 32 + 1);
+                }
+            }
+            _k += 1;
+        }
+        X.lo = _rLo;
+        X.hi = _rHi;
+    }
+
+    private void _bitOf(lo, hi, k) { // warp
+        if (k < 32) {
+            X.c = Operators.math("floor", lo / X.pow2.get(k + 1)) % 2;
+        } else {
+            X.c = Operators.math("floor", hi / X.pow2.get(k - 32 + 1)) % 2;
+        }
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* ALU                                                                 */
+    /* ------------------------------------------------------------------ */
+
+    private void alu(f3, f7, word, shamt, isImm) { // warp
+        if (f3 == 0) {
+            if (isImm == 0 && f7 == 32) {
+                sub64(X.alo, X.ahi, X.blo, X.bhi);
+            } else {
+                add64(X.alo, X.ahi, X.blo, X.bhi);
+            }
+            if (word == 1) {
+                sext32(X.lo);
+            }
+            return;
+        }
+        if (f3 == 1) {
+            X.lo = X.alo;
+            X.hi = X.ahi;
+            shl64(shamt);
+            if (word == 1) {
+                sext32(X.lo);
+            }
+            return;
+        }
+        if (f3 == 2) {
+            cmp64(X.alo, X.ahi, X.blo, X.bhi);
+            X.lo = 0;
+            if (X.c < 0) {
+                X.lo = 1;
+            }
+            X.hi = 0;
+            return;
+        }
+        if (f3 == 3) {
+            cmpu64(X.alo, X.ahi, X.blo, X.bhi);
+            X.lo = 0;
+            if (X.c < 0) {
+                X.lo = 1;
+            }
+            X.hi = 0;
+            return;
+        }
+        if (f3 == 4) {
+            bitop(X.alo, X.ahi, X.blo, X.bhi, 2);
+            if (word == 1) {
+                sext32(X.lo);
+            }
+            return;
+        }
+        if (f3 == 5) {
+            X.lo = X.alo;
+            X.hi = X.ahi;
+            if (word == 1) {
+                // a word shift works on the low 32 bits, sign-extended
+                if (X.lo >= 2147483648) {
+                    X.hi = 4294967295;
+                } else {
+                    X.hi = 0;
+                }
+            }
+            if (f7 == 32) {
+                sar64(shamt);
+            } else {
+                shr64(shamt);
+            }
+            if (word == 1) {
+                sext32(X.lo);
+            }
+            return;
+        }
+        if (f3 == 6) {
+            bitop(X.alo, X.ahi, X.blo, X.bhi, 1);
+            if (word == 1) {
+                sext32(X.lo);
+            }
+            return;
+        }
+        bitop(X.alo, X.ahi, X.blo, X.bhi, 0);
+        if (word == 1) {
+            sext32(X.lo);
+        }
+    }
+
+    /* RV64M: the funct7 = 1 group, selected by funct3. */
+    private void muldiv(f3, word) { // warp
+        _aLo = X.alo;
+        _aHi = X.ahi;
+        _bLo = X.blo;
+        _bHi = X.bhi;
+        if (word == 1) {
+            if (_aLo >= 2147483648) { _aHi = 4294967295; } else { _aHi = 0; }
+            if (_bLo >= 2147483648) { _bHi = 4294967295; } else { _bHi = 0; }
+        }
+        if (f3 == 0) {
+            mulu64(_aLo, _aHi, _bLo, _bHi);
+            if (word == 1) {
+                sext32(X.lo);
+            }
+            return;
+        }
+        if (f3 == 1 || f3 == 2 || f3 == 3) {
+            mulu64(X.alo, X.ahi, X.blo, X.bhi);
+            _hLo = X.rLo;
+            _hHi = X.rHi;
+            if (f3 != 3 && X.ahi >= 2147483648) {
+                sub64(_hLo, _hHi, X.blo, X.bhi);
+                _hLo = X.lo;
+                _hHi = X.hi;
+            }
+            if (f3 == 1 && X.bhi >= 2147483648) {
+                sub64(_hLo, _hHi, X.alo, X.ahi);
+                _hLo = X.lo;
+                _hHi = X.hi;
+            }
+            X.lo = _hLo;
+            X.hi = _hHi;
+            return;
+        }
+        _neg = 0;
+        if (_aHi >= 2147483648) {
+            neg64(_aLo, _aHi);
+            _aLo = X.lo;
+            _aHi = X.hi;
+            _neg = 1;
+        }
+        if (f3 != 2 && _bHi >= 2147483648) {
+            neg64(_bLo, _bHi);
+            _bLo = X.lo;
+            _bHi = X.hi;
+            if (_neg == 0) { _neg = 1; } else { _neg = 0; }
+        }
+        if (word == 1) {
+            // 32-bit divide: operate on the sign-extended low halves
+            divu64(_aLo, _aHi, _bLo, _bHi);
+            if (f3 == 4 || f3 == 6) {
+                if (_bLo == 0 && _bHi == 0) {
+                    // divide by zero: quotient all ones, remainder the dividend
+                    if (f3 == 4) {
+                        X.lo = 4294967295;
+                        X.hi = 4294967295;
+                    } else {
+                        X.lo = X.alo;
+                        X.hi = X.ahi;
+                    }
+                } else {
+                    if (f3 == 4) {
+                        if (_neg == 1) { neg64(X.lo, X.hi); }
+                    } else {
+                        X.lo = X.rLo;
+                        X.hi = X.rHi;
+                        if (_aLo >= 2147483648) { neg64(X.lo, X.hi); }
+                    }
+                }
+            } else {
+                if (f3 == 5) {
+                    divu64(X.alo, X.ahi, X.blo, X.bhi);
+                } else {
+                    divu64(X.alo, X.ahi, X.blo, X.bhi);
+                    X.lo = X.rLo;
+                    X.hi = X.rHi;
+                }
+            }
+            sext32(X.lo);
+            return;
+        }
+        divu64(_aLo, _aHi, _bLo, _bHi);
+        if (f3 == 4 || f3 == 6) {
+            if (_bLo == 0 && _bHi == 0) {
+                if (f3 == 4) {
+                    X.lo = 4294967295;
+                    X.hi = 4294967295;
+                } else {
+                    X.lo = X.alo;
+                    X.hi = X.ahi;
+                }
+            } else {
+                if (f3 == 4) {
+                    if (_neg == 1) { neg64(X.lo, X.hi); }
+                } else {
+                    X.lo = X.rLo;
+                    X.hi = X.rHi;
+                    if (X.alo >= 2147483648) { neg64(X.lo, X.hi); }
+                }
+            }
+            return;
+        }
+        if (f3 == 5) {
+            divu64(X.alo, X.ahi, X.blo, X.bhi);
+            return;
+        }
+        divu64(X.alo, X.ahi, X.blo, X.bhi);
+        X.lo = X.rLo;
+        X.hi = X.rHi;
+    }
+
+    private void execOpImm() { // warp
+        _immI();
+        X.blo = X.c;
+        if (X.c < 0) {
+            X.blo = X.c + 4294967296;
+            X.bhi = 4294967295;
+        } else {
+            X.bhi = 0;
+        }
+        _word = 0;
+        if (X.ir % 128 == 27) {
+            _word = 1;
+        }
+        _shamt = Operators.math("floor", X.ir / 1048576) % 64;
+        if (_word == 1) {
+            _shamt = _shamt % 32;
+        }
+        alu(X.f3, X.f7, _word, _shamt, 1);
+        putReg(X.rd, X.lo, X.hi);
+    }
+
+    private void execOp() { // warp
+        _word = 0;
+        if (X.ir % 128 == 59) {
+            _word = 1;
+        }
+        if (X.f7 == 1) {
+            muldiv(X.f3, _word);
+            putReg(X.rd, X.lo, X.hi);
+            return;
+        }
+        _shamt = X.blo % 64;
+        if (_word == 1) {
+            _shamt = _shamt % 32;
+        }
+        alu(X.f3, X.f7, _word, _shamt, 0);
+        putReg(X.rd, X.lo, X.hi);
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* atomics                                                             */
+    /* ------------------------------------------------------------------ */
+
+    private void execAmo() { // warp
+        _size = 0;
+        if (X.f3 == 2) { _size = 4; }
+        if (X.f3 == 3) { _size = 8; }
+        if (_size == 0) {
+            X.err = join("unsupported AMO width ", X.f3);
+            return;
+        }
+        loadN(X.alo, _size);
+        if (X.err != "") {
+            return;
+        }
+        _oldLo = X.lo;
+        _oldHi = X.hi;
+        _op = Operators.math("floor", X.ir / 134217728) % 32;
+        if (_op == 2) {                 // lr: load and set the reservation
+            X.resvLo = X.alo;
+            X.resvHi = X.ahi;
+            X.resvOn = 1;
+            if (_size == 4) {
+                sext32(_oldLo);
+                putReg(X.rd, X.lo, X.hi);
+            } else {
+                putReg(X.rd, _oldLo, _oldHi);
+            }
+            return;
+        }
+        if (_op == 3) {                 // sc: store only if nothing intervened
+            _ok = 0;
+            if (X.resvOn == 1 && X.resvLo == X.alo && X.resvHi == X.ahi) {
+                _ok = 1;
+                storeN(X.alo, _size, X.blo, X.bhi);
+            }
+            X.resvOn = 0;
+            X.lo = 1 - _ok;
+            X.hi = 0;
+            putReg(X.rd, X.lo, X.hi);
+            return;
+        }
+        if (_op == 1) {                 // amoswap
+            X.lo = X.blo;
+            X.hi = X.bhi;
+        }
+        if (_op == 0) {                 // amoadd
+            add64(_oldLo, _oldHi, X.blo, X.bhi);
+        }
+        if (_op == 4) {                 // amoxor
+            bitop(_oldLo, _oldHi, X.blo, X.bhi, 2);
+        }
+        if (_op == 12) {                // amoand
+            bitop(_oldLo, _oldHi, X.blo, X.bhi, 0);
+        }
+        if (_op == 8) {                 // amoor
+            bitop(_oldLo, _oldHi, X.blo, X.bhi, 1);
+        }
+        if (_op == 16 || _op == 20 || _op == 24 || _op == 28) {
+            if (_op == 24 || _op == 28) {
+                cmpu64(_oldLo, _oldHi, X.blo, X.bhi);
+                _less = X.c < 0;
+            } else {
+                cmp64(_oldLo, _oldHi, X.blo, X.bhi);
+                _less = X.c < 0;
+            }
+            _wantOld = 0;
+            if (_op == 16 || _op == 24) {
+                if (_less) { _wantOld = 1; }
+            } else {
+                if (!_less) { _wantOld = 1; }
+            }
+            if (_wantOld == 1) {
+                X.lo = _oldLo;
+                X.hi = _oldHi;
+            } else {
+                X.lo = X.blo;
+                X.hi = X.bhi;
+            }
+        }
+        storeN(X.alo, _size, X.lo, X.hi);
+        // the old value is sign-extended for AMO.W
+        if (_size == 4) {
+            sext32(_oldLo);
+            putReg(X.rd, X.lo, X.hi);
+        } else {
+            putReg(X.rd, _oldLo, _oldHi);
+        }
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* system                                                              */
+    /* ------------------------------------------------------------------ */
+
+    private void execSystem() { // warp
+        if (X.ir % 128 != 115) {
+            return;
+        }
+        if (X.f3 == 0) {
+            if (X.ir % 4294967296 == 115) {
+                if (X.mtvec < 1) {
+                    // ECALL with no SBI and no handler: stop loudly
+                    X.err = join("ecall with no SBI at pc ", X.pcLo);
+                    X.halted = 1;
+                    return;
+                }
+                // the instruction's own address: the pc already points past it
+                if (X.priv == 3) {
+                    takeTrap(11, 0, X.pc0Lo, 0);         // ecall from M
+                } else {
+                    takeTrap(9, 0, X.pc0Lo, 0);          // ecall from S
+                }
+                return;
+            }
+            if (X.ir % 4294967296 == 1048691) {
+                if (X.mtvec < 1) {
+                    X.err = join("ebreak at pc ", X.pcLo);
+                    X.halted = 1;
+                    return;
+                }
+                takeTrap(3, 0, X.pc0Lo, 0);
+                return;
+            }
+            if (X.ir % 4294967296 == 807403635) {
+                if (X.mtvec < 1) {
+                    X.err = join("mret with no trap handler at pc ", X.pcLo);
+                    X.halted = 1;
+                    return;
+                }
+                mret();
+                return;
+            }
+            if (X.ir % 4294967296 == 270532723) {        // sret
+                sret();
+                return;
+            }
+            if (X.ir % 4294967296 == 273678451) {
+                // WFI: the only thing that can wake the guest is the next
+                // frame, which is also the only thing that advances `mtime`.
+                // Park the rest of this batch -- `wait` inside a warp block
+                // returns at once, so the flag is what stops the loop.
+                X.idle += 1;
+                X.waiting = 1;
+                return;
+            }
+            return;
+        }
+        // CSRRW / CSRRS / CSRRC and the three immediate forms
+        csrOp(X.f3);
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* paging: Sv39                                                        */
+    /* ------------------------------------------------------------------ */
+
+    /*
+     * Three levels of nine bits, walked eight bytes at a time through the same
+     * `loadN` every other access uses -- a page table in RAM costs what a load
+     * costs, because it *is* a load.
+     *
+     * `kind` is 0 fetch, 1 load, 2 store: that is what picks the permission bit
+     * and therefore which fault the caller raises. M-mode never translates.
+     *
+     * The result lands in `X.trPa`, and `X.trOk` says whether it is real: a
+     * procedure cannot return a value in this dialect, so the two globals are
+     * the return path.
+     *
+     * The scratch names are prefixed `_tg` because `_name` is a *thread-local*
+     * temp, not a per-procedure one: two procedures on the same thread share it,
+     * and a walker that reused `_at` would silently rewrite the address of the
+     * instruction it is fetching for.
+     */
+    private void translate(vaLo, vaHi, kind) { // warp
+        X.trOk = 1;
+        X.trPa = vaLo;
+        if (X.priv > 1) {
+            return;                            // machine mode is physical
+        }
+        if (X.satpMode != 8) {
+            return;                            // paging is off
+        }
+        // Sv39 is 39 bits wide, so only the low seven bits of the high word can
+        // matter -- which keeps every product here inside a double
+        _tgVa = (vaLo + (vaHi % 128) * 4294967296) % 549755813888;
+        _tgTbl = X.satpPpn * 4096;
+        _tgLv = 0;
+        while (_tgLv < 3) {
+            _tgIdx = Operators.math("floor", _tgVa / X.pow2.get(30 - _tgLv * 9 + 1)) % 512;
+            _tgAt = _tgTbl + _tgIdx * 8;
+            if (_tgAt < X.ramBase || _tgAt + 8 > X.ramBase + X.ramSize) {
+                X.trOk = 0;                    // a table outside RAM cannot be read
+                return;
+            }
+            loadN(_tgAt, 8);
+            _tgPteLo = X.lo;
+            _tgPteHi = X.hi;
+            if (_tgPteLo % 2 == 0) {
+                X.trOk = 0;                    // not valid
+                return;
+            }
+            // bits 1..3 are R, W, X in that order: 0 means "next level down"
+            _tgPerm = Operators.math("floor", _tgPteLo / 2) % 8;
+            if (_tgPerm > 0) {
+                _tgU = Operators.math("floor", _tgPteLo / 16) % 2;
+                _tgSum = Operators.math("floor", X.mstatus / 262144) % 2;
+                _tgMxr = Operators.math("floor", X.mstatus / 134217728) % 2;
+                if (_tgU == 1) {
+                    if (X.priv == 1 && _tgSum == 0) {
+                        X.trOk = 0;            // S-mode may not touch a user page
+                        return;
+                    }
+                } else {
+                    if (X.priv == 0) {
+                        X.trOk = 0;            // and a user may not touch ours
+                        return;
+                    }
+                }
+                if (kind == 2) {
+                    if (Operators.math("floor", _tgPerm / 2) % 2 == 0) {
+                        X.trOk = 0;            // store to a page without W
+                        return;
+                    }
+                } else {
+                    if (kind == 0) {
+                        if (Operators.math("floor", _tgPerm / 4) % 2 == 0) {
+                            X.trOk = 0;        // fetch from a page without X
+                            return;
+                        }
+                    } else {
+                        _tgRead = _tgPerm % 2;
+                        if (_tgRead == 0 && _tgMxr == 1) {
+                            _tgRead = Operators.math("floor", _tgPerm / 4) % 2;
+                        }
+                        if (_tgRead == 0) {
+                            X.trOk = 0;        // load from a page without R
+                            return;
+                        }
+                    }
+                }
+                // A is set by any access, D only by a store -- the hardware does
+                // it here so a kernel does not take a fault on every first touch
+                if (Operators.math("floor", _tgPteLo / 64) % 2 == 0) {
+                    _tgPteLo = _tgPteLo + 64;
+                    storeN(_tgAt, 8, _tgPteLo, _tgPteHi);
+                }
+                if (kind == 2) {
+                    if (Operators.math("floor", _tgPteLo / 128) % 2 == 0) {
+                        _tgPteLo = _tgPteLo + 128;
+                        storeN(_tgAt, 8, _tgPteLo, _tgPteHi);
+                    }
+                }
+                _tgPpn = Operators.math("floor", _tgPteLo / 1024) + _tgPteHi * 4194304;
+                _tgSpan = X.pow2.get(30 - _tgLv * 9 + 1);           // 1 GiB, 2 MiB, 4 KiB
+                X.trPa = _tgPpn * 4096 + _tgVa % _tgSpan;
+                return;
+            }
+            if (_tgLv == 2) {
+                X.trOk = 0;                    // a pointer at the last level
+                return;
+            }
+            _tgTbl = (Operators.math("floor", _tgPteLo / 1024) + _tgPteHi * 4194304) * 4096;
+            _tgLv += 1;
+        }
+        X.trOk = 0;
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* machine mode: traps, CSRs and the clock                             */
+    /* ------------------------------------------------------------------ */
+
+    /* bit n of v, as 0 or 1: there are no bitwise operators in this dialect */
+    private void bitOf(v, n) { // warp
+        _bv = Operators.math("floor", v / X.pow2.get(n + 1)) % 2;
+    }
+
+    /* a | b, one bit at a time. Only ever used on a CSR, so 31 rounds is fine. */
+    private void orBits(a, b) { // warp
+        _orOut = 0;
+        _p = 1;
+        _k = 0;
+        while (_k < 31) {
+            bitOf(a, _k);
+            _ba = _bv;
+            bitOf(b, _k);
+            if (_ba + _bv > 0) {
+                _orOut = _orOut + _p;
+            }
+            _p = _p * 2;
+            _k += 1;
+        }
+    }
+
+    /* a & ~b, the same way round */
+    private void andNotBits(a, b) { // warp
+        _anOut = 0;
+        _p = 1;
+        _k = 0;
+        while (_k < 31) {
+            bitOf(a, _k);
+            _ba = _bv;
+            bitOf(b, _k);
+            if (_ba == 1 && _bv == 0) {
+                _anOut = _anOut + _p;
+            }
+            _p = _p * 2;
+            _k += 1;
+        }
+    }
+
+    /* Is a machine timer interrupt pending *and* enabled? */
+    private void trapPending() { // warp
+        _pend = 0;
+        if (X.mtvec < 1) {
+            return;
+        }
+        bitOf(X.mstatus, 3);            // mstatus.MIE
+        if (_bv < 1) {
+            return;
+        }
+        bitOf(X.mie, 7);                // mie.MTIE
+        if (_bv < 1) {
+            return;
+        }
+        bitOf(X.mip, 7);                // mip.MTIP
+        if (_bv < 1) {
+            return;
+        }
+        _pend = 1;
+    }
+
+    /*
+     * Enter the handler: `mepc`/`mcause`/`mtval` first, then the pc, and
+     * `mstatus` last. Bit 63 of `mcause` says "interrupt", and this machine
+     * keeps it in `X.mcauseHi` because a Scratch number is 32 bits of integer.
+     */
+    /* Is this trap the supervisor's? S-mode owns a cause when `medeleg`
+     * (`mideleg` for interrupts) says so, and only a trap taken from S can be
+     * delegated at all -- the firmware keeps its own traps. */
+    private void delegated(cause, interrupt) { // warp
+        _dele = 0;
+        if (X.priv < 2) {
+            if (interrupt == 1) {
+                bitOf(X.mideleg, cause);
+            } else {
+                bitOf(X.medeleg, cause);
+            }
+            _dele = _bv;
+        }
+    }
+
+    private void takeTrap(cause, interrupt, epc, tval) { // warp
+        delegated(cause, interrupt);
+        if (_dele == 1) {
+            X.sepc = epc - epc % 2;
+            X.scauseLo = cause;
+            X.scauseHi = 0;
+            X.stval = tval;
+            if (interrupt == 1) {
+                X.scauseHi = 2147483648;
+            }
+            // SIE = 0, SPIE = the old SIE, SPP = 1 (the trap came from S)
+            _sie = Operators.math("floor", X.mstatus / 2) % 2;
+            _m = X.mstatus - _sie * 2 - Operators.math("floor", X.mstatus / 32) % 2 * 32 - Operators.math("floor", X.mstatus / 256) % 2 * 256;
+            X.mstatus = _m + _sie * 32 + 256;
+            X.pcLo = X.stvec - X.stvec % 4;
+            X.pcHi = Operators.math("floor", X.stvec / 4294967296);
+            X.traps += 1;
+            return;
+        }
+        X.mepc = epc;
+        X.mcauseLo = cause;
+        X.mcauseHi = 0;
+        X.mtval = tval;
+        if (interrupt == 1) {
+            X.mcauseHi = 2147483648;
+            // taking the interrupt clears MTIP: the handler has to rearm
+            bitOf(X.mip, 7);
+            if (_bv == 1) {
+                X.mip = X.mip - 128;
+            }
+        }
+        bitOf(X.mstatus, 3);
+        _mie = _bv;
+        bitOf(X.mstatus, 7);
+        _mpie = _bv;
+        // clear MPP (bits 11-13), then MIE = 0, MPIE = the old MIE, MPP = old priv
+        _m = X.mstatus - Operators.math("floor", X.mstatus / 2048) % 8 * 2048;
+        X.mstatus = _m - _mie * 8 - _mpie * 128 + X.priv * 2048;
+        if (_mie == 1) {
+            X.mstatus = X.mstatus + 128;
+        }
+        X.priv = 3;
+        _trapPc = X.mtvec - X.mtvec % 4;
+        if (interrupt == 1) {
+            if (X.mtvec % 4 == 1) {
+                _trapPc = _trapPc + 4 * cause;
+            }
+        }
+        X.pcLo = _trapPc % 4294967296;
+        X.pcHi = Operators.math("floor", _trapPc / 4294967296);
+        X.traps += 1;
+    }
+
+    /* MRET: pc = mepc, MIE = MPIE, MPIE = 1, MPP = 0 */
+    private void mret() { // warp
+        if (X.priv < 3) {
+            // only the firmware may return from a machine trap
+            takeTrap(2, 0, X.pc0Lo, X.ir);
+            return;
+        }
+        bitOf(X.mstatus, 11);           // MPP bit 0
+        _p0 = _bv;
+        bitOf(X.mstatus, 12);           // MPP bit 1
+        _p1 = _bv;
+        X.priv = _p0 + _p1 * 2;
+        bitOf(X.mstatus, 7);            // MPIE
+        _mpie = _bv;
+        bitOf(X.mstatus, 3);            // MIE
+        // MPP = 0, MPIE = 1, MIE = the old MPIE
+        _m = X.mstatus - Operators.math("floor", X.mstatus / 2048) % 8 * 2048;
+        X.mstatus = _m - _bv * 8 - _mpie * 128 + _mpie * 8;
+        X.pcLo = X.mepc % 4294967296;
+        X.pcHi = 0;
+    }
+
+    /* SRET: pc = sepc, priv = SPP, SIE = SPIE, SPIE = 1, SPP = 0 */
+    private void sret() { // warp
+        // priv = SPP, SIE = SPIE, SPIE = 1, SPP = 0
+        _spp = Operators.math("floor", X.mstatus / 256) % 2;
+        _spie = Operators.math("floor", X.mstatus / 32) % 2;
+        X.priv = _spp;
+        _m = X.mstatus - Operators.math("floor", X.mstatus / 2) % 2 * 2 - _spie * 32 - _spp * 256;
+        X.mstatus = _m + _spie * 2 + 32;
+        X.pcLo = X.sepc % 4294967296;
+        X.pcHi = 0;
+    }
+
+    /* A CSR read leaves its value in `X.lo`/`X.hi`, like every other result. */
+    private void csrRead(csr) { // warp
+        X.lo = 0;
+        X.hi = 0;
+        if (csr == 256) {                 // sstatus: the S bits of mstatus
+            X.lo = X.mstatus % 2 * 2 + Operators.math("floor", X.mstatus / 32) % 2 * 32 + Operators.math("floor", X.mstatus / 256) % 2 * 256;
+        }
+        if (csr == 260) {                 // sie
+            X.lo = X.sie;
+        }
+        if (csr == 261) {                 // stvec
+            X.lo = X.stvec;
+        }
+        if (csr == 320) {                 // sscratch
+            X.lo = X.sscratch;
+        }
+        if (csr == 321) {                 // sepc
+            X.lo = X.sepc;
+        }
+        if (csr == 322) {                 // scause
+            X.lo = X.scauseLo;
+            X.hi = X.scauseHi;
+        }
+        if (csr == 323) {                 // stval
+            X.lo = X.stval;
+        }
+        if (csr == 324) {                 // sip
+            X.lo = X.sip;
+        }
+        if (csr == 384) {                 // satp: mode in the top nibble
+            X.lo = X.satpPpn % 4294967296;
+            X.hi = X.satpMode * 268435456;
+        }
+        if (csr == 770) {                 // medeleg
+            X.lo = X.medeleg;
+        }
+        if (csr == 771) {                 // mideleg
+            X.lo = X.mideleg;
+        }
+        if (csr == 768) {                 // mstatus
+            X.lo = X.mstatus;
+        }
+        if (csr == 772) {                 // mie
+            X.lo = X.mie;
+        }
+        if (csr == 773) {                 // mtvec
+            X.lo = X.mtvec;
+        }
+        if (csr == 832) {                 // mscratch
+            X.lo = X.mscratch;
+        }
+        if (csr == 833) {                 // mepc
+            X.lo = X.mepc;
+        }
+        if (csr == 834) {                 // mcause
+            X.lo = X.mcauseLo;
+            X.hi = X.mcauseHi;
+        }
+        if (csr == 835) {                 // mtval
+            X.lo = X.mtval;
+        }
+        if (csr == 836) {                 // mip
+            X.lo = X.mip;
+        }
+        if (csr == 3072) {                // cycle = retired instructions
+            X.lo = X.steps % 4294967296;
+            X.hi = Operators.math("floor", X.steps / 4294967296);
+        }
+        if (csr == 3073) {                // time = mtime, the clock itself
+            X.lo = X.mtimeLo;
+            X.hi = X.mtimeHi;
+        }
+        if (csr == 3074) {                // instret
+            X.lo = X.steps % 4294967296;
+            X.hi = Operators.math("floor", X.steps / 4294967296);
+        }
+    }
+
+    /* CSRs only the firmware may touch: the `m*` trap group and delegation. */
+    private void machineOnly(csr) { // warp
+        _mOnly = 0;
+        if (csr >= 768 && csr <= 773) {
+            _mOnly = 1;                   // mstatus, medeleg, mideleg, mie, mtvec
+        }
+        if (csr >= 832 && csr <= 836) {
+            _mOnly = 1;                   // mscratch, mepc, mcause, mtval, mip
+        }
+    }
+
+    private void csrWrite(csr, value) { // warp
+        if (csr == 256) {                 // sstatus: only SIE, SPIE and SPP
+            _m = X.mstatus - Operators.math("floor", X.mstatus / 2) % 2 * 2 - Operators.math("floor", X.mstatus / 32) % 2 * 32 - Operators.math("floor", X.mstatus / 256) % 2 * 256;
+            X.mstatus = _m + value % 2 * 2 + Operators.math("floor", value / 32) % 2 * 32 + Operators.math("floor", value / 256) % 2 * 256;
+        }
+        if (csr == 260) {
+            X.sie = value % 65536;
+        }
+        if (csr == 261) {
+            X.stvec = value;
+        }
+        if (csr == 320) {
+            X.sscratch = value;
+        }
+        if (csr == 321) {
+            X.sepc = value - value % 2;
+        }
+        if (csr == 322) {
+            X.scauseLo = value % 4294967296;
+        }
+        if (csr == 323) {
+            X.stval = value;
+        }
+        if (csr == 324) {
+            X.sip = value % 65536;
+        }
+        if (csr == 384) {
+            // only Sv39 is implemented: any other mode turns translation off
+            _satMode = Operators.math("floor", _srcHi / 268435456) % 16;
+            X.satpMode = 0;
+            X.satpPpn = 0;
+            if (_satMode == 8) {
+                X.satpMode = 8;
+                X.satpPpn = value;
+            }
+        }
+        if (csr == 770) {
+            X.medeleg = value;
+        }
+        if (csr == 771) {
+            X.mideleg = value;
+        }
+        if (csr == 768) {
+            X.mstatus = value % 65536;
+        }
+        if (csr == 772) {
+            X.mie = value % 65536;
+        }
+        if (csr == 773) {
+            X.mtvec = value;
+        }
+        if (csr == 832) {
+            X.mscratch = value;
+        }
+        if (csr == 833) {
+            X.mepc = value - value % 2;
+        }
+        if (csr == 834) {
+            X.mcauseLo = value % 4294967296;
+        }
+        if (csr == 835) {
+            X.mtval = value;
+        }
+        if (csr == 836) {
+            // only the software-interrupt bit is writable; MTIP is the timer's
+            orBits(X.mip, 0);
+            _rest = _orOut;
+            andNotBits(_rest, 247);
+            X.mip = _anOut + X.mip % 128;
+            orBits(X.mip, value % 8);
+            X.mip = _orOut + X.mip % 128;
+        }
+    }
+
+    /*
+     * One CSR instruction. funct3 says what to do: 1/5 write, 2/6 set bits,
+     * 3/7 clear bits, and the "set/clear" forms do nothing when rs1 is zero --
+     * that is what makes `csrr` a plain read.
+     */
+    private void csrOp(f3) { // warp
+        _csrNum = Operators.math("floor", X.ir / 1048576) % 4096;
+        if (X.priv < 3) {
+            machineOnly(_csrNum);
+            if (_mOnly == 1) {
+                // an M-only CSR from S-mode is an illegal instruction
+                takeTrap(2, 0, X.pc0Lo, X.ir);
+                return;
+            }
+        }
+        _kind = f3;
+        if (f3 >= 5) {
+            _src = X.rs1;                 // the 5-bit uimm, not the register
+            _kind = f3 - 4;
+        } else {
+            _src = X.alo;
+        }
+        _srcHi = X.ahi;
+        csrRead(_csrNum);
+        _oldLo = X.lo;
+        _oldHi = X.hi;
+        if (_kind == 1) {                 // CSRRW: always writes
+            csrWrite(_csrNum, _src);
+        }
+        if (_kind == 2) {                 // CSRRS
+            if (X.rs1 != 0) {
+                orBits(_oldLo, _src);
+                csrWrite(_csrNum, _orOut);
+            }
+        }
+        if (_kind == 3) {                 // CSRRC
+            if (X.rs1 != 0) {
+                andNotBits(_oldLo, _src);
+                csrWrite(_csrNum, _anOut);
+            }
+        }
+        // the value the instruction saw goes to rd, like every other result
+        putReg(X.rd, _oldLo, _oldHi);
+    }
+
+    /*
+     * ---- storage: a ROM window and a battery-backed NVRAM ----
+     *
+     * Two separate regions, because on a real board they are two separate
+     * things and they behave differently:
+     *
+     *   0x0000_1000  the firmware ROM, read-only. On QEMU virt that address is
+     *                exactly where the boot ROM is mapped, so a payload that
+     *                reads its own firmware finds it in the same place.
+     *   0x1000_2000  NVRAM, 256 bytes, writable and *persistent*: it is a
+     *                Stage list, so whatever the setup screen saves is still
+     *                there the next time the project is opened. Green flag
+     *                does not clear it -- a battery does not care about reset.
+     *
+     * The contents are nobody's business but the firmware's: this machine only
+     * moves the bytes. That is what a bus does, and it is why the layout below
+     * lives in bios.S rather than here.
+     */
+    private void rom8(addr, value, isWrite) { // warp
+        _off = addr - X.romBase;
+        if (isWrite == 1) {
+            // a ROM ignores a store the way a real one does on the bus: the
+            // write goes nowhere, and it is counted so a driver bug is visible
+            X.romWrites += 1;
+            X.lo = value % 256;
+            return;
+        }
+        if (_off < X.image.length()) {
+            X.lo = X.image.get(_off + 1) + 0;
+            return;
+        }
+        X.lo = 255;              // unwritten flash reads as all ones
+    }
+
+    /*
+     * The chipset: how much RAM the board provides, and the reset button.
+     *
+     *   +0  MEM_MIB   the size to give the guest, in MiB. Reading it back says
+     *                 what was asked; `NOW` says what was actually allocated.
+     *   +4  CMD       write 1 to reset the machine and apply MEM_MIB
+     *   +8  NOW       MiB live right now, after allocation clamped the request
+     *   +12 RESETS    warm resets since power-on
+     *
+     * A real board's memory size is strapping, not a register. This machine has
+     * no DIMM sockets, so the number is a register the firmware writes and then
+     * reboots into -- which is exactly what a setup utility does with the CMOS
+     * byte that holds the memory size.
+     */
+    private void board8(addr, value, isWrite) { // warp
+        _off = addr - X.boardBase;
+        if (_off < 4) {
+            devByte(X.memMiB, 0, _off, value, isWrite);
+            if (isWrite == 1) {
+                // Nothing is clamped here. A `sw` arrives as four byte writes,
+                // and the value between them is *meant* to be half written --
+                // clamping it there threw the wanted byte away and left the
+                // register holding the old size, which read back as 1 MiB.
+                // The number is clamped where it is spent, in powerOn.
+                X.memMiB = _laneLo;
+            }
+            X.lo = _laneByte;
+            return;
+        }
+        if (_off < 8) {
+            if (isWrite == 1) {
+                devByte(X.boardCmd, 0, _off - 4, value, 1);
+                X.boardCmd = _laneLo;
+                if (X.boardCmd % 2 == 1) {
+                    X.resetWant = 1;
+                }
+            }
+            X.lo = 0;
+            return;
+        }
+        if (_off < 12) {
+            devByte(X.ramSize / 1048576, 0, _off - 8, 0, 0);
+            X.lo = _laneByte;
+            return;
+        }
+        if (_off < 16) {
+            devByte(X.resets, 0, _off - 12, 0, 0);
+            X.lo = _laneByte;
+            return;
+        }
+        X.lo = 0;
+    }
+
+    private void nvram8(addr, value, isWrite) { // warp
+        _off = addr - X.nvramBase;
+        if (_off > X.nvram.length() - 1) {
+            X.lo = 255;
+            return;
+        }
+        if (isWrite == 1) {
+            X.nvram.set(_off + 1, value % 256);
+            X.nvramWrites += 1;
+            X.lo = value % 256;
+            return;
+        }
+        X.lo = X.nvram.get(_off + 1) + 0;
+    }
+
+    /*
+     * Give the NVRAM its length the first time this project file ever runs.
+     * After that the list keeps whatever the guest wrote, because that is the
+     * whole point of a battery: a reset must not wipe the settings.
+     */
+    public void storageBoot() { // warp
+        if (X.nvram.length() > 0) {
+            return;
+        }
+        _i = 1;
+        while (_i <= X.nvramSize) {
+            X.nvram.add(255);    // erased flash, so a blank NVRAM has no magic
+            _i += 1;
+        }
+        if (X.nicTxBuf.length() < 1) {
+            _i = 1;
+            while (_i <= X.nicFrame) {
+                X.nicTxBuf.add(0);
+                X.nicRxBuf.add(0);
+                _i += 1;
+            }
+        }
+    }
+
+    /*
+     * The clock. `mtime` is the only time the guest can see, and this is the
+     * only place it moves -- once a frame, which is the smallest step this
+     * machine has.
+     *
+     *   0  counted: +X.ticksPerFrame a frame. Deterministic, reproducible, and
+     *      the same shape QEMU gets from -icount.
+     *   1  the Scratch project timer, clamped so it can never go backwards.
+     *   2  a host timestamp `Net` fetched over the socket, same clamping.
+     */
+    private void clockTick() { // warp
+        if (X.clockMode == 1) {
+            _t = Operators.math("floor", Sensing.timer * 10000000);
+            _hi = Operators.math("floor", _t / 4294967296);
+            _lo = _t % 4294967296;
+            if (_hi > X.mtimeHi) {
+                X.mtimeHi = _hi;
+                X.mtimeLo = _lo;
+            }
+            if (_hi == X.mtimeHi && _lo > X.mtimeLo) {
+                X.mtimeLo = _lo;
+            }
+            timerUpdate();
+            return;
+        }
+        if (X.clockMode == 2) {
+            if (X.hostUs > 0) {
+                // 10 MHz is one tick every 100 ns, so a microsecond is ten
+                _t = X.hostUs * 10;
+                _hi = Operators.math("floor", _t / 4294967296);
+                _lo = _t % 4294967296;
+                if (_hi > X.mtimeHi) {
+                    X.mtimeHi = _hi;
+                    X.mtimeLo = _lo;
+                }
+                if (_hi == X.mtimeHi && _lo > X.mtimeLo) {
+                    X.mtimeLo = _lo;
+                }
+                timerUpdate();
+                return;
+            }
+            // no host time yet: fall through to the counted clock
+        }
+        X.mtimeLo = X.mtimeLo + X.ticksPerFrame;
+        if (X.mtimeLo >= 4294967296) {
+            X.mtimeLo = X.mtimeLo - 4294967296;
+            X.mtimeHi = X.mtimeHi + 1;
+        }
+        timerUpdate();
+    }
+
+    /* mip.MTIP follows mtime >= mtimecmp, exactly like the real CLINT. */
+    private void timerUpdate() { // warp
+        bitOf(X.mip, 7);
+        if (_bv == 1) {
+            X.mip = X.mip - 128;
+        }
+        if (X.mtimeHi > X.mtimecmpHi) {
+            X.mip = X.mip + 128;
+            return;
+        }
+        if (X.mtimeHi < X.mtimecmpHi) {
+            return;
+        }
+        if (X.mtimeLo >= X.mtimecmpLo) {
+            X.mip = X.mip + 128;
+        }
+    }
+
+    /*
+     * One byte of a 64-bit CLINT register, addressed the way the bus does it:
+     * `lane` 0..7, low half first. A 32-bit Scratch number cannot hold the
+     * counter, so it lives in two.
+     */
+    private void devByte(lo, hi, lane, value, isWrite) { // warp
+        _v = lo;
+        _shift = lane * 8;
+        if (lane >= 4) {
+            _v = hi;
+            _shift = (lane - 4) * 8;
+        }
+        if (isWrite == 1) {
+            // drop the byte being replaced: everything above it, everything
+            // below it, then the new byte in the hole. A byte is 256 of the
+            // lane's own step, which is why it is spelled out here.
+            _step = X.pow2.get(_shift + 1);
+            _above = Operators.math("floor", _v / (_step * 256)) * _step * 256;
+            _new = _above + value % 256 * _step + _v % _step;
+            _laneLo = lo;
+            _laneHi = hi;
+            if (lane < 4) {
+                _laneLo = _new;
+            } else {
+                _laneHi = _new;
+            }
+            _laneByte = 0;
+            return;
+        }
+        _laneByte = Operators.math("floor", _v / X.pow2.get(_shift + 1)) % 256;
+        _laneLo = lo;
+        _laneHi = hi;
+    }
+
+    /* The CLINT: 0x0200_0000, msip then mtimecmp then mtime, as SiFive lays it out. */
+    private void clint(addr, value, isWrite) { // warp
+        _off = addr - X.clintBase;
+        if (_off < 4) {
+            if (isWrite == 1) {
+                if (value % 2 == 1) {
+                    X.mip = X.mip + 8;
+                } else {
+                    bitOf(X.mip, 3);
+                    if (_bv == 1) {
+                        X.mip = X.mip - 8;
+                    }
+                }
+            }
+            X.lo = X.mip % 16;
+            return;
+        }
+        if (_off >= 16384 && _off < 16392) {
+            devByte(X.mtimecmpLo, X.mtimecmpHi, _off - 16384, value, isWrite);
+            if (isWrite == 1) {
+                X.mtimecmpLo = _laneLo;
+                X.mtimecmpHi = _laneHi;
+                timerUpdate();
+            }
+            X.lo = _laneByte;
+            return;
+        }
+        if (_off >= 49144 && _off < 49152) {
+            devByte(X.mtimeLo, X.mtimeHi, _off - 49144, value, isWrite);
+            X.lo = _laneByte;
+            return;
+        }
+        X.lo = 0;
+    }
+}

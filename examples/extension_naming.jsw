@@ -1,0 +1,44 @@
+/*
+ * The three namespaces added this round, exercised for real.
+ *
+ * `Pointerlock.setPointerLock(1)` turns pointer-lock *mode* on (the browser only
+ * grants the actual lock after a click on the stage), `WebSocket.connectTo`
+ * opens the block server and `onMessage` reads `receivedMessageData`, and the
+ * `TurboWarp` blocks report the last key and the mouse buttons.
+ */
+public E.locked = 0;
+public E.connected = 0;
+public E.closed = 0;
+public E.received = 0;
+public E.message = "";
+public E.key = "";
+public E.primary = 0;
+public E.secondary = 0;
+
+class Probe {
+    public void probeStart() { // hook: green flag
+        Looks.hide();
+        E.locked = Pointerlock.isPointerLocked;
+        Pointerlock.setPointerLock(1);
+        WebSocket.connectTo("ws://127.0.0.1:65433");
+    }
+
+    public void onMessage() { // hook: WebSocket.onMessage
+        E.message = WebSocket.receivedMessageData;
+        E.received += 1;
+    }
+}
+
+class Watch {
+    public void watchStart() { // hook: green flag
+        Looks.hide();
+        while (1) {
+            E.connected = WebSocket.isConnected;
+            E.closed = WebSocket.isConnectionClosed;
+            E.key = TurboWarp.lastKeyPressed;
+            E.primary = TurboWarp.primaryButtonDown;
+            E.secondary = TurboWarp.secondaryButtonDown;
+            Control.wait(0);
+        }
+    }
+}

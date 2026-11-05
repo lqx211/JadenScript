@@ -1,0 +1,203 @@
+/*
+ * input — the keyboard and the mouse.
+ *
+ * A real board has a chip between the keys and the CPU: the 8042, which scans
+ * the key matrix and hands the CPU one scan code at a time. We do the same. This
+ * module polls the keys TurboWarp knows about, turns each press into a **set-2
+ * make code** and each release into `0xF0` + the code, and pushes them into the
+ * controller's output buffer (`K.fifo`). `core.jsw` only drains that buffer; it
+ * never looks at a key name, which is why the guest sees an ordinary PC
+ * keyboard.
+ *
+ * The mouse is the pointerlock extension's job: TurboWarp reports x/y as the
+ * *movement since the last frame* while the pointer is locked, and the `tw`
+ * blocks say which button is down.
+ */
+
+/*
+ * The key matrix. Three parallel lists: the Scratch key name to poll, the
+ * set-2 make code that name stands for, and two flags -- `K.mod` when the code
+ * only exists with shift held, `K.ext` when it needs the `0xE0` prefix.
+ *
+ * There is one subtlety that decides the shape of this table. `isKeyPressed`
+ * answers for the *character* the browser saw, and a one-character argument is
+ * uppercased before the lookup -- so "h" matches a stored "H" and the letters
+ * need one entry, not two. Everything else a shift produces arrives as a
+ * different character (`!`, `"`, `<` ...) and has no key of its own, so the
+ * controller presses shift for it. The BIOS then does the same lookup it would
+ * do on a real board.
+ */
+public K.names = ["`", "1", "z", "s", "a", "w", "2", "c", "x", "d",
+    "e", "4", "3", "v", "f", "t", "r", "5", "n", "b",
+    "h", "g", "y", "6", "m", "j", "u", "7", "8", ",",
+    "k", "i", "o", "0", "9", ".", "/", "l", ";", "p",
+    "-", "'", "[", "=", "]", "\\", "space", "enter", "backspace", "escape",
+    "tab", "shift", "control", "left arrow", "right arrow", "up arrow", "down arrow", "delete", "home", "end",
+    "page up", "page down", "~", "!", "@", "$", "#", "%", "^", "&",
+    "*", "<", ")", "(", ">", "?", ":", "_", "\"", "{",
+    "+", "}", "|"];
+public K.codes = [14, 22, 26, 27, 28, 29, 30, 33, 34, 35,
+    36, 37, 38, 42, 43, 44, 45, 46, 49, 50,
+    51, 52, 53, 54, 58, 59, 60, 61, 62, 65,
+    66, 67, 68, 69, 70, 73, 74, 75, 76, 77,
+    78, 82, 84, 85, 91, 93, 41, 90, 102, 118,
+    13, 18, 20, 107, 116, 117, 114, 113, 108, 105,
+    125, 122, 14, 22, 30, 37, 38, 46, 54, 61,
+    62, 65, 69, 70, 73, 74, 76, 78, 82, 84,
+    85, 91, 93];
+public K.mod = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 1, 1, 1, 1, 1, 1, 1, 1,
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+    1, 1, 1];
+public K.ext = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 1, 1, 1, 1, 1, 1, 1,
+    1, 1, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0];
+public K.count = 83;
+
+class Input {
+    public void inputStart() { // hook: green flag
+        Looks.hide();
+        K.fifo.clear();
+        K.down.clear();
+        K.lastTw = "";
+        _i = 1;
+        while (_i <= K.count) {
+            K.down.add(0);
+            _i += 1;
+        }
+        K.ready = 1;
+        while (1) {
+            scanKeys();
+            scanMouse();
+            Control.wait(0);
+        }
+    }
+
+    /* One byte into the controller's output buffer. */
+    private void push(byte) { // warp
+        K.fifo.add(byte % 256);
+        K.sent += 1;
+    }
+
+    /*
+     * The whole matrix, once per frame. A key that goes down is a make code, a
+     * key that comes up is `0xF0` and then the code -- exactly what the 8042
+     * would send, so the BIOS can do the usual release-prefix dance.
+     */
+    private void scanKeys() { // warp
+        if (K.enabled < 1) {
+            return;
+        }
+        _i = 1;
+        while (_i <= K.count) {
+            _name = K.names.get(_i);
+            _now = Sensing.isKeyPressed(_name);
+            _was = K.down.get(_i) + 0;
+            if (_now && _was == 0) {
+                // `!` is shift+1, and the browser reports it as `!` rather than
+                // as `1`: put the modifier back so the guest sees a keyboard.
+                // The matching break is sent with the key's own break below, so
+                // a shift this controller pressed can never outlive the key.
+                if (K.mod.get(_i) == 1) {
+                    push(18);
+                }
+                if (K.ext.get(_i) == 1) {
+                    push(224);
+                }
+                push(K.codes.get(_i));
+                K.last = _name;
+            }
+            if (!_now && _was == 1) {
+                if (K.ext.get(_i) == 1) {
+                    push(224);
+                }
+                push(K.release);
+                push(K.codes.get(_i));
+                // and give back the shift this key pressed, if it pressed one
+                if (K.mod.get(_i) == 1) {
+                    push(K.release);
+                    push(18);
+                }
+            }
+            if (_now) {
+                K.down.set(_i, 1);
+            } else {
+                K.down.set(_i, 0);
+            }
+            _i += 1;
+        }
+        latchModifier();
+    }
+
+    /*
+     * A modifier tapped between two frames is invisible to the poll above: the
+     * key is already up again by the time `isKeyPressed` looks. TurboWarp
+     * remembers the *last* key that went down, whatever happened afterwards,
+     * so a change in it is proof that a press happened even when the poll saw
+     * nothing.
+     *
+     * Only modifiers are latched. They are the ones with no character of their
+     * own -- `Control` `C` needs the controller to have said "control is down"
+     * at some point -- and the pair is a complete tap, make and break, so it
+     * cannot leave a key stuck down. A key the poll did see is left alone: it
+     * sends its own codes and a second make here would double it.
+     */
+    private void latchModifier() { // warp
+        _last = TurboWarp.lastKeyPressed;
+        if (_last == K.lastTw) {
+            return;
+        }
+        K.lastTw = _last;
+        _at = K.names.indexOf(_last) + 0;
+        if (_at < 1) {
+            return;
+        }
+        if (_at > K.count) {
+            return;
+        }
+        _code = K.codes.get(_at) + 0;
+        if (_code != 18 && _code != 20) {
+            return;             // shift or control, nothing else
+        }
+        if (K.down.get(_at) > 0) {
+            return;             // the poll has it; its own make is coming
+        }
+        push(_code);
+        push(K.release);
+        push(_code);
+        K.last = _last;
+    }
+
+    /*
+     * Mouse state. With the pointer locked, TurboWarp reports x/y as the
+     * movement since the previous frame, which is what a PS/2 mouse sends; the
+     * buttons come from the `tw` blocks.
+     */
+    private void scanMouse() { // warp
+        X.mouseLocked = Pointerlock.isPointerLocked;
+        _b = 0;
+        if (TurboWarp.primaryButtonDown) {
+            _b += 1;
+        }
+        if (TurboWarp.middleButtonDown) {
+            _b += 2;
+        }
+        if (TurboWarp.secondaryButtonDown) {
+            _b += 4;
+        }
+        X.mouseButtons = _b;
+        X.mouseDx = Operators.round(Sensing.mouseX);
+        X.mouseDy = 0 - Operators.round(Sensing.mouseY);
+    }
+}

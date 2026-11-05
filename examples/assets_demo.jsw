@@ -1,0 +1,16 @@
+#enable_feature<commentMetadata>;
+class painter { // Sprite: painter (0,0) size=100 direction=90 show=1
+    import "assets/backdrop.svg" as Look;
+
+    public void greenFlag(){
+        Pen.eraseAll();
+        Pen.setPenSize(2);
+        for (i=1, i<=8, i++){
+            Pen.setPenColor(i*100000);
+            Pen.penDown();
+            Motion.x = -200 + i*50;
+            Motion.y = -100 + i*25;
+            Pen.penUp();
+        }
+    }
+}

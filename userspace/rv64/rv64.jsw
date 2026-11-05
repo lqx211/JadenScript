@@ -1,0 +1,223 @@
+#enable_feature<useTempVariables>;
+#enable_feature<namespacedNames>;
+
+/*
+ * rv64 — a RISC-V RV64IMAC machine that runs bare-metal payloads, the way
+ * Linux.jsw runs rv32ima.
+ *
+ * Why 64-bit needs its own shape
+ * -----------------------------
+ * Scratch numbers are IEEE doubles: exact to 2^53, so a 64-bit register cannot
+ * be one value. Every register is a pair of 32-bit halves in `X.reg` (lo at
+ * `2*r+1`, hi at `2*r+2`, x0 pinned to zero), and every 64-bit operation is
+ * written on those halves. That is not a speed trick, it is the only exact
+ * representation -- and the way to get it wrong is silence, not a crash, which
+ * is why tests/test_rv64.py compares this machine against QEMU byte for byte.
+ *
+ * Memory is the `rv64mem` extension's typed array, based at 0x8000_0000 (the
+ * QEMU `virt` map), so the default gigabyte is one allocation and not a billion
+ * list items. A payload is imported as `X.image` and copied in at boot. The
+ * chipset registers at 0x1000_4000 say how big it is and can reset the machine
+ * into a different size, which is what the setup screen's memory field uses.
+ *
+ * The 16550 at 0x1000_0000 is the whole console: a store to offset 0 appends the
+ * byte to `X.out` (byte values, not characters -- Scratch has no chr()), and any
+ * read answers "transmitter ready", so a payload polling LSR cannot hang.
+ */
+
+/*
+ * rv64 — a RISC-V RV64IMA machine that runs bare-metal payloads.
+ *
+ * Three modules, as a board would have them:
+ *
+ *   core.jsw     the CPU, its memory map and the device registers
+ *   display.jsw  the video card's rasteriser (the only sprite using the pen)
+ *   net.jsw      the disk controller (the only sprite using the WebSocket)
+ *
+ * This file is the board itself: the shared state they all read and write, and
+ * the stage's configuration. Every module is a `class`, so every module is a
+ * sprite; they talk through the `X.` state below, the way a bus would.
+ */
+
+public X.ramBase = 2147483648;   // 0x8000_0000
+public X.uart = 268435456;       // 0x1000_0000
+public X.ps2 = 268439552;        // 0x1000_1000, the PS/2 controller
+public X.ps2Size = 8;
+
+/* ---- the PS/2 controller's buffers (input.jsw fills, core.jsw drains) -- */
+public K.fifo = [];              // pending scan codes, oldest first
+public K.names = [];             // Scratch key names, parallel to K.codes
+public K.codes = [];             // set-2 make codes
+public K.ext = [];               // 1 when the code needs the 0xE0 prefix
+public K.down = [];              // previous state per key
+public K.ready = 0;              // 1 once the tables are built
+public K.enabled = 1;            // 0 stops the scanner (the guest asked)
+public K.sent = 0;               // scan codes pushed, for the monitor
+public K.last = "";              // last key the scanner saw
+public K.release = 240;          // set-2 break prefix
+
+/* ---- the mouse, as the pointerlock extension reports it ---------------- */
+public X.mouseDx = 0;
+public X.mouseDy = 0;
+public X.mouseButtons = 0;       // bit 0 primary, bit 1 middle, bit 2 secondary
+public X.mouseLocked = 0;
+public X.ramSize = 1073741824;   // derived from memMiB by powerOn, in bytes
+/* ---- machine mode: the trap CSRs and the clock ------------------------ */
+public X.mtvec = 0;              // 0 = no handler installed, so a fault is fatal
+public X.mepc = 0;
+public X.mcauseLo = 0;           // mcause low half; the interrupt bit is separate
+public X.mcauseHi = 0;           // 0x80000000 when the cause is an interrupt
+public X.mtval = 0;
+public X.mstatus = 0;            // MIE = 8, MPIE = 128, MPP = 2048
+public X.mie = 0;                // MTIE = 128
+public X.mip = 0;                // MTIP = 128, MSIP = 8
+public X.mscratch = 0;
+public X.traps = 0;              // how many traps have been taken
+public X.mtimeLo = 0;            // the CLINT counter, in two 32-bit halves
+public X.mtimeHi = 0;
+public X.mtimecmpLo = 4294967295;
+public X.mtimecmpHi = 4294967295;
+public X.clintBase = 33554432;   // 0x0200_0000
+public X.clintSize = 49152;      // 0xC000: msip, mtimecmp, mtime
+/* Which clock drives `mtime`. 0 = counted, one step a frame (deterministic);
+ * 1 = the Scratch project timer; 2 = a host timestamp from `Net`. */
+public X.nicBase = 268447744;    // 0x1000_3000: the network card
+public X.nicFrame = 2048;        // one Ethernet frame, plenty for a demo
+public X.nicTxBuf = [];
+public X.nicRxBuf = [];
+public X.nicTxLen = 0;
+public X.nicRxLen = 0;
+public X.nicRxWant = 0;          // a frame is waiting to be taken
+public X.nicWant = 0;            // a frame is waiting to be sent
+public X.resvLo = 0;            // LR/SC: the one reservation a single hart needs
+public X.resvHi = 0;
+public X.resvOn = 0;
+public X.clockMode = 0;
+public X.ticksPerFrame = 166667; // 10 MHz / 60 fps: what the DTB will declare
+public X.hostUs = 0;             // the last host time Net delivered, in us
+public X.timeSent = 0;           // a T request is in flight
+public X.timeWait = 0;           // frames since the last one
+public X.timeEvery = 30;         // how often Net asks the host for its clock
+/* ---- storage: firmware ROM and battery-backed NVRAM -------------------- */
+public X.romBase = 4096;         // 0x0000_1000: where QEMU virt maps its boot ROM
+public X.romSize = 1048576;      // 1 MiB of address space; the image is shorter
+public X.romWrites = 0;          // stores into the ROM: always a driver bug
+public X.nvramBase = 268443648;  // 0x1000_2000
+public X.nvramSize = 256;        // one small page, like the old CMOS
+public X.nvram = [];             // the contents; filled on the first run only
+public X.nvramWrites = 0;
+/* ---- the chipset: how much RAM, and the reset button ------------------- */
+public X.boardBase = 268451840;  // 0x1000_4000
+public X.boardSize = 16;
+/* The size the board gives the guest. The RAM card is a typed array now, so
+ * this is a real number of bytes and not a list length: 1 GiB is one
+ * allocation, and the setup screen is what changes it. */
+public X.memMiB = 1024;          // what the guest asks for, in MiB
+public X.memMaxMiB = 1024;       // the board will not promise more than this
+public X.memExt = 1;             // 1 when the extension answered, 0 on the list
+public X.boardCmd = 0;           // last value written to the CMD register
+public X.resetWant = 0;          // 1 = re-run powerOn, applying memMiB
+public X.resets = 0;             // warm resets since the green flag
+public X.maxSteps = 0;           // 0 = run until the guest halts; >0 = debug budget
+public X.batch = 2000;           // instructions per frame
+public X.steps = 0;
+public X.idle = 0;               // counted WFI instructions
+public X.waiting = 0;            // 1 while the guest sits in WFI
+public X.halted = 0;
+public X.err = "";
+public X.out = [];
+public X.traceOn = 0;            // 1 keeps a pc:ir log in X.trace for diffing
+public X.trace = [];
+public X.entry = 2147483648;
+public X.byteW = [1, 256, 65536, 16777216];
+public X.pow2 = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144, 524288, 1048576, 2097152, 4194304, 8388608, 16777216, 33554432, 67108864, 134217728, 268435456, 536870912, 1073741824, 2147483648, 4294967296, 8589934592, 17179869184, 34359738368, 68719476736, 137438953472, 274877906944, 549755813888, 1099511627776, 2199023255552, 4398046511104, 8796093022208, 17592186044416, 35184372088832, 70368744177664, 140737488355328, 281474976710656, 562949953421312, 1125899906842624, 2251799813685248, 4503599627370496, 9007199254740992, 18014398509481984, 36028797018963968, 72057594037927936, 144115188075855872, 288230376151711744, 576460752303423488, 1152921504606846976, 2305843009213693952, 4611686018427387904, 9223372036854775808];
+public X.reg = [
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+];
+public X.ram = [];
+public X.priv = 3;                // 3 = machine, 1 = supervisor
+public X.stvec = 0;
+public X.sscratch = 0;
+public X.sepc = 0;
+public X.scauseLo = 0;
+public X.scauseHi = 0;
+public X.stval = 0;
+public X.satpMode = 0;           // 8 = Sv39, 0 = off
+public X.satpPpn = 0;            // root table address / 4096
+public X.sie = 0;
+public X.sip = 0;
+public X.medeleg = 0;
+public X.mideleg = 0;
+public X.pcLo = 2147483648;
+public X.pcHi = 0;
+public X.pc0Lo = 2147483648;      // the instruction's own address, before the pc moved
+public X.pc0Hi = 0;
+public X.trPa = 0;               // translate() result: the physical address
+public X.trOk = 1;               // 0 when the walk faulted
+public X.pfault = 0;             // a page fault abandoned this instruction
+
+/* decode slots, refilled once per instruction */
+public X.ir = 0;
+public X.rd = 0;
+public X.rs1 = 0;
+public X.rs2 = 0;
+public X.f3 = 0;
+public X.f7 = 0;
+public X.imm = 0;
+public X.immHi = 0;
+public X.alo = 0;
+public X.ahi = 0;
+public X.blo = 0;
+public X.bhi = 0;
+
+/* 64-bit helper results */
+public X.lo = 0;
+public X.hi = 0;
+public X.c = 0;
+public X.rLo = 0;
+public X.qLo = 0;
+public X.qHi = 0;
+public X.rHi = 0;
+public X.p = [0, 0, 0, 0, 0, 0, 0, 0];
+
+/* ---- the disk controller's registers (net.jsw drives them) ------------ */
+public X.diskOn = 1;
+public X.diskUrl = "ws://127.0.0.1:65433";
+public X.diskBase = 1073741824;  // 0x4000_0000, the disk window in the CPU's map
+public X.diskBlk = 4096;
+public X.diskSlots = 8;
+public X.diskWait = 0;           // 1 while an instruction waits for a block
+public X.diskMiss = 0;           // 1 when the instruction has to be re-run
+public X.reqPending = 0;         // the request line: core raises it, net drops it
+public X.reqSent = 0;            // 1 once net has put "R <block>" on the wire
+public X.reqBlock = 0;
+public X.reqSlot = 0;
+// a list, not a string: `x.indexOf(c)` is `data_itemnumoflist`, so the digits
+// have to live in a real list for the lookup to mean anything
+public X.diskHex = ["0", "1", "2", "3", "4", "5", "6", "7",
+                    "8", "9", "a", "b", "c", "d", "e", "f"];
+public X.diskHit = 0;
+public X.diskFault = 0;
+public X.msgReady = 0;           // 1 when onDiskMessage has a reply to decode
+public X.hatCount = 0;
+public X.lastMsg = "";
+public X.msgLen = 0;
+public X.fillDone = 0;
+public X.diskTag = [-1, -1, -1, -1, -1, -1, -1, -1];
+public X.diskCache = [];
+
+// The stage has to be 640 x 480 for the 80 x 30 grid to fit pixel for pixel.
+// TurboWarp stores its project settings in a stage comment that ends with the
+// `_twconfig_` marker, so the size travels with the .sb3 instead of in a URL.
+metadata note Stage at 50,50 350x170: "{\"width\":640,\"height\":480,\"warpTimer\":false} // _twconfig_";
+
+import "assets/lists/X.image.jsa";
+
+// include "input.jsw"
+// include "display.jsw"
+// include "net.jsw"
+// include "core.jsw"
+

@@ -1,0 +1,2615 @@
+public Global.stageWidth = 962;
+public Global.stageHeight = 718;
+public Global.frameIndex = 44;
+public RISCV.state = 1;
+public RISCV.kHz = 1.819;
+public Terminal.inputBuffer = [];
+import "assets/lists/RISCV.ROM.jsa";
+import "assets/lists/RISCV.DTB.jsa";
+public Terminal.outputBuffer = [];
+
+metadata note Stage at 1564,-34 287x256: "Configuration for https://turbowarp.org/\nYou can move, resize, and minimize this comment, but don't edit it by hand. This comment can be deleted to remove the stored settings.\n{\"width\":960,\"height\":720} // _twconfig_";
+metadata note Empty at 971.8518518518518,748.1481481481482 565.926025390625x291.85186767578125: "A functional RISC-V (rv32ima) emulator designed to run Linux!\n\nCredit goes to: Bilman66 (manjaroJake on discord)";
+metadata note RISCV at 15176.944323241063,-5260.4983272931395 216.925537109375x83.059814453125: "It's a Zicsr function.";
+metadata note RISCV at 16047.809552396,-4993.06272402479 240.005859375x87.67584228515625: "\"SYSTEM\"";
+metadata note RISCV at 16051.079681327235,-4599.014649815694 236.928466796875x90.75323486328125: "MRET";
+metadata note RISCV at 16257.324111615708,-5206.109603435006 210.770751953125x78.44369506835938: "WFI (Wait for interrupts)";
+metadata note RISCV at 34407,2440 222.2222900390625x87.40740966796875: "Fault: Invalid opcode.";
+metadata note RISCV at 13626.72148180008,80 212.3094482421875x106.14007568359375: "Emulating a 8250 / 16550 UART";
+metadata note RISCV at 15397.80481338501,80 206.15478515625x76.905029296875: "TODO";
+metadata note RISCV at 16567.32852935791,80 210.770751953125x86.13714599609375: "TODO";
+metadata note RISCV at 10547.373128890991,80 181.5357666015625x110.75616455078125: "TODO";
+metadata note RISCV at 10383.32604494187,3133.592621055617 176.919677734375x81.5211181640625: "is bit6 not set";
+metadata note RISCV at 10502.07270871309,3232.148887754689 176x81: "is bit5 not set";
+metadata note RISCV at 10507.6799795844,3321.8393923927574 176x81: "is bit4 not set";
+metadata note RISCV at 10506.596745817638,3406.696364564346 176x81: "is bit3 not set";
+metadata note RISCV at 10505.82593737595,3494.1576776441043 176x81: "is bit2 not set";
+metadata note RISCV at 10507.674119658122,3574.232121521449 176x81: "is bit1 not set";
+metadata note RISCV at 27851.171787094427,2526.0878988941527 200x200 minimized: "syscon reboot";
+metadata note RISCV at 30632.40053107002,908.5081676223475 200x200 minimized: "WFI";
+metadata note RISCV at 31736,1170 200x200: "Timer interrupt";
+metadata note RISCV at 29525.002389597772,1193.2643511159713 200x200 minimized: "WFI";
+metadata note RISCV at 30629.002389597772,1558.2643511159713 200x200: "Timer interrupt";
+metadata note Terminal at 3580.9999999999995,3336 200x200 minimized: "Line Feed";
+metadata note Terminal at 2811.2502419574016,3191.414931652607 200x200: "ESC";
+metadata note Terminal at 3449.3672251844923,509.9508540339316 200x200 minimized: "[";
+metadata note Terminal at 4234.828867339087,4814.6119359987015 200x200 minimized: "'H' or 'f' (Cursor Position)";
+metadata note Terminal at 3587.9999999999995,3110 200x200 minimized: "Backspace";
+metadata note Terminal at 2719.417337899516,3333.512890709614 200x200 minimized: "Bell";
+metadata note Terminal at 3000.977441077289,3245.4144376526515 200x200 minimized: "Line Feed";
+metadata note Terminal at 3000.977441077289,3573.4144376526515 200x200 minimized: "Escape";
+metadata note Terminal at 3000.977441077289,3805.4144376526515 200x200 minimized: "Bell";
+metadata list Stage.Terminal.inputBuffer at 378,10 100x170 hidden;
+metadata list Stage.RISCV.ROM at 434,188 0x0 hidden;
+metadata list Stage.RISCV.DTB at 147,157 0x0 hidden;
+metadata watch Stage.sensing_answer id="answer" mode=default at 371,0 0x0 hidden;
+metadata watch Stage.sensing_timer id="timer" mode=large at 0,316 0x0 hidden;
+metadata default Termial.is_escape_sequence_ at 5,5 0x0 hidden;
+metadata list Terminal.escape_args_ at 5,5 0x0 hidden;
+metadata list Terminal.buffer_foregroundColor at 349,3 338x200 hidden;
+metadata default Termial.current_foreground_color at 5,5 0x0 hidden;
+metadata default Stage.Global.stageWidth at 0,5 0x0 hidden;
+metadata default Stage.Global.stageHeight at 0,5 0x0 hidden;
+metadata list Terminal.buffer_glyphs at 5,5 279x212 hidden;
+metadata list "Fancy Terminal".font at 83,69 360x181 hidden;
+metadata list Stage.Terminal.outputBuffer at 0,0 0x0 hidden;
+metadata default Terminal._loopIndex at 5,5 0x0 hidden;
+metadata default RISCV._INIT_RAM_i at 0,0 0x0 hidden;
+metadata default RISCV.___a___ at 0,32 0x0 hidden;
+metadata default RISCV.__ir at 5,5 0x0 hidden;
+metadata default RISCV.__ofs_pc at 61,299 0x0 hidden;
+metadata default RISCV.__rval at 5,32 0x0 hidden;
+metadata default RISCV.__branch_switchval at 5,5 0x0 hidden;
+metadata default RISCV.__load_switch_value at 5,5 0x0 hidden;
+metadata default RISCV._andbiginteger_tmp at 5,225 0x0 hidden;
+metadata default RISCV._divide_carry at 0,300 0x0 hidden;
+metadata default RISCV._divide_return at 5,225 0x0 hidden;
+metadata default RISCV._step_return at 5,5 0x0 hidden;
+metadata default RISCV._unicode_return at 5,5 0x0 hidden;
+metadata default RISCV._tmp1 at 5,5 0x0 hidden;
+metadata large RISCV._RAM_AMT at 99,0 0x0 hidden;
+metadata default RISCV._RV32_RAM_IMAGE_OFFSET at 28,149 0x0 hidden;
+metadata default RISCV.byteval at 5,80 0x0 hidden;
+metadata default RISCV.CASE_SENSITIVE_INPUT_ at 102,239 0x0 hidden;
+metadata default RISCV.elapsedUs at 271,338 0x0 hidden;
+metadata default RISCV.INSTRUCTION_N at 126,318 0x0 hidden;
+metadata default RISCV.n1 at 5,247 0x0 hidden;
+metadata default RISCV.n2 at 0,268 0x0 hidden;
+metadata default RISCV.RISC_Ram_Read_return at 0,53 0x0 hidden;
+metadata default RISCV.SYMBOLS at 5,5 0x0 hidden;
+metadata default RISCV.__execute_opcode at 0,0 0x0 hidden;
+metadata list RISCV.orLUT at 105,5 0x0 hidden;
+metadata list RISCV.xorLUT at 207,5 0x0 hidden;
+metadata list RISCV.trap_locations at 45,175 179x167 hidden;
+metadata list RISCV.REG at 5,5 348x238 hidden;
+metadata list RISCV.RAM at 147,38 0x0 hidden;
+metadata list RISCV.powers at 0,5 0x0 hidden;
+metadata list RISCV.andLUT at 5,5 0x0 hidden;
+metadata list RISCV._unicode at 0,5 392x301 hidden;
+metadata default RISCV.state_cycleh at 5,86 0x0 hidden;
+metadata default RISCV.state_cyclel at 5,59 0x0 hidden;
+metadata default RISCV.state_extraflags at 155,248 0x0 hidden;
+metadata default RISCV.state_mcause at 155,140 0x0 hidden;
+metadata default RISCV.state_mepc at 155,86 0x0 hidden;
+metadata default RISCV.state_mie at 155,32 0x0 hidden;
+metadata default RISCV.state_mip at 155,59 0x0 hidden;
+metadata default RISCV.state_mscratch at 5,221 0x0 hidden;
+metadata default RISCV.state_mstatus at 161,272 0x0 hidden;
+metadata default RISCV.state_mtval at 155,113 0x0 hidden;
+metadata default RISCV.state_mtvec at 5,248 0x0 hidden;
+metadata default RISCV.state_timerh at 5,140 0x0 hidden;
+metadata large RISCV.state_timerl at 5,113 0x0 hidden;
+metadata default RISCV.state_timermatchh at 5,194 0x0 hidden;
+metadata large RISCV.state_timermatchl at 5,138 0x0 hidden;
+metadata default RISCV._writeString_i at 0,0 0x0 hidden;
+metadata default Stage.Global.frameIndex at 0,0 0x0 hidden;
+metadata default Stage.RISCV.state at 0,0 0x0 hidden;
+metadata default Stage.RISCV.kHz at 387,318 0x0 hidden;
+metadata default RISCV._runFrame_startTime at 0,0 0x0 hidden;
+metadata default RISCV._runFrame_elapsedTime at 0,0 0x0 hidden;
+metadata default RISCV.lastTime at 0,89 0x0 hidden;
+metadata default RISCV._getTimeMicroseconds_return at 0,0 0x0 hidden;
+metadata default RISCV.state_pc at 46,44 0x0 hidden;
+metadata default RISCV._runFrame_state at 0,0 0x0 hidden;
+metadata default Terminal.blinkOffset at 0,0 0x0 hidden;
+metadata list Terminal.buffer_weight at 0,0 0x0 hidden;
+metadata default Terminal.current_weight at 0,0 0x0 hidden;
+metadata default Terminal.current_blinking at 0,0 0x0 hidden;
+metadata list Terminal.colors_bright at 0,0 203x280 hidden;
+metadata list Terminal.colors at 0,0 155x247 hidden;
+metadata list Terminal.colors at 33,0 248x293 hidden;
+metadata default Input.i at 0,0 0x0 hidden;
+metadata default Terminal.lastCursorX at 0,0 0x0 hidden;
+metadata default Terminal.lastCursorY at 0,0 0x0 hidden;
+metadata default Terminal.lastCursorState at 0,0 0x0 hidden;
+
+stage: costume=0, volume=100, layer=0, tempo=60, video="on", videoTransparency=50;
+stage {
+    import "assets/2cad5629a7f5460b9df1aae292b686bb.svg" as ""; // costume centerx=703.2254347370629 centery=554.9999999999998 res=1
+
+    
+
+    metadata Stage.startFrameCounter pos 539,64;
+    public void Stage.startFrameCounter() { // hook: broadcast Stage.startFrameCounter
+        while (1) {
+            Global.frameIndex += 1;
+        }
+    }
+
+    metadata greenFlag pos 107,94;
+    public void greenFlag() {
+        Global.frameIndex = 0;
+        Control.broadcast("Stage.startFrameCounter");
+        if (block("argument_reporter_boolean", "VALUE", "is compiled?")) {
+            Global.detectScreenSize();
+        } else {
+            Global.stageWidth = 480;
+            Global.stageHeight = 360;
+        }
+        Terminal.reset();
+        Control.broadcast("Terminal.run");
+        RISCV.powerOn();
+        call RISCV.run();
+    }
+}
+
+Empty: name="Empty", x=36, y=28, size=100, direction=90, show=1, costume=0, volume=100, layer=3, rotation="all", draggable=0;
+class Empty {
+    import "assets/3339a2953a3bf62bb80e54ff575dbced.svg" as ""; // costume centerx=0 centery=0 res=1
+}
+
+RISCV: name="RISCV", x=0, y=0, size=100, direction=90, show=1, costume=1, volume=100, layer=1, rotation="all", draggable=0;
+class RISCV {
+    import "assets/cd21514d0531fdffb22204e0ec5ed84a.svg" as ""; // costume centerx=0 centery=0 res=1
+    import "assets/cd21514d0531fdffb22204e0ec5ed84a.svg" as "ABCDEFGHIJKLMNOPQRSTUVWXYZΜÀÁÂÃÄÅÆÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖØÙÚÛÜÝÞŸĀĂĄĆĈĊČĎĐĒĔĖĘĚĜĞĠĢĤĦĨĪĬĮİĲĴĶĹĻĽĿŁŃŅŇŊŌŎŐŒŔŖŘŚŜŞŠŢŤŦŨŪŬŮŰŲŴŶŹŻŽɃƁƂƄƆƇƉƊƋƎƏƐƑƓƔǶƖƗƘȽƜƝȠƟƠƢƤƦƧƩƬƮƯƱƲƳƵƷƸƼǷǄǇǊǍǏǑǓǕǗǙǛǞǠǢǤǦǨǪǬǮǱǴǸǺǼǾȀȂȄȆȈȊȌȎȐȒȔȖȘȚȜȞȢȤȦȨȪȬȮȰȲȺȻȾⱾⱿɁɄɅɆɈɊɌɎⱯⱭⱰꞫꞬꞍꞪꞮⱢꞭⱮⱤꟅꞱꞲꞰΙͰͲͶϽϾϿͿΆΈΉΊΌΎΏΑΒΓΔΕΖΗΘΚΛΝΞΟΠΡΣΤΥΦΧΨΩΪΫϏϘϚϜϞϠϢϤϦϨϪϬϮϹϷϺЀЁЂЃЄЅІЇЈЉЊЋЌЍЎЏАБВГДЕЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯѠѢѤѦѨѪѬѮѰѲѴѶѸѺѼѾҀҊҌҎҐҒҔҖҘҚҜҞҠҢҤҦҨҪҬҮҰҲҴҶҸҺҼҾӀӁӃӅӇӉӋӍӐӒӔӖӘӚӜӞӠӢӤӦӨӪӬӮӰӲӴӶӸӺӼӾԀԂԄԆԈԊԌԎԐԒԔԖԘԚԜԞԠԢԤԦԨԪԬԮԱԲԳԴԵԶԷԸԹԺԻԼԽԾԿՀՁՂՃՄՅՆՇՈՉՊՋՌՍՎՏՐՑՒՓՔՕՖႠႡႢႣႤႥႦႧႨႩႪႫႬႭႮႯႰႱႲႳႴႵႶႷႸႹႺႻႼႽႾႿჀჁჂჃჄჅჇჍᲐᲑᲒᲓᲔᲕᲖᲗᲘᲙᲚᲛᲜᲝᲞᲟᲠᲡᲢᲣᲤᲥᲦᲧᲨᲩᲪᲫᲬᲭᲮᲯᲰᲱᲲᲳᲴᲵᲶᲷᲸᲹᲺᲽᲾᲿᎠᎡᎢᎣᎤᎥᎦᎧᎨᎩᎪᎫᎬᎭᎮᎯᎰᎱᎲᎳᎴᎵᎶᎷᎸᎹᎺᎻᎼᎽᎾᎿᏀᏁᏂᏃᏄᏅᏆᏇᏈᏉᏊᏋᏌᏍᏎᏏᏐᏑᏒᏓᏔᏕᏖᏗᏘᏙᏚᏛᏜᏝᏞᏟᏠᏡᏢᏣᏤᏥᏦᏧᏨᏩᏪᏫᏬᏭᏮᏯᏰᏱᏲᏳᏴᏵꙊꝽⱣꟆḀḂḄḆḈḊḌḎḐḒḔḖḘḚḜḞḠḢḤḦḨḪḬḮḰḲḴḶḸḺḼḾṀṂṄṆṈṊṌṎṐṒṔṖṘṚṜṞṠṢṤṦṨṪṬṮṰṲṴṶṸṺṼṾẀẂẄẆẈẊẌẎẐẒẔẞẠẢẤẦẨẪẬẮẰẲẴẶẸẺẼẾỀỂỄỆỈỊỌỎỐỒỔỖỘỚỜỞỠỢỤỦỨỪỬỮỰỲỴỶỸỺỼỾἈἉἊἋἌἍἎἏἘἙἚἛἜἝἨἩἪἫἬἭἮἯἸἹἺἻἼἽἾἿὈὉὊὋὌὍὙὛὝὟὨὩὪὫὬὭὮὯᾺΆῈΈῊΉῚΊῸΌῪΎῺΏᾸᾹῘῙῨῩῬℲⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩⅪⅫⅬⅭⅮⅯↃⒶⒷⒸⒹⒺⒻⒼⒽⒾⒿⓀⓁⓂⓃⓄⓅⓆⓇⓈⓉⓊⓋⓌⓍⓎⓏⰀⰁⰂⰃⰄⰅⰆⰇⰈⰉⰊⰋⰌⰍⰎⰏⰐⰑⰒⰓⰔⰕⰖⰗⰘⰙⰚⰛⰜⰝⰞⰟⰠⰡⰢⰣⰤⰥⰦⰧⰨⰩⰪⰫⰬⰭⰮⱠⱧⱩⱫⱲⱵⲀⲂⲄⲆⲈⲊⲌⲎⲐⲒⲔⲖⲘⲚⲜⲞⲠⲢⲤⲦⲨⲪⲬⲮⲰⲲⲴⲶⲸⲺⲼⲾⳀⳂⳄⳆⳈⳊⳌⳎⳐⳒⳔⳖⳘⳚⳜⳞⳠⳢⳫⳭⳲꙀꙂꙄꙆꙈꙌꙎꙐꙒꙔꙖꙘꙚꙜꙞꙠꙢꙤꙦꙨꙪꙬꚀꚂꚄꚆꚈꚊꚌꚎꚐꚒꚔꚖꚘꚚꜢꜤꜦꜨꜪꜬꜮꜲꜴꜶꜸꜺꜼꜾꝀꝂꝄꝆꝈꝊꝌꝎꝐꝒꝔꝖꝘꝚꝜꝞꝠꝢꝤꝦꝨꝪꝬꝮꝹꝻꝾꞀꞂꞄꞆꞋꞐꞒꟄꞖꞘꞚꞜꞞꞠꞢꞤꞦꞨꞳꞴꞶꞸꞺꞼꞾꟂꟇꟉꟵＡＢＣＤＥＦＧＨＩＪＫＬＭＮＯＰＱＲＳＴＵＶＷＸＹＺ"; // costume centerx=0 centery=0 res=1
+    private _sign_return = 4229889;
+    private _unsign_return = 0;
+    private __imm = 16;
+    private __rs1 = 1;
+    private __rs2 = 0;
+    private __is_reg = 0;
+    private __op_switchval = 5;
+    private new_timer = 4562000;
+    private state_pc = 2147483648;
+    private __trap = 0;
+    private __pc = 2148590492;
+    private __rdid = 0;
+    private __reladdy = 2097060;
+    private __imm_se = 0;
+    private __immm4 = 56;
+    private __rsval = 4229889;
+    private _handleControlLoad_return = 96;
+    private __addy = 8686148;
+    private _executeInstruction_return = 0;
+    private _handleControlStore_return = 0;
+    private __csrno = 768;
+    private __microop = 2;
+    private __rs1imm = 11;
+    private __writeval = 8;
+    private __startmstatus = 128;
+    private __irmid = 0;
+    private __dowrite = 1;
+    private __rv32a_switchval = 0;
+    private _handleException_return = 2147483655;
+    private _CSR_ptr = 2;
+    private _CSR_char = 0;
+    private dtb_ptr = 67107136;
+    private instct = -1;
+    private rt = 0;
+    private instrs_per_flip = 102400;
+    private _replaceChars_return = "";
+    private _replaceChars_i = 1;
+    private _multiply_return = 108;
+    private _multiply_aIndex = 7;
+    private _multiply_carry = 0;
+    private _multiply_num = 1;
+    private _andbiginteger_tmp2 = 1;
+    private _getTimeMicroseconds_return = 806907307416000;
+    private _add_return = "0000000000007000";
+    private _add_num = 10;
+    private _subtract_return = "0000000000007000";
+    private _INIT_RAM_i = 1537;
+    private _speedtest_readreturn = "0";
+    private _multiply_p0 = 0;
+    private _multiply_p1 = 0;
+    private _multiply_p2 = 0;
+    private _multiply_p3 = 0;
+    private _multiply_a0 = 0;
+    private _multiply_a1 = 0;
+    private _multiply_b0 = 51712;
+    private _multiply_b1 = 15258;
+    private is_escape_sequence_ = 0;
+    private current_color = 0;
+    private ___a___ = 32;
+    private __ir = 34151523;
+    private __ofs_pc = 1106788;
+    private __rval = 0;
+    private __startextraflags = 6283;
+    private _i0 = 1;
+    private _i1 = 110;
+    private _i2 = 1134;
+    private _i3 = "46";
+    private _i4 = 1;
+    private _i5 = "none";
+    private __branch_switchval = 1;
+    private __load_switch_value = 4;
+    private __store_switchval = 2;
+    private _add_aindex = 0;
+    private _add_bindex = 0;
+    private _add_carry = 1;
+    private _addToBuf_index = 6;
+    private _andbiginteger_tmp = 0;
+    private _divide_a = 2;
+    private _divide_b = "2";
+    private _divide_carry = "1";
+    private _divide_index = 2;
+    private _multiply_bIndex = -7;
+    private _divide_return = "0";
+    private _step_return = 0;
+    private _unicode_return = "46";
+    private _tmp1 = 0;
+    private _RAM_AMT = 67108864;
+    private _RV32_RAM_IMAGE_OFFSET = 2147483648;
+    private byteval = 4294967296;
+    private CASE_SENSITIVE_INPUT_ = 0;
+    private elapsedUs = 206000;
+    private INSTRUCTION_N = 0;
+    private lastTime = 806907307416000;
+    private n1 = 65536;
+    private n2 = 0;
+    private RISC_Ram_Read_return = 34151523;
+    private SYMBOLS = "0123456789-=[];',./~!@#$%^&*()_+{}|:\"<>?\\ ";
+    private __execute_opcode = 99;
+    private state_cycleh = 0;
+    private state_cyclel = 0;
+    private state_extraflags = 3;
+    private state_mcause = 0;
+    private state_mepc = 0;
+    private state_mie = 0;
+    private state_mip = 0;
+    private state_mscratch = 0;
+    private state_mstatus = 0;
+    private state_mtval = 0;
+    private state_mtvec = 0;
+    private state_timerh = 0;
+    private state_timerl = 0;
+    private state_timermatchh = 0;
+    private state_timermatchl = 0;
+    private _writeString_i = 21;
+    private _runFrame_startTime = 9339.204946944445;
+    private _runFrame_elapsedTime = 200.00001532025635;
+    private _runFrame_state = 1;
+    private escape_args = [];
+    private colors = [];
+    import "assets/lists/orLUT.jsa" as orLUT;
+    import "assets/lists/xorLUT.jsa" as xorLUT;
+    private trap_locations = [];
+    private REG = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2214590784, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+    import "assets/lists/RAM.jsa" as RAM;
+    private powers = ["1.0", "2.0", "4.0", "8.0", "16.0", "32.0", "64.0", "128.0", "256.0", "512.0", "1024.0", "2048.0", "4096.0", "8192.0", "16384.0", "32768.0", "65536.0", "131072.0", "262144.0", "524288.0", "1048576.0", "2097152.0", "4194304.0", "8388608.0", "1.6777216E7", "3.3554432E7", "6.7108864E7", "1.34217728E8", "2.68435456E8", "5.36870912E8", "1.073741824E9", "2.147483648E9"];
+    import "assets/lists/andLUT.jsa" as andLUT;
+    import "assets/lists/_unicode.jsa" as _unicode;
+
+    metadata _0_Run_Frame pos 29935,-93;
+    private void _0_Run_Frame() { // proccode 0.Run Frame // warp
+        _runFrame_startTime = Sensing.daysSince2000();
+        _runFrame_state = 0;
+        while (_runFrame_state == 0) {
+            getTimeMicroseconds();
+            elapsedUs = Operators.math("floor", _getTimeMicroseconds_return - lastTime);
+            lastTime = _getTimeMicroseconds_return;
+            new_timer = state_timerl + elapsedUs;
+            if (new_timer < state_timerl) {
+                state_timerh += 1;
+            }
+            state_timerl = new_timer;
+            if ((state_timerh > state_timermatchh || state_timerh == state_timermatchh && state_timerl > state_timermatchl) && (state_timermatchh > 0 || state_timermatchl > 0)) {
+                state_extraflags = state_extraflags - state_extraflags % 8 + state_extraflags % 4;
+                state_mip = state_mip - state_mip % 256 + (state_mip % 128 + 1);
+            } else {
+                state_mip = state_mip - state_mip % 256 + state_mip % 128;
+            }
+            if (Operators.math("floor", state_extraflags / 4) % 2 > 0) {
+                _runFrame_state = 1;
+            } else {
+                __pc = state_pc;
+                __trap = 0;
+                if (Operators.math("floor", state_mip / 128) % 2 > 0 && Operators.math("floor", state_mie / 128) % 2 > 0 && Operators.math("floor", state_mstatus / 8) % 2 > 0) {
+                    __trap = 2147483655;
+                    __pc -= 4;
+                } else {
+                    _step_return = 0;
+                    while (_step_return == 0 && __trap == 0 && _runFrame_state == 0) {
+                        _runFrame_elapsedTime = (Sensing.daysSince2000() - _runFrame_startTime) * 86400000;
+                        if (_runFrame_elapsedTime > 50 && (_runFrame_elapsedTime > 200 || Terminal.outputBuffer.length() > 0)) {
+                            _runFrame_state = 1;
+                        } else {
+                            _1_Step(1024);
+                        }
+                    }
+                }
+                if (__trap > 0) {
+                    handleException(__ir, __trap);
+                    __trap = _handleException_return;
+                    if (Operators.math("floor", __trap / 0x80000000) > 0) {
+                        state_mcause = __trap;
+                        state_mtval = 0;
+                        __pc += 4;
+                    } else {
+                        state_mcause = __trap - 1;
+                        if (__trap > 5 && __trap < 9) {
+                            state_mtval = __rval;
+                        } else {
+                            state_mtval = __pc;
+                        }
+                    }
+                    state_mepc = __pc;
+                    state_mstatus = Operators.math("floor", state_mstatus / 8) % 2 * 128;
+                    bitwise_OR(state_extraflags % 4 * 2048, state_mstatus);
+                    state_mstatus = ___a___;
+                    state_extraflags = Operators.math("floor", state_extraflags / 4) * 4 + 3;
+                    __pc = state_mtvec;
+                }
+                state_pc = __pc;
+            }
+        }
+        if (_step_return > 2) {
+            if (_step_return == 3) {
+                instct = 0;
+            } else {
+                WRITE_STRING("");
+                if (_step_return == 0x7777) {
+                    WRITE_STRING(join("Reboot ", join("@", __pc)));
+                    RISCV.state = 2;
+                } elif (_step_return == 0x5555) {
+                    WRITE_STRING(join("Poweroff ", join("@", __pc)));
+                    RISCV.state = 0;
+                } else {
+                    WRITE_STRING(join(join(join("Unknown failure ", _step_return), " @ "), __pc));
+                    RISCV.state = 0;
+                }
+                Control.stopThisScript();
+            }
+        }
+        if (!(rt < instct + 1 || instct < 0)) {
+            WRITE_STRING("");
+            WRITE_STRING(join("Terminated @ ", __pc));
+            RISCV.state = 0;
+        }
+        RISCV.kHz = Operators.round(INSTRUCTION_N / Sensing.timer() / 1000) / 1000;
+    }
+
+    metadata RISCV.powerOn pos 28765,24;
+    public void RISCV.powerOn() { // hook: broadcast RISCV.powerOn
+        CASE_SENSITIVE_INPUT_ = 1;
+        WRITE_STRING("");
+        WRITE_STRING("Welcome to Linux on Scratch by @bilman66!");
+        WRITE_STRING("(reuploaded by @Tacodiva7729 :3)");
+        WRITE_STRING("");
+        Control.wait(0);
+        _0_Reset();
+        WRITE_STRING("Resetting RAM...");
+        Control.wait(0);
+        _0_Reset_RAM();
+        WRITE_STRING("Starting emulation...");
+        WRITE_STRING("");
+        CASE_SENSITIVE_INPUT_ = 0;
+        RISCV.state = 1;
+    }
+
+    metadata Multiply_BigInteger pos 13958,30;
+    private void Multiply_BigInteger(a, b) { // proccode Multiply BigInteger %s %s // warp
+        _multiply_aIndex = Operators.length(a);
+        _multiply_bIndex = Operators.length(b);
+        _multiply_carry = 0;
+        _multiply_return = "";
+        while (!(_multiply_aIndex + _multiply_bIndex < 2 && _multiply_carry == 0)) {
+            if (_multiply_bIndex < 1) {
+                _multiply_aIndex += _multiply_bIndex - 1;
+                _multiply_bIndex = 1;
+            }
+            _multiply_num = _multiply_carry;
+            while (!(_multiply_aIndex < 1 || _multiply_bIndex > Operators.length(b))) {
+                _multiply_num += Operators.letterOf(_multiply_aIndex, a) * Operators.letterOf(_multiply_bIndex, b);
+                _multiply_aIndex -= 1;
+                _multiply_bIndex += 1;
+            }
+            _multiply_return = join(_multiply_num % 10, _multiply_return);
+            _multiply_carry = Operators.math("floor", _multiply_num / 10);
+            _multiply_bIndex = _multiply_bIndex - 1 - (Operators.length(a) - _multiply_aIndex);
+            _multiply_aIndex = Operators.length(a);
+        }
+    }
+
+    metadata bitwise_AND pos 48,64;
+    private void bitwise_AND(a, b) { // proccode bitwise AND %s %s // warp
+        ___a___ = andLUT.get(Operators.math("floor", a / 16777216) * 256 + Operators.math("floor", b / 16777216) + 1) * 16777216 + andLUT.get(Operators.math("floor", a / 65536) % 256 * 256 + Operators.math("floor", b / 65536) % 256 + 1) * 65536 + (andLUT.get(Operators.math("floor", a / 256) % 256 * 256 + Operators.math("floor", b / 256) % 256 + 1) * 256 + andLUT.get(a % 256 * 256 + b % 256 + 1));
+    }
+
+    metadata bitwise_OR pos 4542,64;
+    private void bitwise_OR(a, b) { // proccode bitwise OR %s %s // warp
+        ___a___ = orLUT.get(Operators.math("floor", a / 16777216) * 256 + Operators.math("floor", b / 16777216) + 1) * 16777216 + orLUT.get(Operators.math("floor", a / 65536) % 256 * 256 + Operators.math("floor", b / 65536) % 256 + 1) * 65536 + (orLUT.get(Operators.math("floor", a / 256) % 256 * 256 + Operators.math("floor", b / 256) % 256 + 1) * 256 + orLUT.get(a % 256 * 256 + b % 256 + 1));
+    }
+
+    metadata Unicode_of pos 9018,64;
+    private void Unicode_of(text) { // proccode Unicode of %s // warp
+        if (CASE_SENSITIVE_INPUT_ == 0) {
+            _unicode_return = _unicode.indexOf(text);
+            if (Operators.contains(SYMBOLS, text)) {
+                Control.stopThisScript();
+            }
+            _unicode_return += 32;
+            Control.stopThisScript();
+        }
+        _i0 = 1;
+        _i3 = "";
+        _i4 = _i0;
+        case_sensing(text);
+        _i5 = _unicode_return;
+        case_sensing(_unicode.get(_unicode.indexOf(text)));
+        if (_i5 == _unicode_return) {
+            _i3 = join(_i3, _unicode.indexOf(text));
+        } else {
+            _i1 = _unicode.indexOf(text) + 1;
+            while (!(_unicode.get(_i1) == text)) {
+                _i1 += 1;
+            }
+            _i3 = join(_i3, _i1);
+        }
+        _unicode_return = _i3;
+    }
+
+    metadata case_sensing pos 9709,64;
+    private void case_sensing(text) { // proccode case sensing %s // warp
+        _unicode_return = "";
+        Looks.switchCostume(2 * 1);
+        if (Operators.contains(Looks.costumeName(), text)) {
+            _i1 = "";
+            _i2 = 1;
+            repeat (Operators.length(Looks.costumeName())) {
+                if (text == Operators.letterOf(_i2, Looks.costumeName())) {
+                    _i1 = join(_i1, text);
+                } else {
+                    _i1 = join(_i1, Operators.letterOf(_i2, Looks.costumeName()));
+                }
+                _i2 += 1;
+            }
+            Looks.switchCostume("");
+            Looks.switchCostume(_i1);
+            if (Looks.costumeNumber() == 2) {
+                _unicode_return = join(_unicode_return, "uppercase");
+            } else {
+                _unicode_return = join(_unicode_return, "lowercase");
+            }
+        } else {
+            _unicode_return = join(_unicode_return, "none");
+        }
+    }
+
+    metadata addToBuf pos 10418,64;
+    private void addToBuf() { // warp
+        Sensing.ask("");
+        _addToBuf_index = 1;
+        repeat (Operators.length(Sensing.answer())) {
+            Unicode_of(Operators.letterOf(_addToBuf_index, Sensing.answer()));
+            Terminal.inputBuffer.add(_unicode_return);
+            _addToBuf_index += 1;
+        }
+    }
+
+    metadata Subtract_BigInteger pos 14862,64;
+    private void Subtract_BigInteger(a, b) { // proccode Subtract BigInteger %s %s // warp
+        _add_aindex = Operators.length(a);
+        _add_bindex = Operators.length(b);
+        _add_carry = 1;
+        _add_return = "";
+        while (!(_add_aindex < 1 && _add_bindex < 1)) {
+            _add_num = Operators.letterOf(_add_aindex, a) - Operators.letterOf(_add_bindex, b) + (9 + _add_carry);
+            _add_return = join(_add_num % 10, _add_return);
+            _add_carry = Operators.math("floor", _add_num / 10);
+            _add_aindex -= 1;
+            _add_bindex -= 1;
+        }
+        _subtract_return = _add_return;
+    }
+
+    metadata Add_BigInteger pos 15886,64;
+    private void Add_BigInteger(a, b) { // proccode Add BigInteger %s %s // warp
+        _add_aindex = Operators.length(a);
+        _add_bindex = Operators.length(b);
+        _add_carry = 0;
+        _add_return = "";
+        while (!(_add_aindex < 1 && _add_bindex < 1 && _add_carry == 0)) {
+            _add_num = Operators.letterOf(_add_aindex, a) + Operators.letterOf(_add_bindex, b) + _add_carry;
+            _add_return = join(_add_num % 10, _add_return);
+            _add_carry = Operators.math("floor", _add_num / 10);
+            _add_aindex -= 1;
+            _add_bindex -= 1;
+        }
+    }
+
+    metadata Divide_BigInteger pos 16842,64;
+    private void Divide_BigInteger(a, b) { // proccode Divide BigInteger %s %s // warp
+        if (a == 1) {
+            _divide_return = 0;
+            _divide_carry = 1;
+            Control.stopThisScript();
+        }
+        _divide_a = a;
+        _divide_b = b;
+        _divide_index = 1;
+        _divide_carry = Operators.letterOf(1, _divide_a);
+        while (_divide_carry < _divide_b) {
+            _divide_carry = "";
+            _divide_return = 1;
+            _divide_index += 1;
+            repeat (_divide_index) {
+                _divide_carry = join(_divide_carry, Operators.letterOf(_divide_return, _divide_a));
+                _divide_return += 1;
+            }
+        }
+        _divide_index = Operators.length(_divide_carry) + 1;
+        _divide_return = Operators.math("floor", _divide_carry / _divide_b);
+        _divide_carry = _divide_carry % _divide_b;
+        repeat (Operators.length(_divide_a) - (_divide_index - 1)) {
+            _divide_return = join(_divide_return, Operators.math("floor", join(_divide_carry, Operators.letterOf(_divide_index, _divide_a)) / _divide_b));
+            _divide_carry = join(_divide_carry, Operators.letterOf(_divide_index, _divide_a)) % _divide_b;
+            _divide_index += 1;
+        }
+    }
+
+    metadata sign32 pos 18308,64;
+    private void sign32(num) { // warp
+        _sign_return = (0x100000000 - (0 - num)) * (num < 0) + num * (num > -1);
+    }
+
+    metadata Multiply_upper32 pos 19390,64;
+    private void Multiply_upper32(a, b) { // proccode Multiply upper32 %s %s // warp
+        _multiply_a1 = Operators.math("floor", a / 65536);
+        _multiply_a0 = a % 65536;
+        _multiply_b1 = Operators.math("floor", b / 65536);
+        _multiply_b0 = b % 65536;
+        _multiply_p0 = _multiply_a0 * _multiply_b0;
+        _multiply_p1 = _multiply_a0 * _multiply_b1;
+        _multiply_p2 = _multiply_a1 * _multiply_b0;
+        _multiply_p3 = _multiply_a1 * _multiply_b1;
+        _multiply_return = _multiply_p1 * 65536 + _multiply_p2 * 65536 + (_multiply_p1 + _multiply_p2 + Operators.math("floor", _multiply_p3 / 65536));
+    }
+
+    metadata _1_Step pos 20917,64;
+    private void _1_Step(stepCount) { // proccode 1.Step %s // warp
+        repeat (stepCount) {
+            __rval = 0;
+            state_cyclel += 1;
+            if (state_cyclel == 0) {
+                state_cycleh += 1;
+            }
+            __ofs_pc = __pc - _RV32_RAM_IMAGE_OFFSET;
+            if (__ofs_pc > _RAM_AMT - 1) {
+                __trap = 2;
+                Control.stopThisScript();
+            }
+            if (__pc % 4 > 0) {
+                __trap = 1;
+                Control.stopThisScript();
+            }
+            _executeInstruction_return = 0;
+            executeInstruction();
+            if (_executeInstruction_return > 0) {
+                state_pc = __pc + 4;
+                _step_return = _executeInstruction_return;
+                Control.stopThisScript();
+            }
+            if (__trap > 0) {
+                Control.stopThisScript();
+            }
+            if (__rdid > 0) {
+                REG.set(__rdid + 1, __rval % 0x100000000);
+            }
+            __pc += 4;
+        }
+    }
+
+    metadata replaceChars pos 24732,64;
+    private void replaceChars(dest, src, start) { // warp
+        _replaceChars_return = "";
+        for (_replaceChars_i=1, _replaceChars_i<=Operators.length(dest), _replaceChars_i++) {
+            if (_replaceChars_i > start - 1 && _replaceChars_i < start + Operators.length(src)) {
+                _replaceChars_return = join(_replaceChars_return, Operators.letterOf(_replaceChars_i - start, src));
+            } else {
+                _replaceChars_return = join(_replaceChars_return, Operators.letterOf(_replaceChars_i, src));
+            }
+        }
+    }
+
+    metadata Memory_Speedtest pos 25766,64;
+    private void Memory_Speedtest() { // proccode Memory Speedtest // warp
+        Global.prepareSave();
+        RAM.clear();
+        Sensing.resetTimer();
+        repeat (1000000) {
+            RAM.set(Operators.random(0, _RAM_AMT) + 1, 255);
+        }
+        log(join("1000000 8-bit writes in ", join(Sensing.timer(), "s")));
+        Sensing.resetTimer();
+        repeat (1000000) {
+            RISC_Write16(65535, Operators.random(0, _RAM_AMT));
+        }
+        log(join("1000000 16-bit writes in ", join(Sensing.timer(), "s")));
+        Sensing.resetTimer();
+        repeat (1000000) {
+            RISC_Write32(Operators.math("abs", 0xFFFFFFFF), Operators.random(0, _RAM_AMT));
+        }
+        log(join("1000000 32-bit writes in ", join(Sensing.timer(), "s")));
+        Sensing.resetTimer();
+        repeat (1000000) {
+            _speedtest_readreturn = RAM.get(Operators.random(0, _RAM_AMT) + 1);
+        }
+        log(join("1000000 8-bit reads in ", join(Sensing.timer(), "s")));
+        Sensing.resetTimer();
+        repeat (1000000) {
+            RISC_Read16(Operators.random(0, _RAM_AMT));
+        }
+        log(join("1000000 16-bit reads in ", join(Sensing.timer(), "s")));
+        Sensing.resetTimer();
+        repeat (1000000) {
+            RISC_Read32(Operators.random(0, _RAM_AMT));
+        }
+        log(join("1000000 32-bit reads in ", join(Sensing.timer(), "s")));
+    }
+
+    metadata Handle_escape_char pos 26693,64;
+    private void Handle_escape_char(char) { // proccode Handle escape char %s // warp
+        if (char == 91) {
+            escape_args.clear();
+            escape_args.add("");
+            Control.stopThisScript();
+        }
+        if (char > 47 && char < 58) {
+            escape_args.set(escape_args.length(), join(escape_args.get(escape_args.length()), char));
+            Control.stopThisScript();
+        }
+        if (char == 59) {
+            escape_args.add("");
+            Control.stopThisScript();
+        }
+        if (char > 96 && char < 118) {
+            is_escape_sequence_ = 0;
+            if (Operators.length(escape_args.get(escape_args.length())) == "") {
+                escape_args.delete(escape_args.length());
+            }
+            if (char == 109) {
+                if (escape_args.length() == 2) {
+                    current_color = colors.get(escape_args.get(2) + 1);
+                    Control.stopThisScript();
+                }
+                if (escape_args.length() == 1) {
+                    current_color = colors.get(1);
+                }
+            }
+        }
+    }
+
+    metadata _0_Reset pos 28160,64;
+    private void _0_Reset() { // proccode 0.Reset // warp
+        INSTRUCTION_N = 0;
+        state_pc = 0;
+        state_mstatus = 0;
+        state_cyclel = 0;
+        state_cycleh = 0;
+        state_timerl = 0;
+        state_timerh = 0;
+        state_timermatchl = 0;
+        state_timermatchh = 0;
+        state_mscratch = 0;
+        state_mtvec = 0;
+        state_mie = 0;
+        state_mip = 0;
+        state_mepc = 0;
+        state_mtval = 0;
+        state_mcause = 0;
+        state_extraflags = 3;
+        state_pc = _RV32_RAM_IMAGE_OFFSET;
+        REG.clear();
+        repeat (32) {
+            REG.add(0);
+        }
+        REG.set(12, dtb_ptr + _RV32_RAM_IMAGE_OFFSET);
+        instct = -1;
+        rt = 0;
+    }
+
+    metadata WRITE_CHAR pos 29323,64;
+    private void WRITE_CHAR(ascii_value) { // proccode WRITE CHAR %s // warp
+        Terminal.outputBuffer.add(ascii_value);
+    }
+
+    metadata WRITE_STRING pos 31194,64;
+    private void WRITE_STRING(str) { // proccode WRITE STRING %s // warp
+        for (_writeString_i=1, _writeString_i<=Operators.length(str), _writeString_i++) {
+            Unicode_of(Operators.letterOf(_writeString_i, str));
+            Terminal.outputBuffer.add(_unicode_return);
+        }
+        Terminal.outputBuffer.add(0x0D);
+        Terminal.outputBuffer.add(0x0A);
+    }
+
+    metadata _0_Reset_RAM pos 31756,64;
+    private void _0_Reset_RAM() { // proccode 0.Reset RAM // warp
+        _INIT_RAM_i = 1;
+        repeat (RISCV.ROM.length()) {
+            RAM.set(_INIT_RAM_i, RISCV.ROM.get(_INIT_RAM_i) + 0);
+            _INIT_RAM_i += 1;
+        }
+        repeat (_RAM_AMT - RAM.length()) {
+            RAM.set(_INIT_RAM_i, 0 + 0);
+            _INIT_RAM_i += 1;
+        }
+        _INIT_RAM_i = 1;
+        repeat (RISCV.DTB.length()) {
+            RAM.set(dtb_ptr + _INIT_RAM_i, RISCV.DTB.get(_INIT_RAM_i));
+            _INIT_RAM_i += 1;
+        }
+    }
+
+    metadata OPCODE_LOAD pos 32677,64;
+    private void OPCODE_LOAD() { // warp
+        if (Operators.math("floor", __ir / 2147483648) > 0) {
+            __imm_se = Operators.math("floor", __ir / 1048576) + 0xfffff000;
+        } else {
+            __imm_se = Operators.math("floor", __ir / 1048576);
+        }
+        if (__imm_se > 0x7FFFFFFF) {
+            sign32(REG.get(Operators.math("floor", __ir / 32768) % 32 + 1) + (0 - (0xFFFFFFFF - __imm_se + 1)) - _RV32_RAM_IMAGE_OFFSET);
+        } else {
+            sign32(REG.get(Operators.math("floor", __ir / 32768) % 32 + 1) + __imm_se - _RV32_RAM_IMAGE_OFFSET);
+        }
+        __rsval = _sign_return % 0x100000000;
+        if (__rsval > _RAM_AMT - 4) {
+            sign32(__rsval - _RV32_RAM_IMAGE_OFFSET);
+            __rsval = _sign_return;
+            if (__rsval > 0x10000000 - 1 && __rsval < 0x12000000) {
+                if (__rsval == 0x1100bffc) {
+                    __rval = state_timerh;
+                } elif (__rsval == 0x1100bff8) {
+                    __rval = state_timerl;
+                } else {
+                    handleControlLoad(__rsval);
+                    __rval = _handleControlLoad_return;
+                }
+            } else {
+                __trap = 6;
+                __rval = __rsval;
+            }
+        } else {
+            __load_switch_value = Operators.math("floor", __ir / 4096) % 8;
+            if (__load_switch_value == 0) {
+                ___a___ = RAM.get(__rsval + 1);
+                if (___a___ > 0x7F) {
+                    __rval = 0x100000000 - (0xFF - ___a___ + 1);
+                    Control.stopThisScript();
+                }
+                __rval = ___a___;
+                Control.stopThisScript();
+            }
+            if (__load_switch_value == 1) {
+                RISC_Read16(__rsval);
+                if (RISC_Ram_Read_return > 0x7FFF) {
+                    __rval = 0x100000000 - (0xFFFF - RISC_Ram_Read_return + 1);
+                    Control.stopThisScript();
+                }
+                __rval = RISC_Ram_Read_return;
+                Control.stopThisScript();
+            }
+            if (__load_switch_value == 2) {
+                RISC_Read32(__rsval);
+                __rval = RISC_Ram_Read_return;
+                Control.stopThisScript();
+            }
+            if (__load_switch_value == 4) {
+                __rval = RAM.get(__rsval + 1);
+                Control.stopThisScript();
+            }
+            if (__load_switch_value == 5) {
+                RISC_Read16(__rsval);
+                __rval = RISC_Ram_Read_return;
+                Control.stopThisScript();
+            }
+            __trap = 3;
+        }
+    }
+
+    metadata executeInstruction pos 34162,64;
+    private void executeInstruction() { // warp
+        INSTRUCTION_N += 1;
+        RISC_Read32(__ofs_pc);
+        __ir = RISC_Ram_Read_return;
+        __rdid = Operators.math("floor", __ir / 128) % 32;
+        __execute_opcode = __ir % 128;
+        if (__execute_opcode == 0b0110111) {
+            OPCODE_LUI();
+            Control.stopThisScript();
+        }
+        if (__execute_opcode == 0b0010111) {
+            OPCODE_AUIPC();
+            Control.stopThisScript();
+        }
+        if (__execute_opcode == 0b1101111) {
+            OPCODE_JAL();
+            Control.stopThisScript();
+        }
+        if (__execute_opcode == 0b1100111) {
+            OPCODE_JALR();
+            Control.stopThisScript();
+        }
+        if (__execute_opcode == 0b1100011) {
+            OPCODE_BRANCH();
+            Control.stopThisScript();
+        }
+        if (__execute_opcode == 0b0000011) {
+            OPCODE_LOAD();
+            Control.stopThisScript();
+        }
+        if (__execute_opcode == 0b0100011) {
+            OPCODE_STORE();
+            Control.stopThisScript();
+        }
+        if (__execute_opcode == 0b0010011 || __execute_opcode == 0b0110011) {
+            OPCODE_OP();
+            Control.stopThisScript();
+        }
+        if (__execute_opcode == 0b0001111) {
+            OPCODE_IDK_LOL();
+            Control.stopThisScript();
+        }
+        if (__execute_opcode == 0b1110011) {
+            OPCODE_ZICSR();
+            Control.stopThisScript();
+        }
+        if (__execute_opcode == 0b0101111) {
+            OPCODE_RV32A();
+            Control.stopThisScript();
+        }
+        __trap = 3;
+    }
+
+    metadata OPCODE_AUIPC pos 35043,64;
+    private void OPCODE_AUIPC() { // warp
+        __rval = (__pc + Operators.math("floor", __ir / 4096) % 0x100000 * 4096) % 0x100000000;
+    }
+
+    metadata OPCODE_JAL pos 36066,64;
+    private void OPCODE_JAL() { // warp
+        __rval = __pc + 4;
+        __reladdy = Operators.math("floor", __ir / 2147483648) * 1048576 + Operators.math("floor", __ir / 2097152) % 1024 * 2 + Operators.math("floor", __ir / 1048576) % 2 * 2048 + Operators.math("floor", __ir / 4096) % 256 * 4096;
+        if (Operators.math("floor", __reladdy / 1048576) % 2 > 0) {
+            __pc = __pc + (0 - (0xFFFFFFFF - (__reladdy % 2097152 + 0xffe00000) + 1)) - 4;
+            Control.stopThisScript();
+        }
+        __pc = __pc + __reladdy - 4;
+    }
+
+    metadata handleException pos 38259,64;
+    private void handleException(ir, exception) { // warp
+        _handleException_return = exception;
+    }
+
+    metadata SET_REG pos 39251,64;
+    private void SET_REG(value) { // warp
+    }
+
+    metadata OPCODE_BRANCH pos 41228,64;
+    private void OPCODE_BRANCH() { // warp
+        __rdid = 0;
+        __immm4 = Operators.math("floor", __ir / 256) % 16 * 2 + Operators.math("floor", __ir / 33554432) % 64 * 32 + Operators.math("floor", __ir / 2147483648) * 4096 + Operators.math("floor", __ir / 128) % 2 * 2048;
+        if (Operators.math("floor", __immm4 / 0x1000) % 2 > 0) {
+            __immm4 = __immm4 % 8192 + 0xffffe000;
+        }
+        __rs1 = REG.get(Operators.math("floor", __ir / 32768) % 32 + 1);
+        __rs2 = REG.get(Operators.math("floor", __ir / 1048576) % 32 + 1);
+        __branch_switchval = Operators.math("floor", __ir / 4096) % 8;
+        if (__branch_switchval == 0b110) {
+            if (REG.get(Operators.math("floor", __ir / 32768) % 32 + 1) < REG.get(Operators.math("floor", __ir / 1048576) % 32 + 1)) {
+                __pc = (__pc + __immm4) % 0x100000000 - 4;
+            }
+            Control.stopThisScript();
+        }
+        if (__branch_switchval == 0b111) {
+            if (REG.get(Operators.math("floor", __ir / 32768) % 32 + 1) > REG.get(Operators.math("floor", __ir / 1048576) % 32 + 1) - 1) {
+                __pc = (__pc + __immm4) % 0x100000000 - 4;
+            }
+            Control.stopThisScript();
+        }
+        unsign32(REG.get(Operators.math("floor", __ir / 32768) % 32 + 1));
+        __rs1 = _unsign_return;
+        unsign32(REG.get(Operators.math("floor", __ir / 1048576) % 32 + 1));
+        if (__branch_switchval == 0b100) {
+            if (__rs1 < _unsign_return) {
+                __pc = (__pc + __immm4) % 0x100000000 - 4;
+            }
+            Control.stopThisScript();
+        }
+        if (__branch_switchval == 1) {
+            if (__rs1 != _unsign_return) {
+                __pc = (__pc + __immm4) % 0x100000000 - 4;
+            }
+            Control.stopThisScript();
+        }
+        if (__branch_switchval == 0) {
+            if (__rs1 == _unsign_return) {
+                __pc = (__pc + __immm4) % 0x100000000 - 4;
+            }
+            Control.stopThisScript();
+        }
+        if (__branch_switchval == 0b101) {
+            if (__rs1 > _unsign_return - 1) {
+                __pc = (__pc + __immm4) % 0x100000000 - 4;
+            }
+            Control.stopThisScript();
+        }
+        __trap = 3;
+    }
+
+    metadata OPCODE_STORE pos 43315,64;
+    private void OPCODE_STORE() { // warp
+        __rs1 = REG.get(Operators.math("floor", __ir / 32768) % 32 + 1);
+        __rs2 = REG.get(Operators.math("floor", __ir / 1048576) % 32 + 1);
+        __addy = Operators.math("floor", __ir / 33554432) % 128 * 32 + Operators.math("floor", __ir / 128) % 32;
+        if (Operators.math("floor", __addy / 2048) % 2 > 0) {
+            __addy += 0xfffff000;
+        }
+        sign32(__rs1 - _RV32_RAM_IMAGE_OFFSET);
+        __addy = (__addy + _sign_return) % 0x100000000;
+        __rdid = 0;
+        if (__addy > _RAM_AMT - 4) {
+            sign32(__addy - _RV32_RAM_IMAGE_OFFSET);
+            __addy = _sign_return % 0x100000000;
+            if (__addy > 0x10000000 - 1 && __addy < 0x12000000) {
+                if (__addy == 0x11004004) {
+                    state_timermatchh = __rs2;
+                    Control.stopThisScript();
+                }
+                if (__addy == 0x11004000) {
+                    state_timermatchl = __rs2;
+                    Control.stopThisScript();
+                }
+                if (__addy == 0x11100000) {
+                    _executeInstruction_return = __rs2;
+                    Control.stopThisScript();
+                }
+                handleControlStore(__addy, __rs2);
+            } else {
+                __trap = 8;
+                __rval = __addy + _RV32_RAM_IMAGE_OFFSET;
+            }
+        } else {
+            __store_switchval = Operators.math("floor", __ir / 4096) % 8;
+            if (__store_switchval == 0) {
+                RAM.set(__addy + 1, __rs2 % 256);
+                Control.stopThisScript();
+            }
+            if (__store_switchval == 1) {
+                RISC_Write16(__rs2 % 65536, __addy);
+                Control.stopThisScript();
+            }
+            if (__store_switchval == 2) {
+                RISC_Write32(__rs2, __addy);
+                Control.stopThisScript();
+            }
+            __trap = 3;
+        }
+    }
+
+    metadata OPCODE_IDK_LOL pos 44431,64;
+    private void OPCODE_IDK_LOL() { // proccode OPCODE_IDK-LOL
+        __rdid = 0;
+    }
+
+    metadata OPCODE_ZICSR pos 44743,64;
+    private void OPCODE_ZICSR() { // warp
+        __csrno = Operators.math("floor", __ir / 1048576);
+        __microop = Operators.math("floor", __ir / 4096) % 8;
+        if (__microop % 4 > 0) {
+            unsign32(Operators.math("floor", __ir / 32768) % 32);
+            __rs1imm = _unsign_return;
+            __rs1 = REG.get(__rs1imm + 1);
+            __writeval = __rs1;
+            ZICSR_GET_RVAL();
+            ZICSR_GET_WRITEVAL();
+            __writeval = (0x100000000 - (0 - __writeval)) * (__writeval < 0) + __writeval * (__writeval > -1);
+            ZICSR_SET_WRITEVAL();
+            Control.stopThisScript();
+        }
+        if (__microop == 0) {
+            __rdid = 0;
+            if (__csrno == 0x105) {
+                state_mstatus = Operators.math("floor", state_mstatus / 16) * 16 + state_mstatus % 8 + 8;
+                state_extraflags = Operators.math("floor", state_mstatus / 8) * 8 + state_mstatus % 4 + 4;
+                _executeInstruction_return = 1;
+                Control.stopThisScript();
+            }
+            if (__csrno % 256 == 2) {
+                __startmstatus = state_mstatus;
+                __startextraflags = state_extraflags;
+                ___a___ = __startextraflags % 4 * 2048 + Operators.math("floor", __startmstatus / 128) % 2 * 8;
+                state_mstatus = Operators.math("floor", ___a___ / 256) * 256 + ___a___ % 128 + 128;
+                state_extraflags = Operators.math("floor", __startmstatus / 2048) % 4 + Operators.math("floor", __startextraflags / 4) % 1073741824 * 4;
+                __pc = state_mepc - 4;
+                Control.stopThisScript();
+            }
+            if (__csrno == 0) {
+                if (state_extraflags % 4 > 0) {
+                    __trap = 12;
+                    Control.stopThisScript();
+                }
+                __trap = 9;
+                Control.stopThisScript();
+            }
+            if (__csrno == 1) {
+                __trap = 4;
+                Control.stopThisScript();
+            }
+            __trap = 3;
+            Control.stopThisScript();
+        }
+        __trap = 3;
+    }
+
+    metadata ZICSR_SET_WRITEVAL pos 46134,64;
+    private void ZICSR_SET_WRITEVAL() { // warp
+        if (__csrno == 0x340) {
+            state_mscratch = __writeval;
+            Control.stopThisScript();
+        }
+        if (__csrno == 0x305) {
+            state_mtvec = __writeval;
+            Control.stopThisScript();
+        }
+        if (__csrno == 0x304) {
+            state_mie = __writeval;
+            Control.stopThisScript();
+        }
+        if (__csrno == 0x344) {
+            state_mip = __writeval;
+            Control.stopThisScript();
+        }
+        if (__csrno == 0x341) {
+            state_mepc = __writeval;
+            Control.stopThisScript();
+        }
+        if (__csrno == 0x300) {
+            state_mstatus = __writeval;
+            Control.stopThisScript();
+        }
+        if (__csrno == 0x342) {
+            state_mcause = __writeval;
+            Control.stopThisScript();
+        }
+        if (__csrno == 0x343) {
+            state_mtval = __writeval;
+            Control.stopThisScript();
+        }
+        handleOtherCSRWrite(__csrno, __writeval);
+    }
+
+    metadata ZICSR_GET_WRITEVAL pos 46598,64;
+    private void ZICSR_GET_WRITEVAL() { // warp
+        if (__microop == 1) {
+            __writeval = __rs1;
+            Control.stopThisScript();
+        }
+        if (__microop == 2) {
+            bitwise_OR(__rval, __rs1);
+            __writeval = ___a___;
+            Control.stopThisScript();
+        }
+        if (__microop == 3) {
+            bitwise_AND(__rval, 0xFFFFFFFF - __rs1);
+            __writeval = ___a___;
+            Control.stopThisScript();
+        }
+        if (__microop == 5) {
+            __writeval = __rs1imm;
+            Control.stopThisScript();
+        }
+        if (__microop == 6) {
+            bitwise_OR(__rval, __rs1imm);
+            __writeval = ___a___;
+            Control.stopThisScript();
+        }
+        if (__microop == 7) {
+            bitwise_AND(__rval, 0xFFFFFFFF - __rs1imm);
+            __writeval = ___a___;
+            Control.stopThisScript();
+        }
+        __writeval = __rval;
+    }
+
+    metadata ZICSR_GET_RVAL pos 47865,68;
+    private void ZICSR_GET_RVAL() { // warp
+        if (__csrno == 0x340) {
+            __rval = state_mscratch;
+            Control.stopThisScript();
+        }
+        if (__csrno == 0x305) {
+            __rval = state_mtvec;
+            Control.stopThisScript();
+        }
+        if (__csrno == 0x304) {
+            __rval = state_mie;
+            Control.stopThisScript();
+        }
+        if (__csrno == 0xC00) {
+            __rval = state_cyclel;
+            Control.stopThisScript();
+        }
+        if (__csrno == 0x344) {
+            __rval = state_mip;
+            Control.stopThisScript();
+        }
+        if (__csrno == 0x341) {
+            __rval = state_mepc;
+            Control.stopThisScript();
+        }
+        if (__csrno == 0x300) {
+            __rval = state_mstatus;
+            Control.stopThisScript();
+        }
+        if (__csrno == 0x342) {
+            __rval = state_mcause;
+            Control.stopThisScript();
+        }
+        if (__csrno == 0x343) {
+            __rval = state_mtval;
+            Control.stopThisScript();
+        }
+        if (__csrno == 0xf11) {
+            __rval = 0xff0ff0ff + "";
+            Control.stopThisScript();
+        }
+        if (__csrno == 0x301) {
+            __rval = 0x40401101 + "";
+            Control.stopThisScript();
+        }
+        handleOtherCSRRead(__csrno);
+    }
+
+    metadata handleControlLoad pos 38259,256;
+    private void handleControlLoad(addy) { // warp
+        if (addy == 0x10000005) {
+            _handleControlLoad_return = 0x60 + 1 * (Terminal.inputBuffer.length() > 0);
+            Control.stopThisScript();
+        }
+        if (addy == 0x10000000 && Terminal.inputBuffer.length() > 0) {
+            _handleControlLoad_return = Terminal.inputBuffer.get(1);
+            Terminal.inputBuffer.delete(1);
+            Control.stopThisScript();
+        }
+        _handleControlLoad_return = 0;
+    }
+
+    metadata OPCODE_LUI pos 35043,304;
+    private void OPCODE_LUI() { // warp
+        __rval = Operators.math("floor", __ir / 4096) % 0x100000 * 4096;
+    }
+
+    metadata bitwise_XOR pos 4542,336;
+    private void bitwise_XOR(a, b) { // proccode bitwise XOR %s %s // warp
+        ___a___ = xorLUT.get(Operators.math("floor", a / 16777216) * 256 + Operators.math("floor", b / 16777216) + 1) * 16777216 + xorLUT.get(Operators.math("floor", a / 65536) % 256 * 256 + Operators.math("floor", b / 65536) % 256 + 1) * 65536 + (xorLUT.get(Operators.math("floor", a / 256) % 256 * 256 + Operators.math("floor", b / 256) % 256 + 1) * 256 + xorLUT.get(a % 256 * 256 + b % 256 + 1));
+    }
+
+    metadata RISC_Read32 pos 11168,368;
+    private void RISC_Read32(addr) { // proccode RISC Read32 %s // warp
+        RISC_Ram_Read_return = RAM.get(addr + 4) * 16777216 + (RAM.get(addr + 3) * 65536 + (RAM.get(addr + 2) * 256 + RAM.get(addr + 1)));
+    }
+
+    metadata getTimeMicroseconds pos 13150,384;
+    private void getTimeMicroseconds() { // warp
+        _getTimeMicroseconds_return = Operators.round(Sensing.daysSince2000() * 86400000000);
+    }
+
+    metadata handleOtherCSRRead pos 39943,389;
+    private void handleOtherCSRRead(csrno) { // warp
+        if (csrno == 0x140 && Terminal.inputBuffer.length() > 0) {
+            __rval = Terminal.inputBuffer.get(1);
+            Terminal.inputBuffer.delete(1);
+            Control.stopThisScript();
+        }
+        __rval = 0;
+    }
+
+    metadata _0_Config pos 31194,496;
+    private void _0_Config() { // proccode 0.Config // warp
+        _RV32_RAM_IMAGE_OFFSET = 2147483648;
+        _RAM_AMT = 67108864;
+        dtb_ptr = 67107136;
+        instrs_per_flip = 1024 * 100;
+    }
+
+    metadata RISCV.run pos 29342,529;
+    public void RISCV.run() { // receiver at 28960,958
+        RISCV.kHz = "???";
+        INSTRUCTION_N = 0;
+        Sensing.resetTimer();
+        _getTimeMicroseconds_return = 0;
+        getTimeMicroseconds();
+        lastTime = _getTimeMicroseconds_return;
+        while (RISCV.state == 1) {
+            _0_Run_Frame();
+        }
+    }
+
+    metadata bitwise_AND_BigInteger pos 10418,544;
+    private void bitwise_AND_BigInteger(a, b) { // proccode bitwise AND BigInteger %s %s // warp
+        byteval = 1;
+        ___a___ = 0;
+        n1 = a;
+        n2 = b;
+        while (!(n1 < 1 || n2 < 1)) {
+            Divide_BigInteger(n1, 2);
+            _andbiginteger_tmp = _divide_carry;
+            _andbiginteger_tmp2 = _divide_return;
+            Divide_BigInteger(n2, 2);
+            if (_andbiginteger_tmp == 1 && _divide_carry == 1) {
+                ___a___ += byteval;
+            }
+            n1 = _andbiginteger_tmp2;
+            n2 = _divide_return;
+            Multiply_BigInteger(byteval, 2);
+            byteval = _multiply_return;
+        }
+    }
+
+    metadata handleControlStore pos 39251,576;
+    private void handleControlStore(addy, val) { // warp
+        if (addy == 0x10000000) {
+            WRITE_CHAR(val);
+        }
+    }
+
+    metadata multiply pos 19390,752;
+    private void multiply(a, b) { // warp
+        if ((a > 0x5000000 || b > 0x5000000) && (a + b >= 0x9000000 && (a > 0 && b > 0))) {
+            Multiply_BigInteger(a, b);
+            Control.stopThisScript();
+        }
+        _multiply_return = a * b;
+    }
+
+    metadata handleOtherCSRWrite pos 38259,896;
+    private void handleOtherCSRWrite(csrno, value) { // warp
+        if (csrno == 0x136) {
+            WRITE_STRING(value);
+        } elif (csrno == 0x137) {
+            WRITE_STRING(value);
+        } elif (csrno == 0x138) {
+            _CSR_ptr = value - _RV32_RAM_IMAGE_OFFSET;
+            while (_CSR_ptr < _RAM_AMT) {
+                _CSR_char = RAM.get(_CSR_ptr + 1);
+                if (_CSR_char == 0) {
+                    Control.stopThisScript();
+                }
+                WRITE_CHAR(_CSR_char);
+                _CSR_ptr += 1;
+            }
+        }
+    }
+
+    metadata OPCODE_JALR pos 39251,904;
+    private void OPCODE_JALR() { // warp
+        __rval = __pc + 4;
+        if (Operators.math("floor", __ir / 2147483648) > 0) {
+            __pc = Operators.math("floor", (REG.get(Operators.math("floor", __ir / 32768) % 32 + 1) + (Operators.math("floor", __ir / 1048576) + 0xfffff000) % 0x100000000) / 2) % 2147483648 * 2 - 4;
+        } else {
+            __pc = Operators.math("floor", (REG.get(Operators.math("floor", __ir / 32768) % 32 + 1) + Operators.math("floor", __ir / 1048576)) / 2) % 2147483648 * 2 - 4;
+        }
+    }
+
+    metadata RISC_Write16 pos 13764,1280;
+    private void RISC_Write16(value, addr) { // proccode RISC Write16 %s at %s // warp
+        RAM.set(addr + 1, value % 256);
+        RAM.set(addr + 2, Operators.math("floor", value / 256) % 256);
+    }
+
+    metadata RISC_Read16 pos 13764,1552;
+    private void RISC_Read16(addr) { // proccode RISC Read16 %s // warp
+        RISC_Ram_Read_return = RAM.get(addr + 1) + RAM.get(addr + 2) * 256;
+    }
+
+    metadata Global.prepareSave pos 26693,1552;
+    public void Global.prepareSave() { // warp // receiver at 28966,1217
+        _0_Reset();
+        _0_Reset_RAM();
+        trap_locations.clear();
+        Terminal.inputBuffer.clear();
+        RAM.clear();
+        repeat (_RAM_AMT) {
+            RAM.add(0 + 0);
+        }
+    }
+
+    metadata unsign32 pos 16842,1560;
+    private void unsign32(num) { // warp
+        _unsign_return = (0 - (0xFFFFFFFF - num + 1)) * (num > 0x7FFFFFFF) + num * (num < 0x80000000);
+    }
+
+    metadata OPCODE_RV32A pos 46598,1568;
+    private void OPCODE_RV32A() { // warp
+        __rs1 = REG.get(Operators.math("floor", __ir / 32768) % 32 + 1);
+        __rs2 = REG.get(Operators.math("floor", __ir / 1048576) % 32 + 1);
+        __irmid = Operators.math("floor", __ir / 134217728) % 32;
+        sign32(__rs1 - _RV32_RAM_IMAGE_OFFSET);
+        __rs1 = _sign_return;
+        if (__rs1 > _RAM_AMT - 4) {
+            __trap = 8;
+            __rval = __rs1 + _RV32_RAM_IMAGE_OFFSET;
+        } else {
+            RISC_Read32(__rs1);
+            __rval = RISC_Ram_Read_return;
+            __dowrite = 1;
+            __rv32a_switchval = __irmid;
+            if (__rv32a_switchval == 0b00010) {
+                __dowrite = 0;
+            } elif (__rv32a_switchval == 0b00011) {
+                __rval = 0;
+            } elif (__rv32a_switchval == 0b00001) {
+            } elif (__rv32a_switchval == 0) {
+                __rs2 = (__rs2 + __rval) % 0x100000000;
+            } elif (__rv32a_switchval == 0b00100) {
+                bitwise_XOR(__rs2, __rval);
+                __rs2 = ___a___;
+            } elif (__rv32a_switchval == 0b01100) {
+                bitwise_AND(__rs2, __rval);
+                __rs2 = ___a___;
+            } elif (__rv32a_switchval == 0b01000) {
+                bitwise_OR(__rs2, __rval);
+                __rs2 = ___a___;
+            } elif (__rv32a_switchval == 0b10000) {
+                unsign32(__rval);
+                _tmp1 = _unsign_return;
+                unsign32(__rs2);
+                __rs2 = __rs2 * (_unsign_return < _tmp1) + __rval * (_unsign_return > _tmp1 - 1);
+            } elif (__rv32a_switchval == 0b10100) {
+                unsign32(__rval);
+                _tmp1 = _unsign_return;
+                unsign32(__rs2);
+                if (_unsign_return <= _tmp1) {
+                    __rs2 = __rval;
+                }
+            } elif (__rv32a_switchval == 0b11000) {
+                if (__rs2 >= __rval) {
+                    __rs2 = __rval;
+                }
+            } elif (__rv32a_switchval == 0b11100) {
+                if (__rs2 <= __rval) {
+                    __rs2 = __rval;
+                }
+            } else {
+                __trap = 3;
+                __dowrite = 0;
+            }
+            if (__dowrite > 0) {
+                RISC_Write32(__rs2, __rs1);
+            }
+        }
+    }
+
+    metadata RISC_Write32 pos 13764,1776;
+    private void RISC_Write32(value, addr) { // proccode RISC Write32 %s at %s // warp
+        RAM.set(addr + 4, Operators.math("floor", value / 16777216));
+        RAM.set(addr + 3, Operators.math("floor", value / 65536) % 256);
+        RAM.set(addr + 2, Operators.math("floor", value / 256) % 256);
+        RAM.set(addr + 1, value % 256);
+    }
+
+    metadata OPCODE_OP pos 16842,1792;
+    private void OPCODE_OP() { // warp
+        __imm = Operators.math("floor", __ir / 1048576);
+        __imm += 0xfffff000 * (Operators.math("floor", __imm / 0x800) % 2 > 0);
+        __rs1 = REG.get(Operators.math("floor", __ir / 32768) % 32 + 1);
+        __is_reg = Operators.math("floor", __ir / 32 % 2);
+        if (__is_reg > 0) {
+            __rs2 = REG.get(__imm % 32 + 1);
+        } else {
+            __rs2 = __imm;
+        }
+        __op_switchval = Operators.math("floor", __ir / 4096) % 8;
+        if (__is_reg > 0 && Operators.math("floor", __ir / 33554432) % 2 > 0) {
+            if (__op_switchval == 0) {
+                multiply(__rs1, __rs2);
+                __rval = _multiply_return;
+                Control.stopThisScript();
+            }
+            if (__op_switchval == 1) {
+                Multiply_upper32(__rs1, __rs2);
+                __rval = _multiply_return;
+                Control.stopThisScript();
+            }
+            if (__op_switchval == 2) {
+                multiply((0 - (0xFFFFFFFF - __rs1 + 1)) * (__rs1 > 0x7FFFFFFF) + __rs1 * (__rs1 < 0x80000000), __rs2);
+                __rval = Operators.math("floor", _multiply_return / 4294967296);
+                Control.stopThisScript();
+            }
+            if (__op_switchval == 3) {
+                multiply(__rs1, __rs2);
+                __rval = Operators.math("floor", _multiply_return / 4294967296);
+                Control.stopThisScript();
+            }
+            if (__op_switchval == 4) {
+                if (__rs2 == 0) {
+                    __rval = 4294967295;
+                    Control.stopThisScript();
+                }
+                if (__rs1 > 0x7FFFFFFF) {
+                    if (__rs2 > 0x7FFFFFFF) {
+                        __rval = (0 - (0xFFFFFFFF - __rs1 + 1)) / (0 - (0xFFFFFFFF - __rs2 + 1));
+                        Control.stopThisScript();
+                    }
+                    __rval = Operators.math("floor", (0 - (0xFFFFFFFF - __rs1 + 1)) / __rs2);
+                    Control.stopThisScript();
+                }
+                if (__rs2 > 0x7FFFFFFF) {
+                    __rval = Operators.math("floor", __rs1 / (0 - (0xFFFFFFFF - __rs2 + 1)));
+                    Control.stopThisScript();
+                }
+                __rval = Operators.math("floor", __rs1 / __rs2);
+                Control.stopThisScript();
+            }
+            if (__op_switchval == 5) {
+                if (__rs2 == 0) {
+                    __rval = 0xffffffff;
+                    Control.stopThisScript();
+                }
+                __rval = Operators.math("floor", __rs1 / __rs2);
+                Control.stopThisScript();
+            }
+            if (__op_switchval == 6) {
+                if (__rs2 == 0) {
+                    __rval = __rs1;
+                    Control.stopThisScript();
+                }
+                if (__rs1 > 0x7FFFFFFF) {
+                    if (__rs2 > 0x7FFFFFFF) {
+                        __rval = (0 - (0xFFFFFFFF - __rs1 + 1)) % (0 - (0xFFFFFFFF - __rs2 + 1));
+                        Control.stopThisScript();
+                    }
+                    __rval = (0 - (0xFFFFFFFF - __rs1 + 1)) % __rs2;
+                    Control.stopThisScript();
+                }
+                if (__rs2 > 0x7FFFFFFF) {
+                    __rval = __rs1 % (0 - (0xFFFFFFFF - __rs2 + 1));
+                    Control.stopThisScript();
+                }
+                __rval = __rs1 % __rs2;
+                Control.stopThisScript();
+            }
+            if (__op_switchval == 7) {
+                if (__rs2 == 0) {
+                    __rval = __rs1;
+                    Control.stopThisScript();
+                }
+                __rval = __rs1 % __rs2;
+            }
+        } else {
+            if (__op_switchval == 0) {
+                if (__is_reg > 0 && Operators.math("floor", __ir / 1073741824) % 2 > " 0") {
+                    if (__rs1 - __rs2 < 0) {
+                        __rval = 0x100000000 - (0 - (__rs1 - __rs2));
+                        Control.stopThisScript();
+                    }
+                    __rval = __rs1 - __rs2;
+                    Control.stopThisScript();
+                }
+                __rval = __rs1 + __rs2;
+                Control.stopThisScript();
+            }
+            if (__op_switchval == 1) {
+                __rval = __rs1 * powers.get(__rs2 % 32 + 1);
+                Control.stopThisScript();
+            }
+            if (__op_switchval == 2) {
+                if (__rs1 > 0x7FFFFFFF) {
+                    if (__rs2 > 0x7FFFFFFF) {
+                        __rval = 1 * (0 - (0xFFFFFFFF - __rs1 + 1) < 0 - (0xFFFFFFFF - __rs2 + 1));
+                        Control.stopThisScript();
+                    }
+                    __rval = 1 * (0 - (0xFFFFFFFF - __rs1 + 1) < __rs2);
+                    Control.stopThisScript();
+                }
+                if (__rs2 > 0x7FFFFFFF) {
+                    __rval = 1 * (__rs1 < 0 - (0xFFFFFFFF - __rs2 + 1));
+                    Control.stopThisScript();
+                }
+                __rval = 1 * (__rs1 < __rs2);
+                Control.stopThisScript();
+            }
+            if (__op_switchval == 3) {
+                __rval = 1 * (__rs1 < __rs2);
+                Control.stopThisScript();
+            }
+            if (__op_switchval == 4) {
+                bitwise_XOR(__rs1, __rs2);
+                __rval = ___a___;
+                Control.stopThisScript();
+            }
+            if (__op_switchval == 5) {
+                if (Operators.math("floor", __ir / 0x40000000) % 2 > 0) {
+                    if (__rs1 > 0x7FFFFFFF) {
+                        __rval = 0x100000000 - (0 - Operators.math("floor", (0 - (0xFFFFFFFF - __rs1 + 1)) / powers.get(__rs2 % 32 + 1)));
+                        Control.stopThisScript();
+                    }
+                    __rval = Operators.math("floor", __rs1 / powers.get(__rs2 % 32 + 1));
+                    Control.stopThisScript();
+                }
+                __rval = Operators.math("floor", __rs1 / powers.get(__rs2 % 32 + 1));
+                Control.stopThisScript();
+            }
+            if (__op_switchval == 6) {
+                bitwise_OR(__rs1, __rs2);
+                __rval = ___a___;
+                Control.stopThisScript();
+            }
+            if (__op_switchval == 7) {
+                bitwise_AND(__rs1, __rs2);
+                __rval = ___a___;
+            }
+        }
+    }
+
+    metadata Bitwise_Operator_Speedtest pos 26693,2016;
+    private void Bitwise_Operator_Speedtest() { // proccode Bitwise Operator Speedtest // warp
+        Global.prepareSave();
+        Sensing.resetTimer();
+        repeat (1000000) {
+            bitwise_AND(Operators.random(0, 0xFFFFFFFF), Operators.random(0, 0xFFFFFFFF));
+        }
+        log(join("1000000 bitwise ANDs in ", join(Sensing.timer(), "s")));
+        Sensing.resetTimer();
+        repeat (1000000) {
+            bitwise_OR(Operators.random(0, 0xFFFFFFFF), Operators.random(0, 0xFFFFFFFF));
+        }
+        log(join("1000000 bitwise ORs in ", join(Sensing.timer(), "s")));
+        Sensing.resetTimer();
+        repeat (1000000) {
+            bitwise_XOR(Operators.random(0, 0xFFFFFFFF), Operators.random(0, 0xFFFFFFFF));
+        }
+        log(join("1000000 bitwise XORs in ", join(Sensing.timer(), "s")));
+    }
+
+    metadata BIgInteger_Speedtest pos 26693,2928;
+    private void BIgInteger_Speedtest() { // proccode BIgInteger Speedtest // warp
+        Global.prepareSave();
+        Sensing.resetTimer();
+        repeat (1000000) {
+            Multiply_BigInteger(Operators.random(0, 0xFFFFFFFF), Operators.random(0, 0xFFFFFFFF));
+        }
+        log(join("1000000 BigInteger MULs in ", join(Sensing.timer(), "s")));
+    }
+
+    loose { // at 11168,64
+        // sensing_resettimer
+                Sensing.resetTimer();
+                repeat (1000) {
+                    Unicode_of("K");
+                }
+                log(Sensing.timer());
+    }
+
+    loose { // at 13150,64
+        // control_if
+                if (block("argument_reporter_boolean", "VALUE", "is compiled?")) {
+                    _getTimeMicroseconds_return = Sensing.timer() * 10000;
+                    Control.stopThisScript();
+                }
+                _getTimeMicroseconds_return = Sensing.timer() * 10000;
+    }
+
+    loose { // at 27897,64
+        // procedures_call
+                BIgInteger_Speedtest();
+    }
+
+    loose { // at 21085,68
+        menu("argument_reporter_string_number", "VALUE", "elapsedUs");
+    }
+
+    loose { // at 21193,68
+        menu("argument_reporter_string_number", "VALUE", "count");
+    }
+
+    loose { // at 39251,208
+        // control_if
+                if (__rdid > 0) {
+                    REG.set(__rdid + 1, block("argument_reporter_string_number", "VALUE", "value"));
+                }
+    }
+
+    loose { // at 40147,366
+        menu("argument_reporter_string_number", "VALUE", "val");
+    }
+}
+
+Terminal: name="Terminal", x=-481, y=-313, size=200, direction=90, show=0, costume=1, volume=100, layer=2, rotation="all", draggable=0;
+class Terminal {
+    import "assets/4b7a854341abd530a6780bfb6a68627c.svg" as "2x2 svg"; // costume centerx=1 centery=1 res=1
+    import "assets/e7548d19bd66370776cc24cc625e8217.png" as cursor; // costume centerx=-8 centery=-8 res=2
+    import "assets/19adfcc5dc405c3e48bc3443d6a85412.png" as clear; // costume centerx=-8 centery=-8 res=2
+    import "assets/5b73fac1a49ddbb02f856148f44e410e.wav" as beep; // sound rate=44100 samples=8554
+    private width = 118;
+    private height = 43;
+    private cursorY = 42;
+    private cursorX = 0;
+    private x = 118;
+    private y = 43;
+    private temp = 0;
+    private _0 = 34;
+    private _3 = 10;
+    private _1 = 0;
+    private _2 = "0x6";
+    private _4 = "0x6";
+    private is_escape_sequence__ = 0;
+    private current_foreground_color = "#FFFFFF";
+    private is_escape_sequence___2 = 0;
+    private current_color = 0;
+    private _loopIndex = 60;
+    private blinkOffset = 3.491;
+    private current_weight = 1;
+    private current_blinking = 1;
+    private lastCursorX = 0;
+    private lastCursorY = 42;
+    private lastCursorState = 1;
+    import "assets/lists/buffer_glyphs.jsa" as buffer_glyphs;
+    import "assets/lists/font.jsa" as font;
+    private escape_args_ = [];
+    import "assets/lists/buffer_foregroundColor.jsa" as buffer_foregroundColor;
+    private escape_args__2 = [];
+    private colors = ["#FFFFFF", "#FFFFFF", "#00FF00", "#FFFFFF", "#FFFFFF", "#FFFFFF", "#FFFFFF", "#FFFFFF"];
+    import "assets/lists/buffer_weight.jsa" as buffer_weight;
+    private colors_bright = ["#FFFFFF", "#FFFFFF", "#FFFFFF", "#FFFFFF", "#FFFFFF", "#FFFFFF", "#FFFFFF", "#FFFFFF"];
+    private colors_2 = ["#FFFFFF", "#FFFFFF", "#00FF00", "#FFFFFF", "#FFFFFF", "#FFFFFF", "#FFFFFF", "#FFFFFF"];
+
+    metadata _0_Run_Frame pos 2320,-1353;
+    private void _0_Run_Frame() { // proccode 0.Run Frame // warp
+        for (_loopIndex=1, _loopIndex<=Terminal.outputBuffer.length(), _loopIndex++) {
+            processCharacter(Terminal.outputBuffer.get(_loopIndex));
+        }
+        if (!(lastCursorX == cursorX && lastCursorY == cursorY)) {
+            if (lastCursorState == 1) {
+                redraw(lastCursorX, lastCursorY);
+            }
+            temp = 1;
+        } else {
+            temp = 0;
+        }
+        if (current_blinking == 0 || Sensing.timer() - blinkOffset > 0 && (Sensing.timer() - blinkOffset) % 2 > 1) {
+            if (lastCursorState == 1 && temp == 0) {
+                redraw(cursorX, cursorY);
+            }
+            lastCursorState = 0;
+        } else {
+            if (lastCursorState == 0 || temp == 1 || Terminal.outputBuffer != 0) {
+                Looks.switchCostume("cursor");
+                Motion.setXY(cursorX * 8 - Global.stageWidth / 2, Global.stageHeight / 2 - cursorY * 16);
+                Pen.stamp();
+                Pen.setPenColor("#000000");
+                drawChar(buffer_glyphs.get(cursorX * height + cursorY + 1), cursorX, cursorY, buffer_weight.get(cursorX * height + cursorY + 1));
+            }
+            lastCursorState = 1;
+        }
+        lastCursorX = cursorX;
+        lastCursorY = cursorY;
+        Terminal.outputBuffer.clear();
+    }
+
+    metadata redraw pos 812,-1139;
+    private void redraw(x, y) { // warp
+        drawClear(x, y);
+        Pen.setPenColor(buffer_foregroundColor.get(x * height + y + 1));
+        drawChar(buffer_glyphs.get(x * height + y + 1), x, y, buffer_weight.get(x * height + y + 1));
+    }
+
+    metadata scrollDown pos 7831,-255;
+    private void scrollDown(n) { // warp
+        y = height;
+        repeat (height - n) {
+            x = 0;
+            repeat (width) {
+                buffer_glyphs.set(x * height + y, buffer_glyphs.get(x * height + y - 1));
+                buffer_foregroundColor.set(x * height + y, buffer_foregroundColor.get(x * height + y - 1));
+                buffer_weight.set(x * height + y, buffer_weight.get(x * height + y - 1));
+                x += 1;
+            }
+            y -= 1;
+        }
+        y = 1;
+        repeat (n) {
+            x = 0;
+            repeat (width) {
+                buffer_glyphs.set(x * height + y, "");
+                buffer_foregroundColor.set(x * height + y, "");
+                buffer_weight.set(x * height + y, "");
+                x += 1;
+            }
+            y += 1;
+        }
+        redraw_buffer();
+        lastCursorY += n;
+    }
+
+    metadata RISCV.powerOn pos 1233,-146;
+    public void RISCV.powerOn() { // warp // receiver at 1203,1247
+        reset_attributes();
+        cursorX = 0;
+        cursorY = 0;
+        lastCursorX = 0;
+        lastCursorY = 0;
+        lastCursorState = 0;
+        Clear_all();
+    }
+
+    metadata Handle_escape_char pos 4386,4;
+    private void Handle_escape_char(char) { // proccode Handle escape char %s // warp
+        if (escape_args_.length() == 0) {
+            if (char == 91) {
+                escape_args_.add("");
+                Control.stopThisScript();
+            }
+            is_escape_sequence__ = 0;
+            Control.stopThisScript();
+        }
+        if (char > 47 && char < 58) {
+            escape_args_.set(escape_args_.length(), join(escape_args_.get(escape_args_.length()), char - 48));
+            Control.stopThisScript();
+        }
+        if (char == 59) {
+            escape_args_.add("");
+            Control.stopThisScript();
+        }
+        if (char > 64 && char < 126) {
+            is_escape_sequence__ = 0;
+            if (char == 109) {
+                repeat (escape_args_.length()) {
+                    Handle_SGR_Parameter(escape_args_.get(1));
+                    escape_args_.delete(1);
+                }
+                Control.stopThisScript();
+            }
+            if (char == 65) {
+                if (escape_args_.get(1) == "") {
+                    cursorY -= 1;
+                } else {
+                    cursorY += 0 - escape_args_.get(1);
+                }
+                Check_cursor_bounds();
+                Control.stopThisScript();
+            }
+            if (char == 66) {
+                if (escape_args_.get(1) == "") {
+                    cursorY += 1;
+                } else {
+                    cursorY += escape_args_.get(1);
+                }
+                Check_cursor_bounds();
+                Control.stopThisScript();
+            }
+            if (char == 67) {
+                if (escape_args_.get(1) == "") {
+                    cursorX += 1;
+                } else {
+                    cursorX += escape_args_.get(1);
+                }
+                Check_cursor_bounds();
+                Control.stopThisScript();
+            }
+            if (char == 68) {
+                if (escape_args_.get(1) == "") {
+                    cursorX -= 1;
+                } else {
+                    cursorX += 0 - escape_args_.get(1);
+                }
+                Check_cursor_bounds();
+                Control.stopThisScript();
+            }
+            if (char == 69) {
+                cursorX = 0;
+                if (escape_args_.get(1) == "") {
+                    cursorY += 1;
+                } else {
+                    cursorY += escape_args_.get(1);
+                }
+                Check_cursor_bounds();
+                Control.stopThisScript();
+            }
+            if (char == 70) {
+                cursorX = 0;
+                if (escape_args_.get(1) == "") {
+                    cursorY -= 1;
+                } else {
+                    cursorY += "" - escape_args_.get(1);
+                }
+                Check_cursor_bounds();
+                Control.stopThisScript();
+            }
+            if (char == 71) {
+                if (escape_args_.get(1) == "") {
+                    cursorX = 0;
+                } else {
+                    cursorX = 1 - escape_args_.get(1);
+                }
+                Check_cursor_bounds();
+                Control.stopThisScript();
+            }
+            if (char == 72 || char == 102) {
+                if (escape_args_.get(1) == "") {
+                    cursorY = 0;
+                } else {
+                    cursorY = 1 - escape_args_.get(1);
+                }
+                if (escape_args_.get(2) == "") {
+                    cursorX = 0;
+                } else {
+                    cursorX = 1 - escape_args_.get(2);
+                }
+                Check_cursor_bounds();
+                Control.stopThisScript();
+            }
+            if (char == 74) {
+                if (escape_args_.get(1) == 0 || escape_args_.get(1) == "") {
+                    x = cursorX;
+                    y = cursorY;
+                    repeat (height - cursorY) {
+                        repeat (width - cursorX) {
+                            Clear(x, y);
+                            x += 1;
+                        }
+                        x = 0;
+                        y += 1;
+                        Control.stopThisScript();
+                    }
+                }
+                if (escape_args_.get(1) == 1) {
+                    y = 0;
+                    repeat (cursorY - 1) {
+                        x = 0;
+                        repeat (width - cursorX) {
+                            Clear(x, y);
+                            x += 1;
+                        }
+                        y += 1;
+                    }
+                    x = 0;
+                    repeat (cursorX) {
+                        Clear(x, cursorY);
+                        x += 1;
+                    }
+                    Control.stopThisScript();
+                }
+                if (escape_args_.get(1) == 2 || escape_args_.get(1) == 3) {
+                    Clear_all();
+                    Control.stopThisScript();
+                }
+                Control.stopThisScript();
+            }
+            if (char == 83) {
+                if (escape_args_.get(1) == "") {
+                    scrollUp(1);
+                } else {
+                    scrollUp(escape_args_.get(1));
+                }
+                Control.stopThisScript();
+            }
+            if (char == 84) {
+                if (escape_args_.get(1) == "") {
+                    scrollDown(1);
+                } else {
+                    scrollDown(escape_args_.get(1));
+                }
+                Control.stopThisScript();
+            }
+        }
+        if (escape_args_.get(1) == 6 && char == 110) {
+            Terminal.outputBuffer.add(27);
+            Terminal.outputBuffer.add(91);
+            outputNumber(cursorY + 1);
+            Terminal.outputBuffer.add(59);
+            outputNumber(cursorX + 1);
+            Terminal.outputBuffer.add(82);
+            Control.stopThisScript();
+        }
+    }
+
+    metadata Terminal.run pos 1797,55;
+    public void Terminal.run() { // hook: broadcast Terminal.run
+        Looks.size = 200;
+        width = Operators.math("floor", Global.stageWidth / 8) - 2;
+        height = Operators.math("floor", Global.stageHeight / 16) - 1;
+        redraw_buffer();
+        while (1) {
+            _0_Run_Frame();
+            Control.wait(0);
+        }
+    }
+
+    metadata Global.detectScreenSize pos 48,64;
+    public void Global.detectScreenSize() { // warp // receiver at 756,64
+        Looks.switchCostume("2x2 svg");
+        Looks.size = 100;
+        Motion.setXY(1 / 0, 1 / 0);
+        if (Motion.x == "Infinity" && Motion.y == "Infinity") {
+            Motion.setXY(0, 0);
+            while (!(Sensing.touching("_edge_"))) {
+                Motion.x += 1;
+            }
+            Global.stageWidth = Motion.x * 2;
+            Motion.x = 0;
+            while (!(Sensing.touching("_edge_"))) {
+                Motion.y += 1;
+            }
+        } else {
+            Global.stageWidth = Motion.x * 2;
+        }
+        Global.stageHeight = Motion.y * 2;
+    }
+
+    metadata redraw_buffer pos 5673,64;
+    private void redraw_buffer() { // proccode redraw buffer // warp
+        Pen.eraseAll();
+        y = 0;
+        repeat (height) {
+            x = 0;
+            repeat (width) {
+                temp = x * height + y + 1;
+                if (buffer_glyphs.get(temp) != "") {
+                    Pen.setPenColor(buffer_foregroundColor.get(temp));
+                    if (buffer_glyphs.get(temp) > 31) {
+                        drawChar(buffer_glyphs.get(temp), x, y, buffer_weight.get(temp));
+                    }
+                }
+                x += 1;
+            }
+            y += 1;
+        }
+    }
+
+    metadata scrollUp pos 6631,64;
+    private void scrollUp(n) { // warp
+        y = 1;
+        repeat (height - n) {
+            x = 0;
+            repeat (width) {
+                buffer_glyphs.set(x * height + y, buffer_glyphs.get(x * height + y + 1));
+                buffer_foregroundColor.set(x * height + y, buffer_foregroundColor.get(x * height + y + 1));
+                buffer_weight.set(x * height + y, buffer_weight.get(x * height + y + 1));
+                x += 1;
+            }
+            y += 1;
+        }
+        y = height - n + 1;
+        repeat (n) {
+            x = 0;
+            repeat (width) {
+                buffer_glyphs.set(x * height + y, "");
+                buffer_foregroundColor.set(x * height + y, "");
+                buffer_weight.set(x * height + y, "");
+                x += 1;
+            }
+            y += 1;
+        }
+        redraw_buffer();
+        lastCursorY += "" - n;
+    }
+
+    metadata greenFlag pos 748,223;
+    public void greenFlag() {
+        Looks.hide();
+    }
+
+    metadata Clear_all pos 1244,326;
+    private void Clear_all() { // proccode Clear all // warp
+        Pen.eraseAll();
+        buffer_glyphs.clear();
+        buffer_foregroundColor.clear();
+        buffer_weight.clear();
+        repeat (width * height) {
+            buffer_glyphs.add("");
+            buffer_foregroundColor.add(0xFFFFFFFF);
+            buffer_weight.add(1);
+        }
+        Terminal.inputBuffer.clear();
+        Terminal.outputBuffer.clear();
+    }
+
+    metadata drawChar pos 1977,826;
+    private void drawChar(C, X, Y, S) { // warp
+        if (C > 31) {
+            drawGlyph(font.get(C + 1), (X + 0.5) * 8 - Global.stageWidth / 2, Global.stageHeight - (Y + 1.5) * 16 - Global.stageHeight / 2, S);
+        }
+    }
+
+    metadata Terminal.reset pos 1514,1022;
+    public void Terminal.reset() { // hook: broadcast Terminal.reset
+        RISCV.powerOn();
+    }
+
+    metadata Global.prepareSave pos 1205,1082;
+    public void Global.prepareSave() { // hook: broadcast Global.prepareSave
+        RISCV.powerOn();
+    }
+
+    metadata Check_cursor_bounds pos 5673,1085;
+    private void Check_cursor_bounds() { // proccode Check cursor bounds // warp
+        if (cursorX > width - 1) {
+            cursorX = width - 1;
+        } elif (cursorX < 0) {
+            cursorX = 0;
+        }
+        if (cursorY > height - 1) {
+            cursorY = height - 1;
+        } elif (cursorY < 0) {
+            cursorY = 0;
+        }
+    }
+
+    metadata Clear pos 7457,1173;
+    private void Clear(x, y) { // warp
+        buffer_glyphs.set(x * height + y + 1, "");
+        buffer_foregroundColor.set(x * height + y + 1, "");
+        buffer_weight.set(x * height + y + 1, "");
+        drawClear(x, y);
+    }
+
+    metadata drawGlyph pos 1857,1179;
+    private void drawGlyph(D, X, Y, W) { // proccode drawGlyph %s @ %s %s W %s // warp
+        _0 = 1;
+        _3 = 0;
+        _1 = Operators.letterOf(1, D);
+        Motion.setXY(X, Y);
+        Pen.setPenSize(W);
+        repeat (Operators.length(D) - 1) {
+            if (_1 == 1) {
+                Pen.penDown();
+            } else {
+                Pen.penUp();
+            }
+            _0 += 1;
+            _2 = join("0x", Operators.letterOf(_0, D));
+            if (_2 > 0) {
+                _1 = 1 - _1;
+            } else {
+                _2 = 15;
+            }
+            _3 += _2;
+            if (_3 > 15) {
+                while (_3 > 15) {
+                    Motion.y = 15 + Y;
+                    Pen.setPenColorParamTo("transparency", 100);
+                    Motion.x += 1;
+                    Motion.y = Y;
+                    Pen.setPenColorParamTo("transparency", 0);
+                    _3 -= 16;
+                }
+                _4 = _3;
+            } else {
+                _4 = _2;
+            }
+            Motion.y += _4 - 1;
+            Pen.setPenColorParamTo("transparency", 100);
+            Motion.y += 1;
+            Pen.setPenColorParamTo("transparency", 0);
+        }
+        Pen.penUp();
+    }
+
+    metadata reset_attributes pos 2943,1219;
+    private void reset_attributes() { // proccode reset attributes // warp
+        current_foreground_color = colors.get(8);
+        current_weight = 1;
+        current_blinking = 1;
+    }
+
+    metadata drawClear pos 7464,1764;
+    private void drawClear(x, y) { // warp
+        Looks.switchCostume("clear");
+        Motion.setXY(x * 8 - Global.stageWidth / 2, Global.stageHeight / 2 - y * 16);
+        Pen.stamp();
+    }
+
+    metadata processCharacter pos 3290,1773;
+    private void processCharacter(char) { // warp
+        blinkOffset = Sensing.timer();
+        if (is_escape_sequence__ > 0) {
+            Handle_escape_char(char);
+            Control.stopThisScript();
+        }
+        if (char > 31) {
+            if (buffer_glyphs.get(cursorX * height + cursorY + 1) != "") {
+                Clear(cursorX, cursorY);
+            }
+            Pen.setPenColor(current_foreground_color);
+            drawChar(char, cursorX, cursorY, current_weight);
+            buffer_glyphs.set(cursorX * height + cursorY + 1, char);
+            buffer_foregroundColor.set(cursorX * height + cursorY + 1, current_foreground_color);
+            buffer_weight.set(cursorX * height + cursorY + 1, current_weight);
+            cursorX += 1;
+            if (cursorX > width - 1) {
+                cursorX = 0;
+                cursorY += 1;
+                if (cursorY > height - 1) {
+                    scrollUp(1);
+                    cursorY = height - 1;
+                }
+            }
+        } else {
+            if (char == 8) {
+                cursorX -= 1;
+                Check_cursor_bounds();
+                Control.stopThisScript();
+            }
+            if (char == 10) {
+                cursorY += 1;
+                if (cursorY > height - 1) {
+                    scrollUp(1);
+                    cursorY = height - 1;
+                }
+                Control.stopThisScript();
+            }
+            if (char == 13) {
+                cursorX = 0;
+                Control.stopThisScript();
+            }
+            if (char == 27) {
+                is_escape_sequence__ = 1;
+                escape_args_.clear();
+                Control.stopThisScript();
+            }
+            if (char == 7) {
+                Sound.playSound("beep");
+                Control.stopThisScript();
+            }
+        }
+    }
+
+    metadata Handle_SGR_Parameter pos 5667,1993;
+    private void Handle_SGR_Parameter(param) { // proccode Handle SGR Parameter %s // warp
+        if (param == 0 || param == "") {
+            reset_attributes();
+            Control.stopThisScript();
+        }
+        if (param == 1) {
+            current_weight = 2;
+            Control.stopThisScript();
+        }
+        if (param == 5) {
+            current_blinking = 1;
+            Control.stopThisScript();
+        }
+        if (param == 22) {
+            current_weight = 1;
+            Control.stopThisScript();
+        }
+        if (param == 25) {
+            current_blinking = 0;
+            Control.stopThisScript();
+        }
+        if (param > 29 && param < 38) {
+            current_foreground_color = colors.get(param - 29);
+            Control.stopThisScript();
+        }
+        if (param == 39) {
+            current_foreground_color = colors.get(8);
+            Control.stopThisScript();
+        }
+        if (param > 89 && param < 98) {
+            current_foreground_color = colors_bright.get(param - 89);
+            Control.stopThisScript();
+        }
+    }
+
+    metadata outputNumber pos 5072,7762;
+    private void outputNumber(n) { // warp
+        for (temp=1, temp<=Operators.length(n), temp++) {
+            Terminal.outputBuffer.add(Operators.letterOf(n, temp) + 48);
+        }
+    }
+}
+
+Input: name="Input", x=36, y=28, size=100, direction=90, show=1, costume=0, volume=100, layer=4, rotation="all", draggable=0;
+class Input {
+    import "assets/3339a2953a3bf62bb80e54ff575dbced.svg" as ""; // costume centerx=0 centery=0 res=1
+    private i = 1;
+
+    metadata Key_Event pos -203,-397;
+    private void Key_Event(ASCII) { // proccode Key Event %s // warp
+        Terminal.inputBuffer.add(ASCII + 0);
+    }
+
+    metadata Events.keyPressed pos 491,-368;
+    public void Events.keyPressed(k) { // hook: when [a] key pressed
+        Key_Event(0x61);
+    }
+
+    metadata Events.keyPressed pos 730,-359;
+    public void Events.keyPressed(k) { // hook: when [b] key pressed
+        Key_Event(0x62);
+    }
+
+    metadata Events.keyPressed pos 1103,-349;
+    public void Events.keyPressed(k) { // hook: when [space] key pressed
+        Key_Event(0x20);
+    }
+
+    metadata Events.keyPressed pos 1770,-334;
+    public void Events.keyPressed(k) { // hook: when [!] key pressed
+        Key_Event(0x21);
+    }
+
+    metadata Events.keyPressed pos 2015,-328;
+    public void Events.keyPressed(k) { // hook: when [:] key pressed
+        Key_Event(0x3A);
+    }
+
+    metadata Events.keyPressed pos 1445,-320;
+    public void Events.keyPressed(k) { // hook: when [0] key pressed
+        Key_Event(0x30);
+    }
+
+    metadata Events.keyPressed pos 2259,-320;
+    public void Events.keyPressed(k) { // hook: when ["["] key pressed
+        Key_Event(0x5B);
+    }
+
+    metadata Events.keyPressed pos 2491,-310;
+    public void Events.keyPressed(k) { // hook: when [{] key pressed
+        Key_Event(0x7B);
+    }
+
+    metadata Events.keyPressed pos 2781,-309;
+    public void Events.keyPressed(k) { // hook: when [up arrow] key pressed
+        Escaped_Key_Event(0x41, "");
+    }
+
+    metadata Events.keyPressed pos 488,-220;
+    public void Events.keyPressed(k) { // hook: when [c] key pressed
+        Key_Event(0x63);
+    }
+
+    metadata Escaped_Key_Event pos -204,-217;
+    private void Escaped_Key_Event(terminator, argument) { // proccode Escaped Key Event %s %s // warp
+        Terminal.inputBuffer.add(27);
+        Terminal.inputBuffer.add(91);
+        for (i=1, i<=Operators.length(argument), i++) {
+            Terminal.inputBuffer.add(Operators.letterOf(i, argument) + 48);
+        }
+        Terminal.inputBuffer.add(terminator);
+    }
+
+    metadata Events.keyPressed pos 731,-202;
+    public void Events.keyPressed(k) { // hook: when [d] key pressed
+        Key_Event(0x64);
+    }
+
+    metadata Events.keyPressed pos 1101,-178;
+    public void Events.keyPressed(k) { // hook: when [enter] key pressed
+        Key_Event(0x0A);
+    }
+
+    metadata Events.keyPressed pos 1764,-176;
+    public void Events.keyPressed(k) { // hook: when ["\""] key pressed
+        Key_Event(0x22);
+    }
+
+    metadata Events.keyPressed pos 2513,-168;
+    public void Events.keyPressed(k) { // hook: when [|] key pressed
+        Key_Event(0x7C);
+    }
+
+    metadata Events.keyPressed pos 1448,-159;
+    public void Events.keyPressed(k) { // hook: when [1] key pressed
+        Key_Event(0x31);
+    }
+
+    metadata Events.keyPressed pos 2022,-158;
+    public void Events.keyPressed(k) { // hook: when [;] key pressed
+        Key_Event(0x3B);
+    }
+
+    metadata Events.keyPressed pos 2257,-158;
+    public void Events.keyPressed(k) { // hook: when [\] key pressed
+        Key_Event(0x5C);
+    }
+
+    metadata Events.keyPressed pos 2771,-144;
+    public void Events.keyPressed(k) { // hook: when [down arrow] key pressed
+        Escaped_Key_Event(0x42, "");
+    }
+
+    metadata Events.keyPressed pos 453,-94;
+    public void Events.keyPressed(k) { // hook: when [e] key pressed
+        Key_Event(0x65);
+    }
+
+    metadata Events.keyPressed pos 657,-35;
+    public void Events.keyPressed(k) { // hook: when [f] key pressed
+        Key_Event(0x66);
+    }
+
+    metadata Events.keyPressed pos 2501,-22;
+    public void Events.keyPressed(k) { // hook: when [}] key pressed
+        Key_Event(0x7D);
+    }
+
+    metadata Events.keyPressed pos 1762,-9;
+    public void Events.keyPressed(k) { // hook: when [#] key pressed
+        Key_Event(0x23);
+    }
+
+    metadata Events.keyPressed pos 2259,-7;
+    public void Events.keyPressed(k) { // hook: when ["]"] key pressed
+        Key_Event(0x5D);
+    }
+
+    metadata Events.keyPressed pos 2029,-3;
+    public void Events.keyPressed(k) { // hook: when [<] key pressed
+        Key_Event(0x3C);
+    }
+
+    metadata Events.keyPressed pos 1443,5;
+    public void Events.keyPressed(k) { // hook: when [2] key pressed
+        Key_Event(0x32);
+    }
+
+    metadata Events.keyPressed pos 2778,10;
+    public void Events.keyPressed(k) { // hook: when [right arrow] key pressed
+        Escaped_Key_Event(0x43, "");
+    }
+
+    metadata Events.keyPressed pos 1108,18;
+    public void Events.keyPressed(k) { // hook: when [backspace] key pressed
+        Key_Event(0x7F);
+    }
+
+    metadata Events.keyPressed pos 453,101;
+    public void Events.keyPressed(k) { // hook: when [g] key pressed
+        Key_Event(0x67);
+    }
+
+    metadata Events.keyPressed pos 2027,142;
+    public void Events.keyPressed(k) { // hook: when [=] key pressed
+        Key_Event(0x3D);
+    }
+
+    metadata Events.keyPressed pos 2504,143;
+    public void Events.keyPressed(k) { // hook: when [~] key pressed
+        Key_Event(0x7E);
+    }
+
+    metadata Events.keyPressed pos 2262,145;
+    public void Events.keyPressed(k) { // hook: when [^] key pressed
+        Key_Event(0x5E);
+    }
+
+    metadata Events.keyPressed pos 746,154;
+    public void Events.keyPressed(k) { // hook: when [h] key pressed
+        Key_Event(0x68);
+    }
+
+    metadata Events.keyPressed pos 1760,154;
+    public void Events.keyPressed(k) { // hook: when [$] key pressed
+        Key_Event(0x24);
+    }
+
+    metadata Events.keyPressed pos 2778,158;
+    public void Events.keyPressed(k) { // hook: when [left arrow] key pressed
+        Escaped_Key_Event(0x44, "");
+    }
+
+    metadata Events.keyPressed pos 1442,171;
+    public void Events.keyPressed(k) { // hook: when [3] key pressed
+        Key_Event(0x33);
+    }
+
+    metadata Events.keyPressed pos 473,274;
+    public void Events.keyPressed(k) { // hook: when [i] key pressed
+        Key_Event(0x69);
+    }
+
+    metadata Events.keyPressed pos 2026,300;
+    public void Events.keyPressed(k) { // hook: when [>] key pressed
+        Key_Event(0x3E);
+    }
+
+    metadata Events.keyPressed pos 2269,300;
+    public void Events.keyPressed(k) { // hook: when [_] key pressed
+        Key_Event(0x5F);
+    }
+
+    metadata Events.keyPressed pos 1762,306;
+    public void Events.keyPressed(k) { // hook: when [%] key pressed
+        Key_Event(0x25);
+    }
+
+    metadata Events.keyPressed pos 2783,321;
+    public void Events.keyPressed(k) { // hook: when [delete] key pressed
+        Escaped_Key_Event(0x7E, 3);
+    }
+
+    metadata Events.keyPressed pos 1437,335;
+    public void Events.keyPressed(k) { // hook: when [4] key pressed
+        Key_Event(0x34);
+    }
+
+    metadata Events.keyPressed pos 762,338;
+    public void Events.keyPressed(k) { // hook: when [j] key pressed
+        Key_Event(0x6A);
+    }
+
+    metadata Events.keyPressed pos 470,452;
+    public void Events.keyPressed(k) { // hook: when [k] key pressed
+        Key_Event(0x6B);
+    }
+
+    metadata Events.keyPressed pos 2031,452;
+    public void Events.keyPressed(k) { // hook: when [?] key pressed
+        Key_Event(0x3F);
+    }
+
+    metadata Events.keyPressed pos 2268,455;
+    public void Events.keyPressed(k) { // hook: when [`] key pressed
+        Key_Event(0x60);
+    }
+
+    metadata Events.keyPressed pos 1770,462;
+    public void Events.keyPressed(k) { // hook: when [&] key pressed
+        Key_Event(0x26);
+    }
+
+    metadata Events.keyPressed pos 1447,503;
+    public void Events.keyPressed(k) { // hook: when [5] key pressed
+        Key_Event(0x35);
+    }
+
+    metadata Events.keyPressed pos 756,505;
+    public void Events.keyPressed(k) { // hook: when [l] key pressed
+        Key_Event(0x6C);
+    }
+
+    metadata Events.keyPressed pos 2024,596;
+    public void Events.keyPressed(k) { // hook: when [@] key pressed
+        Key_Event(0x40);
+    }
+
+    metadata Events.keyPressed pos 1774,620;
+    public void Events.keyPressed(k) { // hook: when ['] key pressed
+        Key_Event(0x27);
+    }
+
+    metadata Events.keyPressed pos 472,631;
+    public void Events.keyPressed(k) { // hook: when [m] key pressed
+        Key_Event(0x6D);
+    }
+
+    metadata Events.keyPressed pos 1442,668;
+    public void Events.keyPressed(k) { // hook: when [6] key pressed
+        Key_Event(0x36);
+    }
+
+    metadata Events.keyPressed pos 749,696;
+    public void Events.keyPressed(k) { // hook: when [n] key pressed
+        Key_Event(0x6E);
+    }
+
+    metadata Events.keyPressed pos 1771,775;
+    public void Events.keyPressed(k) { // hook: when [(] key pressed
+        Key_Event(0x28);
+    }
+
+    metadata Events.keyPressed pos 1442,832;
+    public void Events.keyPressed(k) { // hook: when [7] key pressed
+        Key_Event(0x37);
+    }
+
+    metadata Events.keyPressed pos 736,841;
+    public void Events.keyPressed(k) { // hook: when [p] key pressed
+        Key_Event(0x70);
+    }
+
+    metadata Events.keyPressed pos 488,849;
+    public void Events.keyPressed(k) { // hook: when [o] key pressed
+        Key_Event(0x6F);
+    }
+
+    metadata Events.keyPressed pos 1779,926;
+    public void Events.keyPressed(k) { // hook: when [)] key pressed
+        Key_Event(0x29);
+    }
+
+    metadata Events.keyPressed pos 1440,997;
+    public void Events.keyPressed(k) { // hook: when [8] key pressed
+        Key_Event(0x38);
+    }
+
+    metadata Events.keyPressed pos 499,1012;
+    public void Events.keyPressed(k) { // hook: when [q] key pressed
+        Key_Event(0x71);
+    }
+
+    metadata Events.keyPressed pos 795,1024;
+    public void Events.keyPressed(k) { // hook: when [r] key pressed
+        Key_Event(0x72);
+    }
+
+    metadata Events.keyPressed pos 1785,1074;
+    public void Events.keyPressed(k) { // hook: when [*] key pressed
+        Key_Event(0x2A);
+    }
+
+    metadata Events.keyPressed pos 1426,1173;
+    public void Events.keyPressed(k) { // hook: when [9] key pressed
+        Key_Event(0x39);
+    }
+
+    metadata Events.keyPressed pos 500,1181;
+    public void Events.keyPressed(k) { // hook: when [s] key pressed
+        Key_Event(0x73);
+    }
+
+    metadata Events.keyPressed pos 1794,1225;
+    public void Events.keyPressed(k) { // hook: when [+] key pressed
+        Key_Event(0x2B);
+    }
+
+    metadata Events.keyPressed pos 777,1232;
+    public void Events.keyPressed(k) { // hook: when [t] key pressed
+        Key_Event(0x74);
+    }
+
+    metadata Events.keyPressed pos 488,1378;
+    public void Events.keyPressed(k) { // hook: when [u] key pressed
+        Key_Event(0x75);
+    }
+
+    metadata Events.keyPressed pos 1799,1381;
+    public void Events.keyPressed(k) { // hook: when [,] key pressed
+        Key_Event(0x2C);
+    }
+
+    metadata Events.keyPressed pos 755,1400;
+    public void Events.keyPressed(k) { // hook: when [v] key pressed
+        Key_Event(0x76);
+    }
+
+    metadata Events.keyPressed pos 1796,1544;
+    public void Events.keyPressed(k) { // hook: when [-] key pressed
+        Key_Event(0x2D);
+    }
+
+    metadata Events.keyPressed pos 456,1578;
+    public void Events.keyPressed(k) { // hook: when [w] key pressed
+        Key_Event(0x77);
+    }
+
+    metadata Events.keyPressed pos 696,1607;
+    public void Events.keyPressed(k) { // hook: when [x] key pressed
+        Key_Event(0x78);
+    }
+
+    metadata Events.keyPressed pos 1798,1711;
+    public void Events.keyPressed(k) { // hook: when [.] key pressed
+        Key_Event(0x2E);
+    }
+
+    metadata Events.keyPressed pos 438,1736;
+    public void Events.keyPressed(k) { // hook: when [y] key pressed
+        Key_Event(0x79);
+    }
+
+    metadata Events.keyPressed pos 734,1792;
+    public void Events.keyPressed(k) { // hook: when [z] key pressed
+        Key_Event(0x7A);
+    }
+
+    metadata Events.keyPressed pos 1812,1862;
+    public void Events.keyPressed(k) { // hook: when [/] key pressed
+        Key_Event(0x2F);
+    }
+}

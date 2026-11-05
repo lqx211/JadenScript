@@ -1,0 +1,189 @@
+{
+  "C-style for loop": {
+    "scope": "jsw",
+    "prefix": "forc",
+    "description": "Three-part loop for a step or an exclusive bound that `..` cannot express.",
+    "body": [
+      "for (${1:i}=${2:0}, ${1:i}<${3:10}, ${1:i}++) {",
+      "\t${0}",
+      "}"
+    ]
+  },
+  "Counted for loop": {
+    "scope": "jsw",
+    "prefix": "for",
+    "description": "Inclusive counter. Lowers to Scratch's repeat-with-counter block when it starts at 1, otherwise to set + repeat-until + change by 1.",
+    "body": [
+      "for ${1:i} in ${2:1}..${3:10} {",
+      "\t${0}",
+      "}"
+    ]
+  },
+  "Debug log": {
+    "scope": "jsw",
+    "prefix": "log",
+    "body": [
+      "logStatic(\"${1:GCl:\" + string(Sensing.timer) + \" ${2:message}}\");"
+    ]
+  },
+  "Enable feature": {
+    "scope": "jsw",
+    "prefix": "feature",
+    "description": "Turn on a compiler feature switch (useTempVariables, commentMetadata, namespacedNames, doObfuscation).",
+    "body": [
+      "#enable_feature<${1:useTempVariables}>;"
+    ]
+  },
+  "Fire-and-forget call": {
+    "scope": "jsw",
+    "prefix": "call",
+    "description": "call compiles to a broadcast; the callee runs on its own thread.",
+    "body": [
+      "call ${1:Player}.${2:tick}();"
+    ]
+  },
+  "Green flag script": {
+    "scope": "jsw",
+    "prefix": "greenflag",
+    "description": "Compiles to the when-green-flag-clicked hat.",
+    "body": [
+      "public void greenFlag() {",
+      "\t${0}",
+      "}"
+    ]
+  },
+  "If / elif / else": {
+    "scope": "jsw",
+    "prefix": "if",
+    "body": [
+      "if (${1:condition}) {",
+      "\t${2}",
+      "} elif (${3:condition}) {",
+      "\t${4}",
+      "} else {",
+      "\t${0}",
+      "}"
+    ]
+  },
+  "Import asset": {
+    "scope": "jsw",
+    "prefix": "import",
+    "description": "Pull a list (.jsa) or variable (.jsv) in from a side file.",
+    "body": [
+      "import \"${1:assets/lists/notes.jsa}\" as ${2:notes};"
+    ]
+  },
+  "Key hook": {
+    "scope": "jsw",
+    "prefix": "hook",
+    "description": "The trailing comment turns this function into a when-key-pressed hat.",
+    "body": [
+      "public void Events.keyPressed(k) { // hook: when [${1:space}] key pressed",
+      "\t${0}",
+      "}"
+    ]
+  },
+  "List append": {
+    "scope": "jsw",
+    "prefix": "listadd",
+    "body": [
+      "${1:Piano}.${2:notes}.add(${3:value});"
+    ]
+  },
+  "Metadata position": {
+    "scope": "jsw",
+    "prefix": "metadata",
+    "description": "Pin a script to a canvas position (replaces // at x,y).",
+    "body": [
+      "metadata ${1:greenFlag} pos ${2:0},${3:0};"
+    ]
+  },
+  "Monitor": {
+    "scope": "jsw",
+    "prefix": "monitor",
+    "description": "Open a variable monitor (replaces // monitor …).",
+    "body": [
+      "metadata ${1:slider} ${2:Stage.score} at ${3:0},${4:0} ${5:100}x${6:24} ${7:shown}${0};"
+    ]
+  },
+  "Private helper": {
+    "scope": "jsw",
+    "prefix": "privvoid",
+    "body": [
+      "private void ${1:helper}(${2}) {",
+      "\t${0}",
+      "}"
+    ]
+  },
+  "Public procedural method": {
+    "scope": "jsw",
+    "prefix": "pubvoid",
+    "description": "Public Namespace.method: custom block plus broadcast receiver, callable from other sprites with call().",
+    "body": [
+      "public void ${1:Player}.${2:tick}(${3}) {",
+      "\t${0}",
+      "}"
+    ]
+  },
+  "Receiver hook": {
+    "scope": "jsw",
+    "prefix": "receive",
+    "description": "A broadcast receiver: the comment is what rebuilds the hat, quotes included.",
+    "body": [
+      "public void ${1:on_message}() { // receiver at ${2:0},${3:0} \"${4:my message}\"",
+      "\t${0}",
+      "}"
+    ]
+  },
+  "Repeat loop": {
+    "scope": "jsw",
+    "prefix": "repeat",
+    "description": "Compiles to the repeat-n block.",
+    "body": [
+      "repeat (${1:10}) {",
+      "\t${0}",
+      "}"
+    ]
+  },
+  "Sprite class": {
+    "scope": "jsw",
+    "prefix": "class",
+    "description": "A class compiles to one Scratch sprite.",
+    "body": [
+      "class ${1:player} { // Sprite: ${1:player} (${2:0},${3:0}) size=100 direction=90 show=${4:1}",
+      "\t${0}",
+      "}"
+    ]
+  },
+  "Switch": {
+    "scope": "jsw",
+    "prefix": "switch",
+    "body": [
+      "switch (${1:value}) {",
+      "\tcase ${2:1} {",
+      "\t\t${3}",
+      "\t}",
+      "\tcase _ {",
+      "\t\t${0}",
+      "\t}",
+      "}"
+    ]
+  },
+  "Target properties": {
+    "scope": "jsw",
+    "prefix": "target",
+    "description": "Declare a sprite's own properties (replaces // Sprite: …).",
+    "body": [
+      "${1:main}: name=\"${2:main}\", x=0, y=0, size=100, direction=90, show=1, costume=0, volume=100, layer=1, rotation=\"all\", draggable=0;"
+    ]
+  },
+  "While loop": {
+    "scope": "jsw",
+    "prefix": "while",
+    "body": [
+      "while (${1:condition}) {",
+      "\t${0}",
+      "}"
+    ]
+  }
+}

@@ -1,0 +1,262 @@
+{
+  "name": "jaden-script",
+  "displayName": "JadenScript",
+  "description": "Syntax highlighting, completion and default token colours for JadenScript (.jsw), the language that compiles to TurboWarp projects.",
+  "version": "0.3.8",
+  "publisher": "js2twrp",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "keywords": [
+    "scratch",
+    "turbowarp",
+    "jsw",
+    "compiler"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "jsw",
+        "aliases": [
+          "JadenScript",
+          "jsw"
+        ],
+        "extensions": [
+          ".jsw"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "jsw",
+        "scopeName": "source.jsw",
+        "path": "./syntaxes/jsw.tmLanguage.json"
+      }
+    ],
+    "snippets": [
+      {
+        "language": "jsw",
+        "path": "./snippets/jsw.json"
+      }
+    ],
+    "configurationDefaults": {
+      "[jsw]": {
+        "editor.insertSpaces": true,
+        "editor.tabSize": 4,
+        "editor.quickSuggestions": {
+          "other": true,
+          "comments": true,
+          "strings": false
+        },
+        "editor.suggestOnTriggerCharacters": true,
+        "editor.wordBasedSuggestions": "off",
+        "editor.snippetSuggestions": "inline",
+        "editor.bracketPairColorization.enabled": true,
+        "editor.autoClosingBrackets": "languageDefined"
+      },
+      "editor.tokenColorCustomizations": {
+        "[jsw]": {
+          "textMateRules": [
+            {
+              "comment": "public and private state, list members, loop counters - one colour",
+              "scope": [
+                "variable.other.jsw",
+                "variable.other.readwrite.jsw",
+                "variable.other.member.jsw",
+                "variable.other.property.jsw",
+                "variable.other.loop.jsw"
+              ],
+              "settings": {
+                "foreground": "#9CDCFE"
+              }
+            },
+            {
+              "comment": "temp (_name) variables: the same family, dimmer, so they read as temporary",
+              "scope": "variable.other.temp.jsw",
+              "settings": {
+                "foreground": "#6F9FB8"
+              }
+            },
+            {
+              "comment": "stage:/sprite property keys and the structural metadata words",
+              "scope": [
+                "keyword.other.target-key.jsw",
+                "keyword.other.metadata.jsw",
+                "keyword.other.annotation.jsw"
+              ],
+              "settings": {
+                "foreground": "#569CD6"
+              }
+            },
+            {
+              "comment": "list / large / slider / normal / default, and microbit.buttonA / microbit.front",
+              "scope": [
+                "constant.language.monitor-mode.jsw",
+                "constant.language.microbit.jsw"
+              ],
+              "settings": {
+                "foreground": "#C586C0"
+              }
+            },
+            {
+              "comment": "centerx= centery= res= rate= samples=",
+              "scope": "variable.parameter.annotation.jsw",
+              "settings": {
+                "foreground": "#DCDCAA"
+              }
+            },
+            {
+              "scope": "keyword.operator.range.jsw",
+              "settings": {
+                "foreground": "#D4D4D4"
+              }
+            },
+            {
+              "comment": "calls: a custom block, an extension method, and a declaration all read as functions",
+              "scope": [
+                "entity.name.function.call.jsw",
+                "entity.name.function.jsw",
+                "support.function.builtin.jsw",
+                "support.function.extension.jsw"
+              ],
+              "settings": {
+                "foreground": "#DCDCAA"
+              }
+            },
+            {
+              "comment": "namespaces (Pen, Music) and class names share the type colour",
+              "scope": [
+                "support.class.jsw",
+                "support.class.builtin.jsw",
+                "entity.name.type.class.jsw"
+              ],
+              "settings": {
+                "foreground": "#4EC9B0"
+              }
+            },
+            {
+              "comment": "the import alias names a costume or a sound",
+              "scope": "entity.name.namespace.jsw",
+              "settings": {
+                "foreground": "#4EC9B0"
+              }
+            },
+            {
+              "scope": "string.interpolated.jsw",
+              "settings": {
+                "foreground": "#CE9178"
+              }
+            },
+            {
+              "scope": [
+                "constant.numeric.jsw",
+                "constant.numeric.hex.jsw",
+                "constant.numeric.binary.jsw",
+                "constant.numeric.octal.jsw"
+              ],
+              "settings": {
+                "foreground": "#B5CEA8"
+              }
+            },
+            {
+              "scope": [
+                "comment.line.double-slash.jsw",
+                "comment.block.jsw"
+              ],
+              "settings": {
+                "foreground": "#6A9955"
+              }
+            },
+            {
+              "scope": [
+                "keyword.control.jsw",
+                "keyword.declaration.class.jsw",
+                "keyword.declaration.stage.jsw",
+                "keyword.declaration.jsw",
+                "keyword.control.import.jsw",
+                "keyword.control.directive.jsw",
+                "storage.type.jsw"
+              ],
+              "settings": {
+                "foreground": "#C586C0"
+              }
+            },
+            {
+              "scope": "storage.modifier.jsw",
+              "settings": {
+                "foreground": "#569CD6"
+              }
+            },
+            {
+              "scope": "constant.language.jsw",
+              "settings": {
+                "foreground": "#569CD6"
+              }
+            },
+            {
+              "scope": "invalid.illegal.reserved.jsw",
+              "settings": {
+                "foreground": "#F44747"
+              }
+            },
+            {
+              "scope": [
+                "string.quoted.double.jsw",
+                "string.quoted.single.jsw",
+                "string.quoted.jsw"
+              ],
+              "settings": {
+                "foreground": "#CE9178"
+              }
+            },
+            {
+              "comment": "operators, and the angle brackets around a directive's feature name",
+              "scope": [
+                "keyword.operator.arithmetic.jsw",
+                "keyword.operator.assignment.jsw",
+                "keyword.operator.comparison.jsw",
+                "keyword.operator.logical.jsw",
+                "keyword.operator.ternary.jsw",
+                "keyword.operator.word.jsw",
+                "punctuation.definition.tag.begin.jsw",
+                "punctuation.definition.tag.end.jsw"
+              ],
+              "settings": {
+                "foreground": "#D4D4D4"
+              }
+            },
+            {
+              "comment": "the feature name inside #enable_feature<…>, and an unknown one",
+              "scope": [
+                "constant.language.feature.jsw",
+                "entity.name.tag.jsw"
+              ],
+              "settings": {
+                "foreground": "#4FC1FF"
+              }
+            },
+            {
+              "scope": "keyword.other.directive.jsw",
+              "settings": {
+                "foreground": "#C586C0"
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  "scripts": {
+    "grammar": "python3 ../tools/gen_tm_grammar.py",
+    "data": "python3 ../tools/gen_vscode_data.py"
+  },
+  "main": "./extension.js",
+  "activationEvents": [
+    "onLanguage:jsw"
+  ]
+}

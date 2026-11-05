@@ -1,0 +1,1966 @@
+#enable_feature<namespacedNames>;
+
+/*
+ * i386 — a PC, in Scratch blocks. Real mode, a real BIOS ROM, a real boot
+ * sector, and the CMOS that makes the machine believe it has a battery.
+ *
+ * Three modules, the way the RISC-V machine is split:
+ *
+ *   cpu.jsw      the 80386: decode, execute, the memory decoder, the ports
+ *   display.jsw  the video card (the only sprite that uses the pen)
+ *   input.jsw    the 8042's key matrix, handed over as scan codes
+ *
+ * This file is the board: the shared state they all read and write, and the
+ * memory map. The map is not flat, and that is deliberate -- a real machine
+ * decodes addresses, and so does this one:
+ *
+ *   0x00000 - 0x1FFFF   RAM, 128 KiB of it, behind `X.mem` (32-bit words)
+ *   0x30000 - 0x3FFFF   the disk window: the ATA device, read-only for now
+ *   0xB8000 - 0xB8F9F   the text plane, 80 x 25 cells of (char, attribute)
+ *   0xF0000 - 0xFFFFF   the BIOS ROM
+ *
+ * Everything else answers 0xFF, the way an open bus does.
+ *
+ * Memory is a list of 32-bit words, not of bytes: four times fewer nodes in
+ * Scratch's list tree and four times fewer lookups per instruction. Byte
+ * accesses cost a divide and a modulo, which is the same trade the RISC-V
+ * machine's memory extension makes -- only here it is blocks, not JavaScript.
+ */
+
+/* ---- the CPU ---------------------------------------------------------- */
+public X.batch = 240;                    // instructions per frame
+public X.frames = 0;                     // frames since the green flag
+public X.maxFrames = 0;                  // 0 = run forever; >0 = a test budget
+
+/* ---- memory ----------------------------------------------------------- */
+public X.memBase = 0;                    // the RAM window
+public X.memWords = 32768;               // 128 KiB
+public X.diskBase = 196608;              // 0x3_0000: the disk window
+public X.diskWords = 16384;              // 64 KiB = 128 sectors
+public X.textBase = 753664;              // 0xB_8000
+public X.textWords = 1000;               // 4000 bytes
+public X.romBase = 983040;               // 0xF_0000
+public X.romWords = 16384;               // 64 KiB
+
+public X.bw = [1, 256, 65536, 16777216];
+public X.fbit = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192];
+/* decode slots, refilled once per instruction */
+public X.mem = [];                       // RAM, one 32-bit word an item
+public X.bios = [];                      // the ROM
+public X.disk = [];                      // the staged disk image
+public X.text = [];                      // the text plane
+public X.textDirty = [];                 // 1 = the card has not drawn this cell
+public X.textN = 0;
+public X.textScan = 1;
+public X.textDrawn = [];                 // what is on the glass, or -1
+
+/* ---- the CMOS: the battery-backed page -------------------------------- *
+ * This is a Stage list, so it survives a green flag the way a battery
+ * survives a power cut. The BIOS reads its memory size, its equipment word
+ * and its clock from here, and increments the boot counter at 0x30 -- so a
+ * reload of the project is a reboot, and the count keeps climbing.
+ */
+public X.cmos = [];
+public X.cmosIndex = 0;
+public X.cmosWrites = 0;
+public X.cmosReady = 0;
+public X.rtcSeconds = 0;                 // counts up once a frame
+public X.rtcFrames = 0;
+public X.rtcRate = 60;                   // frames per RTC second
+
+/* ---- ports ------------------------------------------------------------- */
+public X.port60 = 0;                     // the 8042's output buffer
+public X.port64 = 0;                     // status: 1 only while a byte waits
+public X.out = [];                       // serial 0x3F8, byte values
+public X.portLog = [];
+
+/* ---- the card ---------------------------------------------------------- */
+public X.dispReq = 0;
+public X.dispAck = 0;
+public X.dispBooted = 0;
+public X.stageW = 640;
+public X.stageH = 480;
+public X.dispCols = 80;
+public X.dispRows = 25;
+public X.dispCellW = 8;
+public X.dispCellH = 16;
+public X.dispGlyphH = 15;
+public X.dispPainted = 0;
+public X.stopAt = 0;                      // park the core at this instruction (debugging)
+public X.dispDots = 0;
+
+/* ---- the keyboard ------------------------------------------------------ */
+public K.fifo = [];
+public K.ready = 0;
+
+/* ---- the board: how many cores, and which are awake -------------------- *
+ * A clone is a core: its registers are its own, the memory it sees is shared.
+ * Core 1 is the one at the reset vector; every other core waits on its own
+ * byte in `X.coreRun` until the firmware releases it through port 0x5A1, and
+ * then starts where a real AP does -- CS = 0x0800, IP = 0.
+ */
+public X.cores = 2;
+public X.coreRun = [1, 0, 0, 0, 0, 0, 0, 0];
+public X.apCs = 2048;            // 0x0800: the vector a released core starts at
+public X.coreCountPort = 1440;   // 0x5A0, read: how many cores there are
+public X.coreReleasePort = 1441; // 0x5A1, write: the core to wake
+public X.coreIdPort = 1442;      // 0x5A2, read: which core is asking
+/* what the monitor shows: core 1 copies its own state here once a frame */
+public X.monSteps = 0;
+public X.monIp = 0;
+public X.monHalted = 0;
+public X.monErr = "";
+public X.monFrames = 0;
+
+/* ---- the board --------------------------------------------------------- */
+public X.powerOns = 0;                   // power-ons since this page loaded
+public X.clockMode = 0;                  // 0 = counted, 1 = the project timer
+
+// The stage has to be 640 x 480 for the 80 x 25 grid to fit pixel for pixel.
+metadata note Stage at 50,50 350x170: "{\"width\":640,\"height\":480,\"warpTimer\":true} // _twconfig_";
+
+import "assets/lists/bios.jsa" as rom;
+import "assets/lists/disk.jsa" as disk;
+
+// include "input.jsw"
+// include "display.jsw"
+
+/*
+ * Everything the CPU touches is one class, because a Scratch custom block
+ * belongs to its sprite: a procedure in another sprite can only be reached by a
+ * broadcast, and a broadcast is asynchronous.
+ *
+ * The registers are declared *inside* the class on purpose. A class-scope
+ * variable is sprite-local in Scratch, and a clone gets its own copy of it --
+ * which is exactly what a second core needs: its own ax..di, its own pc, its
+ * own flags, over the *same* memory. The memory lists stay at file scope
+ * because they are the one thing every core shares, the way they share a bus.
+ */
+class Cpu {
+    private r = [0, 0, 0, 0, 0, 0, 0, 0];
+    private sr = [0, 0, 0, 0, 0, 0];
+    private ip = 0;
+    private fl = 514;
+    private halted = 0;
+    private steps = 0;
+    private err = "";
+    private ops = 0;
+    private trace = [];
+    private traceOn = 0;
+    private v = 0;
+    private ir = 0;
+    private oz = 2;
+    private seg = 4;
+    private rep = 0;
+    private mmod = 0;
+    private mreg = 0;
+    private mrm = 0;
+    private ea = 0;
+    private eseg = 4;
+    private coreId = 1;
+    /* the fetch buffer: one Scratch list read serves four instruction bytes,
+       and the ROM is where instructions live. `fbAddr` is the aligned physical
+       address of the cached word; -1 means empty. */
+    private fbAddr = -1;
+    private fb0 = 0;
+    private fb1 = 0;
+    private fb2 = 0;
+    private fb3 = 0;
+
+    public void cpuStart() { // hook: green flag
+        Looks.hide();
+        powerOn();
+        X.powerOns += 1;
+        // the card boots on request, so its clear can never race POST
+        X.dispReq = 1;
+        _waits = 0;
+        while (X.dispAck < 1 && _waits < 180) {
+            Control.wait(0);
+            _waits += 1;
+        }
+        // one clone is one core. `coreId` is sprite-local, so setting it
+        // before the clone is created is how the clone learns its own number.
+        coreId = 1;
+        _spawn = 2;
+        while (_spawn <= X.cores) {
+            coreId = _spawn;
+            Clone.create();
+            _spawn += 1;
+        }
+        coreId = 1;
+        mainLoop();
+    }
+
+    /* A secondary core: wait for the firmware to release it, then start at the
+     * AP vector with its own registers over the same memory. */
+    public void whenClone() { // hook: clone
+        while (X.coreRun.get(coreId) < 1) {
+            Control.wait(0);
+        }
+        sr.set(2, X.apCs);
+        ip = 0;
+        fl = 514;
+        halted = 0;
+        err = "";
+        steps = 0;
+        mainLoop();
+    }
+
+    /*
+     * Power-on: registers to their reset values, RAM to zero, the ROM and the
+     * disk loaded from their assets, and the CMOS *only if it is empty* --
+     * that `if` is the whole battery: a green flag clears variables, and a
+     * Stage list is the only thing that comes back.
+     */
+    private void powerOn() { // warp
+        r.set(1, 0); r.set(2, 0); r.set(3, 0); r.set(4, 0);
+        r.set(5, 0); r.set(6, 0); r.set(7, 0); r.set(8, 0);
+        sr.set(1, 0); sr.set(2, 0xF000); sr.set(3, 0);
+        sr.set(4, 0); sr.set(5, 0); sr.set(6, 0);
+        ip = 0xFFF0;
+        fbAddr = -1;
+        fl = 0x0202;
+        halted = 0;
+        steps = 0;
+        err = "";
+        ops = 0;
+        trace.clear();
+
+        if (X.mem.length() < X.memWords) {
+            X.mem.clear();
+            _i = 1;
+            while (_i <= X.memWords) {
+                X.mem.add(0);
+                _i += 1;
+            }
+        } else {
+            _i = 1;
+            while (_i <= X.memWords) {
+                X.mem.set(_i, 0);
+                _i += 1;
+            }
+        }
+        if (X.text.length() < X.textWords) {
+            X.text.clear();
+            _i = 1;
+            while (_i <= X.textWords) {
+                X.text.add(0x0720);          // a space in light grey
+                _i += 1;
+            }
+        }
+        // the paint lists are one entry per *cell*, and a cell is two bytes:
+        // twice as long as the plane's word list. Sizing them by words left
+        // the bottom half of the screen undrawable for ever.
+        if (X.textDirty.length() < X.textWords * 2) {
+            X.textDirty.clear();
+            X.textDrawn.clear();
+            _i = 1;
+            while (_i <= X.textWords * 2) {
+                X.textDirty.add(1);
+                X.textDrawn.add(-1);
+                _i += 1;
+            }
+        } else {
+            _i = 1;
+            while (_i <= X.textWords * 2) {
+                X.textDirty.set(_i, 1);
+                X.textDrawn.set(_i, -1);
+                _i += 1;
+            }
+        }
+        X.textN = X.textWords * 2;
+        X.textScan = 1;
+        // the core-release register is a device, not a battery: a green flag
+        // is a fresh board, and a core still marked "released" from the last
+        // boot would start executing before POST had written its trampoline
+        _i = 1;
+        while (_i <= 8) {
+            X.coreRun.set(_i, 0);
+            _i += 1;
+        }
+        X.coreRun.set(1, 1);
+
+        // the ROM and the disk are read-only images: loaded once, from the
+        // assets, and never rebuilt
+        if (X.bios.length() < X.romWords) {
+            X.bios.clear();
+            _i = 1;
+            while (_i <= X.romWords) {
+                if (_i <= rom.length()) { X.bios.add(rom.get(_i) + 0); } else { X.bios.add(0); }
+                _i += 1;
+            }
+        }
+        if (X.disk.length() < X.diskWords) {
+            X.disk.clear();
+            _i = 1;
+            while (_i <= X.diskWords) {
+                if (_i <= disk.length()) { X.disk.add(disk.get(_i) + 0); } else { X.disk.add(0); }
+                _i += 1;
+            }
+        }
+
+        if (X.cmosReady < 1) {
+            cmosFresh();
+        }
+        X.cmosIndex = 0;
+    }
+
+    /* A brand-new battery: the register file a 1984 board would come with. */
+    private void cmosFresh() { // warp
+        X.cmos.clear();
+        _i = 1;
+        while (_i <= 128) {
+            X.cmos.add(0);
+            _i += 1;
+        }
+        X.cmos.set(1, 0);            // 0x00 seconds
+        X.cmos.set(3, 0);            // 0x02 minutes
+        X.cmos.set(5, 0x12);         // 0x04 hours
+        X.cmos.set(7, 1);            // 0x06 day of week
+        X.cmos.set(8, 1);            // 0x07 day
+        X.cmos.set(9, 1);            // 0x08 month
+        X.cmos.set(10, 0x25);        // 0x09 year
+        X.cmos.set(11, 0x26);        // 0x0A status A
+        X.cmos.set(12, 0x02);        // 0x0B status B
+        X.cmos.set(14, 0x80);        // 0x0D diagnostic: battery good
+        X.cmos.set(16, 0x00);        // 0x0F shutdown status
+        X.cmos.set(17, 0x20);        // 0x10 floppy
+        X.cmos.set(19, 0x00);        // 0x12 hard disk
+        X.cmos.set(21, 0x21);        // 0x14 equipment
+        X.cmos.set(22, 0x80);        // 0x15 base memory low  (640 KiB)
+        X.cmos.set(23, 0x02);        // 0x16 base memory high
+        X.cmos.set(49, 0x00);        // 0x30 boot counter
+        X.cmos.set(50, 0x00);        // 0x31 POST result
+        X.cmos.set(51, 0x20);        // 0x32 century
+        X.cmosReady = 1;
+        X.rtcSeconds = 0;
+    }
+
+    /*
+     * The main loop. The *outer* loop is deliberately not `warp`: in warp mode
+     * TurboWarp runs a script without handing the frame back to the renderer,
+     * and `wait 0` does not give it back either -- so an outer `while (1)`
+     * inside a warp procedure is a frozen tab, not a slow machine. Only the
+     * batch of instructions is warp, which is what makes it fast.
+     */
+    private void mainLoop() {
+        while (1) {
+            tickClock();
+            X.frames += 1;
+            if (X.maxFrames > 0 && X.frames > X.maxFrames) {
+                return;
+            }
+            if (coreId == 1) {
+                X.monSteps = steps;
+                X.monIp = ip;
+                X.monHalted = halted;
+                X.monErr = err;
+                X.monFrames = X.frames;
+            }
+            if (halted == 1) {
+                while (1) {
+                    Control.wait(0);
+                }
+            }
+            runBatch();
+            Control.wait(0);
+        }
+    }
+
+    /* One frame's worth of instructions, under warp: no screen refresh inside. */
+    private void runBatch() { // warp
+        ops = 0;
+        while (ops < X.batch && halted == 0 && err == "") {
+            /* X.stopAt makes the machine scrubbable: set it to an instruction
+             * count and the core parks there, step by step, so a divergence
+             * from the model can be bisected instead of guessed at. 0 = off. */
+            if (X.stopAt > 0 && steps >= X.stopAt) {
+                return;
+            }
+            cpuStep();
+            ops += 1;
+        }
+    }
+
+    /* One RTC second is `X.rtcRate` frames; the registers are BCD, as they are
+     * on the real chip, so the guest reads 0x12 for twelve o'clock. */
+    private void tickClock() { // warp
+        X.rtcFrames += 1;
+        if (X.rtcFrames < X.rtcRate) {
+            return;
+        }
+        X.rtcFrames = 0;
+        X.rtcSeconds += 1;
+        _s = X.rtcSeconds % 60;
+        _m = Operators.math("floor", X.rtcSeconds / 60) % 60;
+        _h = Operators.math("floor", X.rtcSeconds / 3600) % 24;
+        X.cmos.set(1, Operators.math("floor", _s / 10) * 16 + _s % 10);
+        X.cmos.set(3, Operators.math("floor", _m / 10) * 16 + _m % 10);
+        X.cmos.set(5, Operators.math("floor", _h / 10) * 16 + _h % 10);
+        // the vector table's tick count, at 18.2 Hz, is derived from the frame
+        _t = X.rtcSeconds * 18;
+        _a = 0x46C;
+        wrb(_a, _t % 256);
+        wrb(_a + 1, Operators.math("floor", _t / 256) % 256);
+        wrb(_a + 2, Operators.math("floor", _t / 65536) % 256);
+        wrb(_a + 3, Operators.math("floor", _t / 16777216) % 256);
+    }
+
+    /* ---- the memory decoder ------------------------------------------ */
+
+    /* One byte. The result lands in `v`, because a procedure cannot return. */
+    private void rdb(a) { // warp
+        v = 0xFF;                      // an open bus reads as all ones
+        if (a < X.memBase + X.memWords * 4) {
+            _w = X.mem.get(Operators.math("floor", a / 4) + 1) + 0;
+            v = Operators.math("floor", _w / X.bw.get(a % 4 + 1)) % 256;
+            return;
+        }
+        if (a >= X.diskBase && a < X.diskBase + X.diskWords * 4) {
+            _w = X.disk.get(Operators.math("floor", (a - X.diskBase) / 4) + 1) + 0;
+            v = Operators.math("floor", _w / X.bw.get((a - X.diskBase) % 4 + 1)) % 256;
+            return;
+        }
+        if (a >= X.textBase && a < X.textBase + X.textWords * 4) {
+            _w = X.text.get(Operators.math("floor", (a - X.textBase) / 4) + 1) + 0;
+            v = Operators.math("floor", _w / X.bw.get((a - X.textBase) % 4 + 1)) % 256;
+            return;
+        }
+        if (a >= X.romBase && a < X.romBase + X.romWords * 4) {
+            _w = X.bios.get(Operators.math("floor", (a - X.romBase) / 4) + 1) + 0;
+            v = Operators.math("floor", _w / X.bw.get((a - X.romBase) % 4 + 1)) % 256;
+            return;
+        }
+    }
+
+    private void wrb(a, val) { // warp
+        _wv = val % 256;
+        if (a < X.memBase + X.memWords * 4) {
+            _i = Operators.math("floor", a / 4) + 1;
+            _sh = X.bw.get(a % 4 + 1);
+            _old = X.mem.get(_i) + 0;
+            _b = Operators.math("floor", _old / _sh) % 256;
+            X.mem.set(_i, _old - _b * _sh + _wv * _sh);
+            return;
+        }
+        if (a >= X.textBase && a < X.textBase + X.textWords * 4) {
+            _o = a - X.textBase;
+            _i = Operators.math("floor", _o / 4) + 1;
+            _sh = X.bw.get(_o % 4 + 1);
+            _old = X.text.get(_i) + 0;
+            _b = Operators.math("floor", _old / _sh) % 256;
+            X.text.set(_i, _old - _b * _sh + _wv * _sh);
+            markCell(_o);
+            return;
+        }
+        // a store to the ROM or the disk window goes nowhere: there is no
+        // hardware behind it to latch the value
+    }
+
+    private void rdw(a) { // warp
+        rdb(a);
+        _lo = v;
+        rdb(a + 1);
+        v = _lo + v * 256;
+    }
+
+    private void wrw(a, val) { // warp
+        _vv = val % 65536;
+        wrb(a, _vv % 256);
+        wrb(a + 1, Operators.math("floor", _vv / 256) % 256);
+    }
+
+    /* Any byte of a cell makes its cell dirty: the card redraws characters,
+     * not bytes, and a repaint is cheaper than tracking halves. */
+    private void markCell(off) { // warp
+        _c = Operators.math("floor", off / 2) + 1;
+        if (X.textDirty.get(_c) == 0) {
+            X.textDirty.set(_c, 1);
+            X.textN += 1;
+        }
+    }
+
+    /* ================================================================== *
+     * the instruction set
+     * ================================================================== */
+
+    /* ---- fetch and addressing ---------------------------------------- */
+
+    private void phys(segIndex, off) { // warp
+        _pSeg = segIndex;
+        if (_pSeg < 1) { _pSeg = 0; }      // segment 0: the interrupt table
+        if (_pSeg > 0) { _pSeg = sr.get(_pSeg) + 0; }
+        v = (_pSeg * 16 + off) % 1048576;
+    }
+
+    private void f8() { // warp
+        /* The instruction stream is nearly always in the ROM, four bytes to a
+           list item: one list read per word instead of one per byte, and no
+           segment table lookup, no range checks, no shift table. */
+        _fip = (sr.get(2) + 0) * 16 + ip;
+        if (_fip < X.romBase || _fip >= X.romBase + X.romWords * 4) {
+            phys(2, ip);
+            rdb(v);
+            ip = ip + 1;
+            if (ip > 65535) { ip = 0; }
+            return;
+        }
+        _fbase = _fip - _fip % 4;
+        if (_fbase != fbAddr) {
+            fbAddr = _fbase;
+            _fw = X.bios.get(Operators.math("floor", (_fbase - X.romBase) / 4) + 1) + 0;
+            fb0 = _fw % 256;
+            fb1 = Operators.math("floor", _fw / 256) % 256;
+            fb2 = Operators.math("floor", _fw / 65536) % 256;
+            fb3 = Operators.math("floor", _fw / 16777216) % 256;
+        }
+        _fk = _fip % 4;
+        v = fb0;
+        if (_fk == 1) { v = fb1; }
+        if (_fk == 2) { v = fb2; }
+        if (_fk == 3) { v = fb3; }
+        ip = ip + 1;
+        if (ip > 65535) { ip = 0; }
+    }
+
+    private void f16() { // warp
+        f8();
+        _fLo = v;
+        f8();
+        v = _fLo + v * 256;
+    }
+
+    private void getReg8(i) { // warp
+        if (i >= 4) {
+            v = Operators.math("floor", r.get(i - 3) / 256) % 256;
+            return;
+        }
+        v = r.get(i + 1) % 256;
+    }
+
+    private void putReg8(i, val) { // warp
+        _pV = val % 256;
+        if (i >= 4) {
+            _pR = i - 3;
+            _pOld = r.get(_pR) + 0;
+            _pHi = Operators.math("floor", _pOld / 256) % 256;
+            r.set(_pR, _pOld - _pHi * 256 + _pV * 256);
+            return;
+        }
+        _pR = i + 1;
+        _pOld = r.get(_pR) + 0;
+        r.set(_pR, _pOld - _pOld % 256 + _pV);
+    }
+
+    private void getReg16(i) { // warp
+        v = r.get(i + 1) + 0;
+    }
+
+    private void putReg16(i, val) { // warp
+        r.set(i + 1, val % 65536);
+    }
+
+    /*
+     * ModR/M. `mod` and `rm` together are one field with two meanings: when mod
+     * is 3 the operand is the register `rm`, otherwise it is the memory at
+     * `ea`. The segment is `ds` unless the address is built on bp, which is the
+     * single rule that makes `[bp+6]` in a handler mean the caller's frame.
+     */
+    private void modrm() { // warp
+        f8();
+        mmod = Operators.math("floor", v / 64) % 4;
+        mreg = Operators.math("floor", v / 8) % 8;
+        mrm = v % 8;
+        eseg = seg;
+        ea = 0;
+        if (mmod == 3) {
+            return;
+        }
+        _mrm = mrm;
+        if (_mrm == 0) { ea = r.get(4) + r.get(7); }
+        if (_mrm == 1) { ea = r.get(4) + r.get(8); }
+        if (_mrm == 2) { ea = r.get(6) + r.get(7); eseg = 3; }
+        if (_mrm == 3) { ea = r.get(6) + r.get(8); eseg = 3; }
+        if (_mrm == 4) { ea = r.get(7); }
+        if (_mrm == 5) { ea = r.get(8); }
+        if (_mrm == 6) { ea = r.get(6); eseg = 3; }
+        if (_mrm == 7) { ea = r.get(4); }
+        if (_mrm == 6 && mmod == 0) {
+            f16();
+            ea = v;
+            eseg = seg;
+        }
+        if (mmod == 1) {
+            f8();
+            _disp = v;
+            if (_disp >= 128) { _disp = _disp - 256; }
+            ea = ea + _disp;
+        }
+        if (mmod == 2) {
+            f16();
+            ea = ea + v;
+        }
+        ea = ea % 65536;
+    }
+
+    private void getOp(size) { // warp
+        if (mmod == 3) {
+            if (size == 1) { getReg8(mrm); return; }
+            getReg16(mrm);
+            return;
+        }
+        phys(eseg, ea);
+        _gA = v;
+        if (size == 1) { rdb(_gA); return; }
+        rdw(_gA);
+    }
+
+    private void putOp(size, val) { // warp
+        if (mmod == 3) {
+            if (size == 1) { putReg8(mrm, val); return; }
+            putReg16(mrm, val);
+            return;
+        }
+        phys(eseg, ea);
+        _uA = v;
+        if (size == 1) { wrb(_uA, val); return; }
+        wrw(_uA, val);
+    }
+
+    private void getSignedDisp8() { // warp
+        f8();
+        v = v % 256;
+        if (v >= 128) { v = v - 256; }
+    }
+
+    /* ---- flags -------------------------------------------------------- *
+     * One number holds them all: CF 1, PF 4, AF 16, ZF 64, SF 128, IF 512,
+     * DF 1024, OF 2048. Bit 1 is always one, as it is on the real chip.
+     */
+    private void getFlagBit(bit) { // warp
+        v = Operators.math("floor", fl / X.fbit.get(bit + 1)) % 2;
+    }
+
+    private void setFlagTo(bit, on) { // warp
+        _sBit = X.fbit.get(bit + 1);
+        _sNow = Operators.math("floor", fl / _sBit) % 2;
+        if (on == 1 && _sNow == 0) { fl = fl + _sBit; }
+        if (on == 0 && _sNow == 1) { fl = fl - _sBit; }
+    }
+
+    /* ZF, SF and PF from a result. PF counts the low eight bits, as the 8086
+     * did when the flag was built out of the byte it had just written. */
+    private void szp(value, size) { // warp
+        _zMask = 65535;
+        _zSign = 32768;
+        if (size == 1) { _zMask = 255; _zSign = 128; }
+        _zR = value % (_zMask + 1);
+        if (_zR < 0) { _zR = _zR + _zMask + 1; }
+        _zSet = 0;
+        if (_zR == 0) { _zSet = 1; }
+        setFlagTo(6, _zSet);
+        _zSet = 0;
+        if (_zR >= _zSign) { _zSet = 1; }
+        setFlagTo(7, _zSet);
+        _zPar = 1;
+        _zT = _zR % 256;
+        _zK = 0;
+        while (_zK < 8) {
+            if (_zT % 2 == 1) { _zPar = 1 - _zPar; }
+            _zT = Operators.math("floor", _zT / 2);
+            _zK += 1;
+        }
+        setFlagTo(2, _zPar);
+        v = _zR;
+    }
+
+    /* and/or/xor, a bit at a time: this dialect has no bitwise operators, and
+     * sixteen rounds of divide-by-two is what that costs. */
+    private void bitOp(a, b, mode) { // warp
+        _bA = a % 65536;
+        _bB = b % 65536;
+        _bRes = 0;
+        _bP = 1;
+        _bK = 0;
+        while (_bK < 16) {
+            _bX = _bA % 2;
+            _bY = _bB % 2;
+            _bBit = 0;
+            if (mode == 0) {
+                if (_bX == 1 && _bY == 1) { _bBit = 1; }
+            }
+            if (mode == 1) {
+                if (_bX == 1 || _bY == 1) { _bBit = 1; }
+            }
+            if (mode == 2) {
+                if (_bX != _bY) { _bBit = 1; }
+            }
+            _bRes = _bRes + _bBit * _bP;
+            _bP = _bP * 2;
+            _bA = Operators.math("floor", _bA / 2);
+            _bB = Operators.math("floor", _bB / 2);
+            _bK += 1;
+        }
+        v = _bRes;
+    }
+
+    /* op: 0 add, 1 or, 2 adc, 3 sbb, 4 and, 5 sub, 6 xor, 7 cmp */
+    private void alu(op, a, b, size) { // warp
+        _aMask = 65535;
+        _aSign = 32768;
+        if (size == 1) { _aMask = 255; _aSign = 128; }
+        _aA = a % (_aMask + 1);
+        if (_aA < 0) { _aA = _aA + _aMask + 1; }
+        _aB = b % (_aMask + 1);
+        if (_aB < 0) { _aB = _aB + _aMask + 1; }
+        if (op == 1 || op == 4 || op == 6) {
+            // and = 0, or = 1, xor = 2 in `bitOp`; the ALU numbers them 4, 1, 6
+            _aMode = 0;
+            if (op == 1) { _aMode = 1; }
+            if (op == 6) { _aMode = 2; }
+            bitOp(_aA, _aB, _aMode);
+            setFlagTo(0, 0);
+            setFlagTo(11, 0);
+            setFlagTo(4, 0);
+            szp(v, size);
+            return;
+        }
+        _aCarry = 0;
+        if (op == 2 || op == 3) {
+            getFlagBit(0);
+            _aCarry = v;
+        }
+        _aTotal = _aA + _aB + _aCarry;
+        if (op == 3 || op == 5 || op == 7) {
+            _aTotal = _aA - _aB - _aCarry;
+        }
+        _aR = _aTotal % (_aMask + 1);
+        if (_aR < 0) { _aR = _aR + _aMask + 1; }
+        // CF: the sum left the range the width allows
+        _aCf = 0;
+        if (_aTotal < 0 || _aTotal > _aMask) { _aCf = 1; }
+        setFlagTo(0, _aCf);
+        // AF: the carry out of bit three, which is where BCD lives
+        _aLow = _aA % 16;
+        _bLow = _aB % 16;
+        _aAf = 0;
+        if (op == 0 || op == 2) {
+            if (_aLow + _bLow + _aCarry > 15) { _aAf = 1; }
+        }
+        if (op == 3 || op == 5 || op == 7) {
+            if (_aLow < _bLow + _aCarry) { _aAf = 1; }
+        }
+        setFlagTo(4, _aAf);
+        // OF: two operands of one sign, a result of the other
+        _aSa = 0;
+        if (_aA >= _aSign) { _aSa = 1; }
+        _aSb = 0;
+        if (_aB >= _aSign) { _aSb = 1; }
+        _aSr = 0;
+        if (_aR >= _aSign) { _aSr = 1; }
+        _aOf = 0;
+        if (op == 0 || op == 2) {
+            if (_aSa == _aSb && _aSr != _aSa) { _aOf = 1; }
+        }
+        if (op == 3 || op == 5 || op == 7) {
+            if (_aSa != _aSb && _aSr != _aSa) { _aOf = 1; }
+        }
+        setFlagTo(11, _aOf);
+        szp(_aR, size);
+    }
+
+    /* kind: 0 rol, 1 ror, 2 rcl, 3 rcr, 4 shl, 5 shr, 6 sal, 7 sar */
+    private void shiftOp(kind, val, count, size) { // warp
+        _hMask = 65535;
+        _hTop = 32768;
+        if (size == 1) {
+            _hMask = 255;
+            _hTop = 128;
+        }
+        _hV = val % (_hMask + 1);
+        _hN = count % 32;
+        if (_hN == 0) {
+            v = _hV;
+            return;
+        }
+        _hK = 0;
+        while (_hK < _hN) {
+            _hMsb = 0;
+            if (_hV >= _hTop) { _hMsb = 1; }
+            _hLsb = _hV % 2;
+            if (kind == 0) {
+                setFlagTo(0, _hMsb);
+                _hV = (_hV * 2) % (_hMask + 1) + _hMsb;
+            }
+            if (kind == 1) {
+                setFlagTo(0, _hLsb);
+                _hV = Operators.math("floor", (_hV - _hLsb) / 2) + _hLsb * _hTop;
+            }
+            if (kind == 2) {
+                getFlagBit(0);
+                _hCarry = v;
+                setFlagTo(0, _hMsb);
+                _hV = (_hV * 2) % (_hMask + 1) + _hCarry;
+            }
+            if (kind == 3) {
+                getFlagBit(0);
+                _hCarry = v;
+                setFlagTo(0, _hLsb);
+                _hV = Operators.math("floor", (_hV - _hLsb) / 2) + _hCarry * _hTop;
+            }
+            if (kind == 4 || kind == 6) {
+                setFlagTo(0, _hMsb);
+                _hV = (_hV * 2) % (_hMask + 1);
+            }
+            if (kind == 5) {
+                setFlagTo(0, _hLsb);
+                _hV = Operators.math("floor", (_hV - _hLsb) / 2);
+            }
+            if (kind == 7) {
+                setFlagTo(0, _hLsb);
+                _hV = Operators.math("floor", (_hV - _hLsb) / 2) + _hMsb * _hTop;
+            }
+            _hK += 1;
+        }
+        szp(_hV, size);
+    }
+
+
+    /* ---- the stack ---------------------------------------------------- */
+
+    private void push16(val) { // warp
+        r.set(5, (r.get(5) + 65534) % 65536);
+        phys(3, r.get(5));          // leaves the address in `v`
+        wrw(v, val);
+    }
+
+    private void pop16() { // warp
+        phys(3, r.get(5));
+        rdw(v);
+        r.set(5, (r.get(5) + 2) % 65536);
+    }
+
+    /* The far call the hardware makes: flags, cs, ip, then the vector. */
+    private void interrupt(n) { // warp
+        push16(fl);
+        push16(sr.get(2));
+        push16(ip);
+        setFlagTo(9, 0);
+        setFlagTo(8, 0);
+        phys(0, n * 4);
+        rdw(v);
+        ip = v;
+        phys(0, n * 4 + 2);
+        rdw(v);
+        sr.set(2, v);
+    }
+
+    private void iretOp() { // warp
+        pop16();
+        ip = v;
+        pop16();
+        sr.set(2, v);
+        pop16();
+        fl = v % 65536;
+    }
+
+    /* ---- ports -------------------------------------------------------- *
+     * The CMOS is the interesting one: index at 0x70, data at 0x71, and the
+     * bytes behind it live in a Stage list, so they survive a green flag.
+     */
+    private void portIn(p) { // warp
+        v = 255;
+        if (p == 96) { v = X.port60; X.port64 = 0; return; }
+        if (p == 100) { v = X.port64; return; }
+        if (p == 112) { v = X.cmosIndex; return; }
+        if (p == 113) { v = X.cmos.get(X.cmosIndex + 1) + 0; return; }
+        if (p == 1016) { v = 96; return; }
+        if (p == 1021) { v = 96; return; }
+        if (p == X.coreCountPort) { v = X.cores; return; }
+        if (p == X.coreIdPort) { v = coreId; return; }
+    }
+
+    private void portOut(p, val) { // warp
+        _oV = val % 256;
+        if (p == 112) { X.cmosIndex = _oV % 128; return; }
+        if (p == 113) {
+            X.cmos.set(X.cmosIndex + 1, _oV);
+            X.cmosWrites += 1;
+            return;
+        }
+        if (p == 1016) { X.out.add(_oV); return; }
+        if (p == X.coreReleasePort) {
+            // wake core n: the device owns the flag, not the firmware
+            if (_oV >= 1 && _oV <= X.cores) {
+                X.coreRun.set(_oV, 1);
+            }
+            return;
+        }
+    }
+
+    /* ---- the decoder -------------------------------------------------- */
+
+    private void cpuStep() { // warp
+        seg = 4;
+        rep = 0;
+        oz = 2;
+        _prefOn = 1;
+        while (_prefOn == 1) {
+            _prefOn = 0;
+            f8();
+            ir = v;
+            if (ir == 102) { oz = 4; _prefOn = 1; }
+            if (ir == 103) { _prefOn = 1; }
+            if (ir == 38) { seg = 1; _prefOn = 1; }
+            if (ir == 46) { seg = 2; _prefOn = 1; }
+            if (ir == 54) { seg = 3; _prefOn = 1; }
+            if (ir == 62) { seg = 4; _prefOn = 1; }
+            if (ir == 100) { seg = 5; _prefOn = 1; }
+            if (ir == 101) { seg = 6; _prefOn = 1; }
+            if (ir == 240) { _prefOn = 1; }
+            if (ir == 242 || ir == 243) { rep = ir; _prefOn = 1; }
+        }
+        steps += 1;
+        if (traceOn == 1) {
+            trace.add(join(sr.get(2), ":", ip - 1, ":", ir));
+        }
+        execute();
+    }
+
+    private void execute() { // warp
+        _op = ir;
+        aluFamily(_op);
+        if (_done == 1) {
+            return;
+        }
+        singleOp(_op);
+    }
+
+    /* 0x00 .. 0x3D: eight operations, six addressing forms each. They are one
+     * family, not forty-eight instructions, which is why the decoder is short. */
+    private void aluFamily(op) { // warp
+        _done = 0;
+        if (op >= 64) {
+            return;
+        }
+        _form = op % 8;
+        _kind = Operators.math("floor", op / 8) % 8;
+        if (_form >= 6) {
+            return;
+        }
+        _done = 1;
+        if (_form == 0) {
+            modrm();
+            getOp(1);
+            _x = v;
+            getReg8(mreg);
+            alu(_kind, _x, v, 1);
+            if (_kind != 7) { putOp(1, v); }
+            return;
+        }
+        if (_form == 1) {
+            modrm();
+            getOp(2);
+            _x = v;
+            getReg16(mreg);
+            alu(_kind, _x, v, 2);
+            if (_kind != 7) { putOp(2, v); }
+            return;
+        }
+        if (_form == 2) {
+            modrm();
+            getReg8(mreg);
+            _x = v;
+            getOp(1);
+            alu(_kind, _x, v, 1);
+            if (_kind != 7) { putReg8(mreg, v); }
+            return;
+        }
+        if (_form == 3) {
+            modrm();
+            getReg16(mreg);
+            _x = v;
+            getOp(2);
+            alu(_kind, _x, v, 2);
+            if (_kind != 7) { putReg16(mreg, v); }
+            return;
+        }
+        if (_form == 4) {
+            getReg8(0);
+            _x = v;
+            f8();
+            alu(_kind, _x, v, 1);
+            if (_kind != 7) { putReg8(0, v); }
+            return;
+        }
+        getReg16(0);
+        _x = v;
+        f16();
+        alu(_kind, _x, v, 2);
+        if (_kind != 7) { putReg16(0, v); }
+    }
+
+
+    /* ---- the branch conditions ---------------------------------------- *
+     * The opcode's low nibble is the condition number, and there are sixteen
+     * of them; naming them by number is how the manual does it too.
+     */
+    private void cond(n) { // warp
+        getFlagBit(0);
+        _cCf = v;
+        getFlagBit(6);
+        _cZf = v;
+        getFlagBit(7);
+        _cSf = v;
+        getFlagBit(11);
+        _cOf = v;
+        getFlagBit(2);
+        _cPf = v;
+        // the result goes in `_cRes`, not in v: every getFlagBit writes v,
+        // so anything that reads it before the last check reads the wrong flag
+        _cRes = 0;
+        if (n == 0 && _cOf == 1) { _cRes = 1; }
+        if (n == 1 && _cOf == 0) { _cRes = 1; }
+        if (n == 2 && _cCf == 1) { _cRes = 1; }
+        if (n == 3 && _cCf == 0) { _cRes = 1; }
+        if (n == 4 && _cZf == 1) { _cRes = 1; }
+        if (n == 5 && _cZf == 0) { _cRes = 1; }
+        if (n == 6 && (_cCf == 1 || _cZf == 1)) { _cRes = 1; }
+        if (n == 7 && _cCf == 0 && _cZf == 0) { _cRes = 1; }
+        if (n == 8 && _cSf == 1) { _cRes = 1; }
+        if (n == 9 && _cSf == 0) { _cRes = 1; }
+        if (n == 10 && _cPf == 1) { _cRes = 1; }
+        if (n == 11 && _cPf == 0) { _cRes = 1; }
+        if (n == 12 && _cSf != _cOf) { _cRes = 1; }
+        if (n == 13 && _cSf == _cOf) { _cRes = 1; }
+        if (n == 14 && (_cZf == 1 || _cSf != _cOf)) { _cRes = 1; }
+        if (n == 15 && _cZf == 0 && _cSf == _cOf) { _cRes = 1; }
+        v = _cRes;
+    }
+
+    private void jumpRel8() { // warp
+        getSignedDisp8();
+        ip = (ip + v) % 65536;
+    }
+
+    private void group1(size) { // warp
+        _gKind = mreg;
+        getOp(size);
+        _gLeft = v;
+        if (size == 1) { f8(); }
+        if (size == 2) {
+            if (ir == 131) {
+                getSignedDisp8();
+            } else {
+                f16();
+            }
+        }
+        alu(_gKind, _gLeft, v, size);
+        if (_gKind != 7) { putOp(size, v); }
+    }
+
+    private void group3(size) { // warp
+        _tKind = mreg;
+        _tMask = 65535;
+        _tSign = 32768;
+        if (size == 1) { _tMask = 255; _tSign = 128; }
+        getOp(size);
+        _tVal = v;
+        if (_tKind == 0 || _tKind == 1) {
+            if (size == 1) { f8(); }
+            if (size == 2) { f16(); }
+            _tImm = v;
+            if (_tKind == 0) {
+                alu(4, _tVal, _tImm, size);
+            } else {
+                alu(4, _tVal, _tVal, size);
+            }
+            return;
+        }
+        if (_tKind == 2) {
+            _tMask = 65535;
+            if (size == 1) { _tMask = 255; }
+            putOp(size, _tMask - _tVal);
+            return;
+        }
+        if (_tKind == 3) {
+            _tMask = 65535;
+            _tSign = 32768;
+            if (size == 1) { _tMask = 255; _tSign = 128; }
+            _tRes = _tMask + 1 - _tVal;
+            if (_tRes > _tMask) { _tRes = 0; }
+            alu(5, 0, _tVal, size);
+            putOp(size, _tRes);
+            return;
+        }
+        if (_tKind == 4 || _tKind == 5) {
+            getReg16(0);
+            _tAcc = v;
+            if (size == 1) { _tAcc = _tAcc % 256; }
+            _tProd = _tAcc * _tVal;
+            if (_tKind == 5 && _tAcc >= _tSign) { _tAcc = _tAcc - _tMask - 1; }
+            if (_tKind == 5 && _tVal >= _tSign) { _tVal = _tVal - _tMask - 1; }
+            if (_tKind == 5) { _tProd = _tAcc * _tVal; }
+            if (size == 1) {
+                putReg16(0, _tProd % 65536);
+                _tSet = 0;
+                if (_tProd > 255 || _tProd < -128) { _tSet = 1; }
+                setFlagTo(0, _tSet);
+                setFlagTo(11, _tSet);
+                return;
+            }
+            putReg16(0, _tProd % 65536);
+            putReg16(2, Operators.math("floor", _tProd / 65536) % 65536);
+            _tSet = 0;
+            if (_tProd > 65535 || _tProd < -32768) { _tSet = 1; }
+            setFlagTo(0, _tSet);
+            setFlagTo(11, _tSet);
+            return;
+        }
+        /* div and idiv.
+         *
+         * The quotient truncates toward zero, so it is floor of a positive
+         * division and never round: 25/10 is 2.5, and round would answer 3 --
+         * which is what the year row printed as "203" until this was fixed.
+         * The remainder takes the dividend's sign, and both are written back
+         * as unsigned bytes, because Scratch's modulo keeps the sign of a
+         * negative remainder and a register cannot.
+         */
+        if (size == 1) {
+            /* byte divide: ax / operand -> al = quotient, ah = remainder.
+               dx is not part of the dividend and must come out untouched. */
+            if (_tVal == 0) {
+                interrupt(0);
+                return;
+            }
+            getReg16(0);
+            _tDividend = v;
+            if (_tKind == 7) {
+                _tVal = _tVal % 256;
+                if (_tVal >= 128) { _tVal = _tVal - 256; }
+            }
+        } else {
+            if (_tVal == 0) {
+                interrupt(0);
+                return;
+            }
+            getReg16(0);
+            _tLo = v;
+            getReg16(2);
+            _tHi = v;
+            _tDividend = _tHi * 65536 + _tLo;
+            if (_tKind == 7) {
+                if (_tHi >= 32768) { _tDividend = _tDividend - 4294967296; }
+                if (_tVal >= 32768) { _tVal = _tVal - 65536; }
+            }
+        }
+        _negA = 0;
+        if (_tDividend < 0) { _negA = 1; }
+        _negQ = 0;
+        if (_tKind == 7) {
+            if (_tDividend < 0) {
+                _tDividend = 0 - _tDividend;
+                _negQ = 1;
+            }
+            if (_tVal < 0) {
+                _tVal = 0 - _tVal;
+                _negQ = 1 - _negQ;
+            }
+        }
+        _tQ = Operators.math("floor", _tDividend / _tVal);
+        _tRem = _tDividend - _tQ * _tVal;
+        if (_negQ == 1) { _tQ = 0 - _tQ; }
+        if (_negA == 1) { _tRem = 0 - _tRem; }
+        if (size == 1) {
+            putReg8(0, _tQ - Operators.math("floor", _tQ / 256) * 256);
+            putReg8(4, _tRem - Operators.math("floor", _tRem / 256) * 256);
+            return;
+        }
+        putReg16(0, _tQ - Operators.math("floor", _tQ / 65536) * 65536);
+        putReg16(2, _tRem - Operators.math("floor", _tRem / 65536) * 65536);
+    }
+
+
+    /* ---- everything else ---------------------------------------------- *
+     * One long chain, ordered by how often real 16-bit code meets each opcode:
+     * mov first, then the branches, then the rest.
+     */
+    private void singleOp(op) { // warp
+        /* --- mov, the six forms --- */
+        if (op == 136 || op == 137) {
+            _sz = 1;
+            if (op == 137) { _sz = 2; }
+            modrm();
+            getReg8(mreg);
+            if (_sz == 2) { getReg16(mreg); }
+            putOp(_sz, v);
+            return;
+        }
+        if (op == 138 || op == 139) {
+            _sz = 1;
+            if (op == 139) { _sz = 2; }
+            modrm();
+            getOp(_sz);
+            if (_sz == 1) { putReg8(mreg, v); }
+            if (_sz == 2) { putReg16(mreg, v); }
+            return;
+        }
+        if (op == 140) {
+            modrm();
+            if (mreg < 6) {
+                putOp(2, sr.get(mreg + 1));
+            }
+            return;
+        }
+        if (op == 142) {
+            modrm();
+            getOp(2);
+            if (mreg < 6) {
+                sr.set(mreg + 1, v);
+            }
+            return;
+        }
+        if (op == 141) {                       // lea
+            modrm();
+            putReg16(mreg, ea);
+            return;
+        }
+        if (op == 161 || op == 163 || op == 160 || op == 162) {
+            f16();
+            _mOff = v;
+            phys(seg, _mOff);
+            _mAddr = v;
+            _sz = 1;
+            if (op == 161 || op == 163) { _sz = 2; }
+            if (op == 160 || op == 161) {
+                if (_sz == 1) { rdb(_mAddr); putReg8(0, v); }
+                if (_sz == 2) { rdw(_mAddr); putReg16(0, v); }
+            }
+            if (op == 162 || op == 163) {
+                getReg16(0);
+                if (_sz == 1) { wrb(_mAddr, r.get(1) % 256); }
+                if (_sz == 2) { wrw(_mAddr, v); }
+            }
+            return;
+        }
+        if (op >= 176 && op <= 191) {          // mov r8/r16, imm
+            if (op < 184) {
+                f8();
+                putReg8(op - 176, v);
+                return;
+            }
+            f16();
+            putReg16(op - 184, v);
+            return;
+        }
+        if (op == 198 || op == 199) {          // mov r/m, imm
+            _sz = 1;
+            if (op == 199) { _sz = 2; }
+            modrm();
+            if (_sz == 1) { f8(); }
+            if (_sz == 2) { f16(); }
+            putOp(_sz, v);
+            return;
+        }
+
+        /* --- the branches --- */
+        if (op >= 112 && op <= 127) {
+            cond(op - 112);
+            if (v == 1) { jumpRel8(); return; }
+            f8();
+            return;
+        }
+        if (op == 235) { jumpRel8(); return; }
+        if (op == 233) { f16(); _j = v; if (_j >= 32768) { _j = _j - 65536; } ip = (ip + _j) % 65536; return; }
+        if (op == 232) {
+            f16();
+            _j = v;
+            if (_j >= 32768) { _j = _j - 65536; }
+            getReg16(5);
+            push16(ip);
+            ip = (ip + _j) % 65536;
+            return;
+        }
+        if (op == 234) {                       // jmp far
+            f16();
+            _v0 = v;                         // the offset, saved before the pc moves
+            f16();
+            sr.set(2, v);
+            ip = _v0;
+            return;
+        }
+        if (op == 226 || op == 227 || op == 224 || op == 225) {   // loop / jcxz
+            getReg16(1);
+            _cCount = v;
+            // 0xE0 loopne, 0xE1 loope and 0xE2 loop all count down; 0xE3 jcxz
+            // only looks at what is already there
+            if (op == 224 || op == 225 || op == 226) {
+                _cCount = (_cCount + 65535) % 65536;
+                putReg16(1, _cCount);
+            }
+            cond(4);
+            _cZero = v;
+            f8();
+            _cRel = v;
+            if (_cRel >= 128) { _cRel = _cRel - 256; }
+            _take = 0;
+            if (op == 226 && _cCount != 0) { _take = 1; }
+            if (op == 225 && _cCount != 0 && _cZero == 1) { _take = 1; }
+            if (op == 224 && _cCount != 0 && _cZero == 0) { _take = 1; }
+            if (op == 227 && _cCount == 0) { _take = 1; }
+            if (_take == 1) { ip = (ip + _cRel) % 65536; }
+            return;
+        }
+
+        /* --- inc / dec / push / pop, the register forms --- */
+        if (op >= 64 && op <= 79) {
+            _i = op % 8;
+            getReg16(_i);
+            _v0 = v;
+            getFlagBit(0);
+            _cf = v;
+            if (op < 72) {
+                alu(0, _v0, 1, 2);
+            } else {
+                alu(5, _v0, 1, 2);
+            }
+            putReg16(_i, v);
+            setFlagTo(0, _cf);                 // inc/dec leave CF alone
+            return;
+        }
+        if (op >= 80 && op <= 87) {
+            getReg16(op % 8);
+            push16(v);
+            return;
+        }
+        if (op >= 88 && op <= 95) {
+            pop16();
+            putReg16(op % 8, v);
+            return;
+        }
+        if (op == 6 || op == 14 || op == 22 || op == 30) {
+            _s = 1;
+            if (op == 14) { _s = 2; }
+            if (op == 22) { _s = 3; }
+            if (op == 30) { _s = 4; }
+            push16(sr.get(_s));
+            return;
+        }
+        if (op == 7 || op == 23 || op == 31) {
+            pop16();
+            _s = 1;
+            if (op == 23) { _s = 3; }
+            if (op == 31) { _s = 4; }
+            sr.set(_s, v);
+            return;
+        }
+        if (op == 96) {                        // pusha
+            getReg16(5);
+            _sp0 = v;
+            _i = 0;
+            while (_i < 4) {
+                getReg16(_i);
+                push16(v);
+                _i += 1;
+            }
+            push16(_sp0);
+            _i = 4;
+            while (_i < 8) {
+                getReg16(_i);
+                push16(v);
+                _i += 1;
+            }
+            return;
+        }
+        if (op == 97) {                        // popa
+            _i = 7;
+            while (_i >= 1) {
+                pop16();
+                putReg16(_i, v);
+                _i -= 1;
+            }
+            pop16();                           // sp itself is thrown away
+            _i = 0;
+            while (_i >= 0) {
+                pop16();
+                putReg16(_i, v);
+                _i -= 1;
+            }
+            return;
+        }
+        if (op == 104) { f16(); push16(v); return; }
+        if (op == 106) {
+            getSignedDisp8();
+            push16(v % 65536);
+            return;
+        }
+        if (op == 143) {                       // pop r/m
+            pop16();
+            _v0 = v;
+            modrm();
+            putOp(2, _v0);
+            return;
+        }
+
+        /* --- the flag register --- */
+        if (op == 156) { push16(fl); return; }
+        if (op == 157) { pop16(); fl = v % 65536; return; }
+        if (op == 158) {                       // sahf: ah into the low flags
+            getReg8(4);
+            _v0 = v;
+            _b = _v0 % 2;
+            setFlagTo(0, _b);
+            _b = Operators.math("floor", _v0 / 4) % 2;
+            setFlagTo(2, _b);
+            _b = Operators.math("floor", _v0 / 16) % 2;
+            setFlagTo(4, _b);
+            _b = Operators.math("floor", _v0 / 64) % 2;
+            setFlagTo(6, _b);
+            _b = Operators.math("floor", _v0 / 128) % 2;
+            setFlagTo(7, _b);
+            return;
+        }
+        if (op == 159) {                       // lahf: the low flags into ah
+            _v0 = 2;
+            getFlagBit(0);
+            _v0 = _v0 + v;
+            getFlagBit(2);
+            _v0 = _v0 + v * 4;
+            getFlagBit(4);
+            _v0 = _v0 + v * 16;
+            getFlagBit(6);
+            _v0 = _v0 + v * 64;
+            getFlagBit(7);
+            _v0 = _v0 + v * 128;
+            putReg8(4, _v0);
+            return;
+        }
+        if (op == 245) { getFlagBit(0); if (v == 1) { setFlagTo(0, 0); return; } setFlagTo(0, 1); return; }
+        if (op == 248) { setFlagTo(0, 0); return; }
+        if (op == 249) { setFlagTo(0, 1); return; }
+        if (op == 250) { setFlagTo(9, 0); return; }
+        if (op == 251) { setFlagTo(9, 1); return; }
+        if (op == 252) { setFlagTo(10, 0); return; }
+        if (op == 253) { setFlagTo(10, 1); return; }
+        if (op == 244) { halted = 1; return; }
+        if (op == 144) { return; }
+        if (op >= 145 && op <= 151) {
+            _i = op % 8;
+            getReg16(0);
+            _v0 = v;
+            getReg16(_i);
+            putReg16(0, v);
+            putReg16(_i, _v0);
+            return;
+        }
+        if (op == 152) {                       // cbw
+            getReg8(0);
+            _v0 = v;
+            if (_v0 >= 128) { _v0 = _v0 - 256; }
+            putReg16(0, _v0 % 65536);
+            return;
+        }
+        if (op == 153) {                       // cwd
+            getReg16(0);
+            _v0 = 0;
+            if (v >= 32768) { _v0 = 65535; }
+            putReg16(2, _v0);
+            return;
+        }
+        if (op == 154) {                       // call far
+            f16();
+            _v0 = v;
+            f16();
+            push16(sr.get(2));
+            push16(ip);
+            sr.set(2, v);
+            ip = _v0;
+            return;
+        }
+
+        /* --- the groups --- */
+        if (op == 128 || op == 129 || op == 130 || op == 131) {
+            _sz = 1;
+            if (op == 129 || op == 131) { _sz = 2; }
+            modrm();
+            group1(_sz);
+            return;
+        }
+        if (op == 132 || op == 133) {
+            _sz = 1;
+            if (op == 133) { _sz = 2; }
+            modrm();
+            getOp(_sz);
+            _v0 = v;
+            if (_sz == 1) { getReg8(mreg); }
+            if (_sz == 2) { getReg16(mreg); }
+            alu(4, _v0, v, _sz);
+            return;
+        }
+        if (op == 134 || op == 135) {
+            _sz = 1;
+            if (op == 135) { _sz = 2; }
+            modrm();
+            getOp(_sz);
+            _v0 = v;
+            if (_sz == 1) { getReg8(mreg); }
+            if (_sz == 2) { getReg16(mreg); }
+            _v1 = v;
+            putOp(_sz, _v1);
+            if (_sz == 1) { putReg8(mreg, _v0); }
+            if (_sz == 2) { putReg16(mreg, _v0); }
+            return;
+        }
+        if (op == 246 || op == 247) {
+            _sz = 1;
+            if (op == 247) { _sz = 2; }
+            modrm();
+            group3(_sz);
+            return;
+        }
+        if (op == 254 || op == 255) {
+            _sz = 1;
+            if (op == 255) { _sz = 2; }
+            modrm();
+            group45(_sz, op);
+            return;
+        }
+        if (op == 192 || op == 193 || op == 208 || op == 209 || op == 210 || op == 211) {
+            _sz = 1;
+            if (op == 193 || op == 209 || op == 211) { _sz = 2; }
+            modrm();
+            getOp(_sz);
+            _v0 = v;
+            _n = 1;
+            if (op == 192 || op == 193) { f8(); _n = v; }
+            if (op == 210 || op == 211) { getReg8(1); _n = v; }
+            shiftOp(mreg, _v0, _n, _sz);
+            putOp(_sz, v);
+            return;
+        }
+
+        /* --- returns --- */
+        if (op == 195) { pop16(); ip = v; return; }
+        if (op == 194) {
+            f16();
+            _v0 = v;
+            pop16();
+            ip = v;
+            getReg16(5);
+            putReg16(5, v + _v0);
+            return;
+        }
+        if (op == 203) { pop16(); ip = v; pop16(); sr.set(2, v); return; }
+        if (op == 202) {
+            f16();
+            _v0 = v;
+            pop16();
+            ip = v;
+            pop16();
+            sr.set(2, v);
+            getReg16(5);
+            putReg16(5, v + _v0);
+            return;
+        }
+        if (op == 200) {                       // enter
+            f16();
+            _v0 = v;
+            f8();
+            _lvl = v % 32;
+            getReg16(5);
+            push16(v);
+            _frame = r.get(5);
+            _k = 0;
+            while (_k < _lvl) {
+                putReg16(5, r.get(5) - 2);
+                getReg16(5);
+                phys(3, v);
+                rdw(v);
+                push16(v);
+                _k += 1;
+            }
+            if (_lvl > 0) { push16(_frame); }
+            putReg16(5, _frame);
+            putReg16(4, r.get(4) - _v0);
+            return;
+        }
+        if (op == 201) {                       // leave
+            putReg16(4, r.get(5));
+            pop16();
+            putReg16(5, v);
+            return;
+        }
+        if (op == 196 || op == 197) {          // les / lds
+            modrm();
+            phys(eseg, ea);
+            rdw(v);
+            putReg16(mreg, v);
+            phys(eseg, ea + 2);
+            rdw(v);
+            if (op == 196) { sr.set(1, v); }
+            if (op == 197) { sr.set(4, v); }
+            return;
+        }
+
+        /* --- interrupts --- */
+        if (op == 205) { f8(); interrupt(v); return; }
+        if (op == 204) { interrupt(3); return; }
+        if (op == 206) {
+            getFlagBit(11);
+            if (v == 1) { interrupt(4); }
+            return;
+        }
+        if (op == 207) { iretOp(); return; }
+
+        /* --- ports --- */
+        if (op == 228 || op == 229 || op == 230 || op == 231) {
+            f8();
+            _p = v;
+            if (op == 228) { portIn(_p); putReg8(0, v); return; }
+            if (op == 229) { portIn(_p); putReg16(0, v); return; }
+            getReg8(0);
+            if (op == 231) { getReg16(0); }
+            portOut(_p, v);
+            return;
+        }
+        if (op == 236 || op == 237 || op == 238 || op == 239) {
+            getReg16(2);
+            _p = v;
+            if (op == 236) { portIn(_p); putReg8(0, v); return; }
+            if (op == 237) { portIn(_p); putReg16(0, v); return; }
+            getReg8(0);
+            if (op == 239) { getReg16(0); }
+            portOut(_p, v);
+            return;
+        }
+
+        /* --- multiply, immediate forms --- */
+        if (op == 105 || op == 107) {
+            modrm();
+            getOp(2);
+            _v0 = v;
+            if (op == 105) { f16(); _v1 = v; } else { getSignedDisp8(); _v1 = v; }
+            putReg16(mreg, (_v0 * _v1) % 65536);
+            _r = _v0 * _v1;
+            _set = 0;
+            if (_r > 65535 || _r < -32768) { _set = 1; }
+            setFlagTo(0, _set);
+            setFlagTo(11, _set);
+            return;
+        }
+
+        /* --- strings --- */
+        if (op == 164 || op == 165 || op == 166 || op == 167) {
+            stringOp(op);
+            return;
+        }
+        if (op == 170 || op == 171 || op == 172 || op == 173 || op == 174 || op == 175) {
+            stringOp(op);
+            return;
+        }
+        if (op == 168 || op == 169) {
+            _sz = 1;
+            if (op == 169) { _sz = 2; }
+            if (_sz == 1) { f8(); } else { f16(); }
+            _v0 = v;
+            getReg16(0);
+            _v1 = v;
+            if (_sz == 1) { _v1 = _v1 % 256; }
+            alu(4, _v1, _v0, _sz);
+            return;
+        }
+
+        /* --- the two-byte page --- */
+        if (op == 15) { twoByte(); return; }
+
+        /* --- daa / das: BCD adjust, for the arithmetic a real BIOS does --- */
+        if (op == 39 || op == 47) {
+            getReg8(0);
+            _v0 = v;
+            getFlagBit(0);
+            _cf = v;
+            getFlagBit(4);
+            _af = v;
+            _adj = 0;
+            _newCf = _cf;
+            if (_v0 % 16 > 9 || _af == 1) { _adj = 6; }
+            if (_v0 > 153 || _cf == 1) { _adj = _adj + 96; _newCf = 1; }
+            _lo = _v0 % 16;
+            _hi = Operators.math("floor", _v0 / 16);
+            if (_lo > 9 || _af == 1) { _lo = _lo + 6; }
+            if (_lo > 15) { _lo = _lo - 16; _hi = _hi + 1; }
+            if (_hi > 9 || _cf == 1) { _hi = _hi + 6; }
+            if (_hi > 15) { _hi = (_hi - 16) % 10; _newCf = 1; }
+            if (op == 47) {
+                _lo = _v0 % 16;
+                _hi = Operators.math("floor", _v0 / 16);
+                if (_lo > 9 || _af == 1) { _lo = _lo - 6; }
+                if (_lo < 0) { _lo = _lo + 16; _hi = _hi - 1; }
+                if (_hi > 9 || _cf == 1) { _hi = _hi - 6; }
+                if (_hi < 0) { _hi = _hi + 10; _newCf = 1; }
+            }
+            putReg8(0, _hi * 16 + _lo);
+            setFlagTo(0, _newCf);
+            putReg8(0, _hi * 16 + _lo);
+            getReg8(0);
+            szp(v, 1);
+            return;
+        }
+
+        err = join("opcode ", op, " at ", sr.get(2), ":", ip - 1);
+        halted = 1;
+    }
+
+
+    /* ---- group 4 and 5: inc/dec/call/jmp/push, and the far forms ------ */
+    private void group45(size, op) { // warp
+        _qKind = mreg;
+        if (op == 254) {
+            getOp(1);
+            _qV = v;
+            getFlagBit(0);
+            _qCf = v;
+            if (_qKind == 0) { alu(0, _qV, 1, 1); }
+            if (_qKind == 1) { alu(5, _qV, 1, 1); }
+            putOp(1, v);
+            setFlagTo(0, _qCf);
+            return;
+        }
+        if (_qKind == 0 || _qKind == 1) {
+            getOp(size);
+            _qV = v;
+            getFlagBit(0);
+            _qCf = v;
+            if (_qKind == 0) { alu(0, _qV, 1, size); }
+            if (_qKind == 1) { alu(5, _qV, 1, size); }
+            putOp(size, v);
+            setFlagTo(0, _qCf);
+            return;
+        }
+        if (_qKind == 2 || _qKind == 4) {
+            getOp(2);
+            _qV = v;
+            if (_qKind == 2) {
+                push16(ip);
+                ip = _qV;
+            } else {
+                ip = _qV;
+            }
+            return;
+        }
+        if (_qKind == 3 || _qKind == 5) {
+            getOp(2);
+            _qV = v;
+            phys(eseg, ea + 2);
+            rdw(v);
+            _qSeg = v;
+            if (_qKind == 3) {
+                push16(sr.get(2));
+                push16(ip);
+            }
+            sr.set(2, _qSeg);
+            ip = _qV;
+            return;
+        }
+        getOp(size);
+        push16(v);
+    }
+
+    /* ---- the string instructions -------------------------------------- *
+     * One element per pass. REP is a prefix on *this* instruction, not an
+     * instruction of its own: cx counts down and, for the two comparing
+     * forms, the ZF state that REPE/REPNE asked for stops the loop early.
+     */
+    private void stringOp(op) { // warp
+        _kSz = 1;
+        if (op == 165 || op == 167 || op == 171 || op == 173 || op == 175) { _kSz = 2; }
+        _kKind = 0;
+        if (op == 164 || op == 165) { _kKind = 0; }
+        if (op == 166 || op == 167) { _kKind = 1; }
+        if (op == 170 || op == 171) { _kKind = 2; }
+        if (op == 172 || op == 173) { _kKind = 3; }
+        if (op == 174 || op == 175) { _kKind = 4; }
+        getFlagBit(10);
+        _kDelta = 1;
+        if (v == 1) { _kDelta = -1; }
+        _kDelta = _kDelta * _kSz;
+        _kGo = 1;
+        while (_kGo == 1) {
+            stringOne(_kKind, _kSz, _kDelta);
+            if (rep == 0) { return; }
+            getReg16(1);
+            _kCx = (v + 65535) % 65536;
+            putReg16(1, _kCx);
+            if (_kCx == 0) { return; }
+            if (_kKind == 1 || _kKind == 4) {
+                cond(4);
+                _kZero = v;
+                if (rep == 243 && _kZero == 0) { return; }
+                if (rep == 242 && _kZero == 1) { return; }
+            }
+        }
+    }
+
+    private void stringOne(kind, size, delta) { // warp
+        getReg16(6);
+        _nSi = v;
+        getReg16(7);
+        _nDi = v;
+        phys(seg, _nSi);
+        _nSrc = v;
+        phys(1, _nDi);
+        _nDst = v;
+        if (kind == 0) {
+            if (size == 1) {
+                rdb(_nSrc);
+                wrb(_nDst, v);
+            } else {
+                rdw(_nSrc);
+                wrw(_nDst, v);
+            }
+            stringAdvance(6, delta);
+            stringAdvance(7, delta);
+            return;
+        }
+        if (kind == 1) {
+            if (size == 1) {
+                rdb(_nSrc);
+                _nA = v;
+                rdb(_nDst);
+                alu(7, _nA, v, 1);
+            } else {
+                rdw(_nSrc);
+                _nA = v;
+                rdw(_nDst);
+                alu(7, _nA, v, 2);
+            }
+            stringAdvance(6, delta);
+            stringAdvance(7, delta);
+            return;
+        }
+        if (kind == 2) {
+            getReg16(0);
+            _nA = v;
+            if (size == 1) { wrb(_nDst, _nA % 256); } else { wrw(_nDst, _nA); }
+            stringAdvance(7, delta);
+            return;
+        }
+        if (kind == 3) {
+            if (size == 1) { rdb(_nSrc); putReg8(0, v); }
+            if (size == 2) { rdw(_nSrc); putReg16(0, v); }
+            stringAdvance(6, delta);
+            return;
+        }
+        getReg16(0);
+        _nA = v;
+        if (size == 1) {
+            rdb(_nDst);
+            alu(7, _nA % 256, v, 1);
+        } else {
+            rdw(_nDst);
+            alu(7, _nA, v, 2);
+        }
+        stringAdvance(7, delta);
+    }
+
+    private void stringAdvance(which, delta) { // warp
+        getReg16(which);
+        putReg16(which, (v + delta) % 65536);
+    }
+
+    /* ---- 0F: the two-byte page ---------------------------------------- */
+    private void twoByte() { // warp
+        f8();
+        _tOp = v;
+        if (_tOp >= 128 && _tOp <= 143) {
+            f16();
+            _tRel = v;
+            if (_tRel >= 32768) { _tRel = _tRel - 65536; }
+            cond(_tOp % 16);
+            if (v == 1) { ip = (ip + _tRel) % 65536; }
+            return;
+        }
+        if (_tOp >= 144 && _tOp <= 159) {
+            modrm();
+            cond(_tOp % 16);
+            putOp(1, v);
+            return;
+        }
+        if (_tOp == 182 || _tOp == 183 || _tOp == 190 || _tOp == 191) {
+            modrm();
+            _tSz = 1;
+            if (_tOp == 183 || _tOp == 191) { _tSz = 2; }
+            getOp(_tSz);
+            _tV = v;
+            if (_tOp == 190 || _tOp == 191) {
+                if (_tSz == 1 && _tV >= 128) { _tV = _tV - 256; }
+                if (_tSz == 2 && _tV >= 32768) { _tV = _tV - 65536; }
+            }
+            putReg16(mreg, _tV % 65536);
+            return;
+        }
+        if (_tOp == 175) {                     // imul r16, r/m16
+            modrm();
+            getOp(2);
+            _tV = v;
+            getReg16(mreg);
+            _tP = v * _tV;
+            putReg16(mreg, _tP % 65536);
+            _tSet = 0;
+            if (_tP > 65535 || _tP < -32768) { _tSet = 1; }
+            setFlagTo(0, _tSet);
+            setFlagTo(11, _tSet);
+            return;
+        }
+        if (_tOp == 49) {                      // rdtsc, once there is a TSC
+            putReg16(0, steps % 65536);
+            putReg16(2, Operators.math("floor", steps / 65536) % 65536);
+            return;
+        }
+        if (_tOp == 160 || _tOp == 161 || _tOp == 168 || _tOp == 169) {
+            // 0F A0/A1 push/pop fs, 0F A8/A9 push/pop gs: the 386 has neither
+            // register, but the instruction exists and the console pushes fs
+            if (_tOp == 160) { push16(sr.get(5)); return; }
+            if (_tOp == 168) { push16(sr.get(6)); return; }
+            pop16();
+            if (_tOp == 161) { sr.set(5, v % 65536); return; }
+            sr.set(6, v % 65536);
+            return;
+        }
+        if (_tOp == 162) {                     // cpuid: say what we are
+            cpuId();
+            return;
+        }
+        err = join("2-byte opcode ", _tOp, " at ", sr.get(2), ":", ip - 2);
+        halted = 1;
+    }
+
+    /* ---- cpuid -------------------------------------------------------- *
+     * A 386 does not have cpuid, and a real one raises #UD on it. This machine
+     * answers instead, because the question "which CPU are you" is the first
+     * one an OS asks, and an honest answer is more useful than a fault.
+     */
+    private void cpuId() { // warp
+        getReg16(0);
+        _leaf = v;
+        if (_leaf == 0) {
+            putReg16(0, 1);                    // the highest leaf
+            putReg16(3, 0x756E6547);           // 'Genu'
+            putReg16(1, 0x49656E69);           // 'ineI'
+            putReg16(2, 0x6C65746E);           // 'ntel'
+            return;
+        }
+        if (_leaf == 1) {
+            putReg16(0, 0x0403);               // family 4, model 0, stepping 3
+            putReg16(3, 0x0000);
+            putReg16(1, 0x0000);
+            putReg16(2, 0x0000);
+            return;
+        }
+        putReg16(0, 0);
+        putReg16(1, 0);
+        putReg16(2, 0);
+        putReg16(3, 0);
+    }
+
+}

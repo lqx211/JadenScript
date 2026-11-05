@@ -1,0 +1,37 @@
+#enable_feature<commentMetadata>;
+#enable_feature<useTempVariables>;
+
+import "rules_data/scores.jsa";
+import "rules_data/names.jsl";
+import "rules_data/greeting.jsv" as Greeting;
+
+player: x=0, y=0, size=100, direction=90, show=1;
+
+class player {
+    public score = 0;
+    private highScore = 0;
+
+    public init {
+        Looks.say(Greeting);
+        Pen.eraseAll();
+        Pen.setPenSize(3);
+    }
+
+    public void Player.tick(){
+        private _next = score + 1;
+        score = _next;
+        if (score > highScore){
+            highScore = score;
+        }
+        Piano.notes.add(score);
+        Motion.x = -200 + score*10;
+        Motion.y = names.length()*10;
+    }
+
+    public void greenFlag(){
+        score = 0;
+        for (i=1, i<=scores.length(), i++){
+            Piano.notes.add(scores.get(i));
+        }
+    }
+}

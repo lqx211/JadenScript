@@ -1,0 +1,76 @@
+/*
+ * input — the 8042's key matrix.
+ *
+ * A real board has a chip between the keys and the CPU: the 8042 scans the
+ * matrix and hands the CPU one scan code at a time. This does the same. It polls
+ * the keys TurboWarp knows about and pushes a **set-1 make code** into the
+ * controller's output buffer, which is exactly what the BIOS's table at
+ * `keymap` is indexed by.
+ *
+ * Only make codes are sent. A set-1 break is the same code with bit 7 set, and
+ * the BIOS in this step reads one byte on demand and does not track key-up, so
+ * a break code would look like an unmapped key. That is a limitation of the
+ * firmware, not of the controller, and it goes away when the BIOS grows a
+ * keyboard buffer.
+ */
+
+public K.names = ["escape", "1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "-", "=",
+    "backspace", "tab", "q", "w", "e", "r", "t", "y", "u", "i", "o", "p", "[", "]",
+    "enter", "control", "a", "s", "d", "f", "g", "h", "j", "k", "l", ";", "'", "`",
+    "shift", "\\", "z", "x", "c", "v", "b", "n", "m", ",", ".", "/", "space",
+    "up arrow", "down arrow", "left arrow", "right arrow", "delete"];
+public K.codes = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13,
+    14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27,
+    28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41,
+    42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 57,
+    72, 80, 75, 77, 83];
+public K.ext = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    1, 1, 1, 1, 1];
+public K.count = 59;
+public K.down = [];
+public K.last = "";
+
+class Input {
+    public void inputStart() { // hook: green flag
+        Looks.hide();
+        K.down.clear();
+        _i = 1;
+        while (_i <= K.count) {
+            K.down.add(0);
+            _i += 1;
+        }
+        K.ready = 1;
+        while (1) {
+            scanKeys();
+            Control.wait(0);
+        }
+    }
+
+    private void scanKeys() { // warp
+        _i = 1;
+        while (_i <= K.count) {
+            _name = K.names.get(_i);
+            _now = Sensing.isKeyPressed(_name);
+            _was = K.down.get(_i) + 0;
+            if (_now && _was == 0) {
+                _code = K.codes.get(_i) + 0;
+                if (K.ext.get(_i) == 1) {
+                    K.fifo.add(224);       // the 0xE0 of a set-1 extended key
+                }
+                K.fifo.add(_code);
+                X.port60 = _code;
+                X.port64 = 1;
+                K.last = _name;
+            }
+            if (_now) {
+                K.down.set(_i, 1);
+            } else {
+                K.down.set(_i, 0);
+            }
+            _i += 1;
+        }
+    }
+}

@@ -1,0 +1,33 @@
+# python / node
+__pycache__/
+*.pyc
+*.egg-info/
+node_modules/
+.DS_Store
+
+# build products
+build/
+*.sb3
+*.sb3.zip
+*.jsa.tmp
+
+# generated next to the sources
+userspace/*/*.bin
+userspace/*/*.lst
+userspace/*/*.elf
+userspace/*/*.img
+
+# vendored third-party trees and multi-hundred-MB project assets
+scratch-vm-develop/
+userspace/linux/
+userspace/wem_np4_26b4/
+userspace/wem_np4_26b5/
+userspace/i386_example/
+
+# example-project media (hundreds of MB of wav/mp3 and a RAM dump)
+assets/lists/RAM.jsa
+assets/*.wav
+assets/*.mp3
+sample_np4.26_sb3.zip
+sample_np4.26_sb3/
+wem_example/src/lib/*.js
