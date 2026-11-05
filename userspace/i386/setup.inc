@@ -57,7 +57,9 @@ SU_VAL   equ 20                     ; the value column
 ;
 ; `al` comes back as 1 when the user asked for setup. The wait is a counted
 ; loop, not a clock: this firmware has no timer of its own yet, and a counted
-; delay is the honest description of "about a second on the machine it runs on".
+; delay is the honest description of "about a second on the machine it runs
+; on". Delete and F2 open the utility; any other key boots at once, which is
+; also how the boot tests skip the wait.
 ; ---------------------------------------------------------------------------
 suWindow:
     push    bx
@@ -68,7 +70,7 @@ suWindow:
     ; long enough to hold DEL through now that the machine runs at about a
     ; million instructions a second: a key pressed before the prompt is in the
     ; 8042's buffer, and the first poll takes it
-    mov     cx, 40000
+    mov     cx, 500000
 .wait:
     in      al, 0x64
     test    al, 1
@@ -78,6 +80,9 @@ suWindow:
     je      .yes
     cmp     al, 0x3C                ; F2
     je      .yes
+    ; any other key means "get on with it", the way a real board does
+    xor     al, al
+    jmp     .out
 .next:
     loop    .wait
     xor     al, al

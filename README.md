@@ -180,6 +180,20 @@ docs/            format notes, roadmap, generated opcode reference
 examples/        hello.jsw, demo.jsw, assets_demo.jsw, rules_demo.jsw + assets/, hello/, rules_data/
 ```
 
+## Version control
+
+The sources are in git; `build/`, `userspace/*/*.bin|.lst|.elf|.img` and every
+`.sb3` are outputs and stay out of it. The large example projects under
+`userspace/` (`linux/`, `wem_np4_26b4/`, `wem_np4_26b5/`, `i386_example/`) and
+the sample media in `assets/` are ignored too -- they are hundreds of megabytes
+of somebody else's project, not this one's source.
+
+```
+git log --oneline          # what changed
+make i386                  # nasm + image + sb3
+python3 -m unittest tests.test_i386
+```
+
 ## Documentation
 
 * [`syntax.md`](./syntax.md) — the language reference and lowering table.

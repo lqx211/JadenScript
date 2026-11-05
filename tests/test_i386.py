@@ -25,6 +25,9 @@ def boot(limit: int = 300_000, cores: int = 1) -> rv.Machine:
     mach = rv.Machine()
     mach.ram[:] = i386_image.build()
     mach.cores = cores
+    # POST waits half a second for Delete; any other key boots at once, so a
+    # space keeps these tests off the wait without opening the utility
+    mach.keys.append(0x39)
     mach.sreg[rv.SEG_CS] = rv.RESET_CS
     mach.eip = rv.RESET_IP
     mach.run(limit=limit)
@@ -33,6 +36,18 @@ def boot(limit: int = 300_000, cores: int = 1) -> rv.Machine:
 
 class I386BootTests(unittest.TestCase):
     """Power-on, POST, int 19h, and a boot sector that calls back into the ROM."""
+
+    def test_any_other_key_skips_the_setup_wait(self) -> None:
+        """POST waits half a second for Delete; a space gets on with the boot."""
+        quick = boot()                                  # boot() presses space
+        self.assertIn("Booting from disk 0x80", quick.text())
+        slow = rv.Machine()
+        slow.ram[:] = i386_image.build()
+        slow.sreg[rv.SEG_CS] = rv.RESET_CS
+        slow.eip = rv.RESET_IP
+        slow.run(limit=120_000)                         # still inside the wait
+        self.assertIn("Press DEL or F2", slow.text())
+        self.assertNotIn("Booting from disk", slow.text())
 
     def test_post_prints_what_it_found(self) -> None:
         mach = boot(limit=300_000)
@@ -171,22 +186,31 @@ class I386UnitTests(unittest.TestCase):
 class I386SetupTests(unittest.TestCase):
     """The setup screen: a key press, a changed byte, and a POST that reads it."""
 
-    def _setup(self, keys: list[int], limit: int = 2_000_000):
+    def _setup(self, keys: list[int], limit: int = 8_000_000,
+               settle: int = 900_000):
+        """Boot to setup, feed the keys, and let one redraw finish.
+
+        The model is a Python interpreter, so a key costs what the machine
+        spends on a repaint: the budget has to be generous, but it stops as
+        soon as the last key is taken and the screen settles.
+        """
         mach = rv.Machine()
         mach.ram[:] = i386_image.build()
         mach.keys.extend(keys)
         mach.sreg[rv.SEG_CS] = rv.RESET_CS
         mach.eip = rv.RESET_IP
-        mach.run(limit=limit)
+        while mach.keys and mach.steps < limit:
+            mach.run(limit=min(limit, mach.steps + 250_000))
+        mach.run(limit=mach.steps + settle)
         return mach
 
     def test_delete_opens_it_on_the_main_page(self) -> None:
         mach = self._setup([0x53])                     # Delete
         screen = mach.text()
         self.assertIn("JSW BIOS Setup Utility", screen)
-        self.assertIn(" Main ", screen)
-        self.assertIn(" Info ", screen)
-        self.assertIn(" Exit ", screen)
+        tabs = screen.split("\n")[1]          # the tabs sit in the top border
+        for name in ("Main", "Info", "Exit"):
+            self.assertIn(name, tabs)
         self.assertIn("Base memory", screen)
         self.assertIn("Battery: OK", screen)
 
