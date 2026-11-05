@@ -6,20 +6,23 @@
 ; That is what this is -- and every value it edits lives in the CMOS, so the
 ; screen is not a mock-up, it is the same bytes POST reads.
 ;
-; Layout, the classic three-band screen:
+; Layout -- the rv64 setup's, which is what a SeaBIOS-era screen looks like:
+; a title bar, then a double-line frame with the pages written into its top
+; border, the settings on the left and a panel that explains the selected one
+; on the right.
 ;
-;   +------------------------------------------------------------------+
-;   |                        JSW BIOS Setup Utility                    |
-;   +------------------------------------------------------------------+
-;   |  Month          01                                               |
-;   |  ...                                                             |
-;   +------------------------------------------------------------------+
-;   |  Up/Down selects   Left/Right changes   F10 saves   Esc leaves   |
-;   +------------------------------------------------------------------+
+;   JSW BIOS Setup Utility                                     v0.3
+;   ╔═ Main ═══ Info ══ Exit ══════════════════╦══════════════════════╗
+;   ║ Settings                                 ║ Month                ║
+;   ║ Month             01                     ║ The clock's month... ║
+;   ...
+;   ╚══════════════════════════════════════════╩══════════════════════╝
+;     Battery: OK                             Boots: 01
+;     ^/v select  </> page  Enter edit  F10 save  Esc exit
 ;
 ; Keys arrive from the 8042 as set-1 scan codes: 48/50 up/down, 4B/4D
-; left/right, 44 F10, 01 Esc, 53 Del, 3C F2. There are no release codes in this
-; machine yet, so one press is one event.
+; left/right, 1C Enter, 44 F10, 01 Esc, 0E Backspace, 53 Del, 3C F2. There are
+; no release codes in this machine yet, so one press is one event.
 ; ---------------------------------------------------------------------------
 
 SU_BUF   equ 0x500                  ; the working copy: 16 bytes in the data area
