@@ -533,11 +533,17 @@ suEnter:
 .moved:
     ; two rows and the panel, not the whole screen: a full repaint is nearly
     ; two thousand characters and the arrow keys come faster than that
+    cmp     byte [es:SU_TAB], 0
+    jne     .movedpage
     mov     al, cl
     call    suDrawRow
     mov     al, [es:SU_ITEM]
     call    suDrawRow
     call    suPanelTop
+    jmp     .key
+.movedpage:
+    ; the exit page has its own painter for its two bars
+    call    pageExit
     jmp     .key
 
 .left:
@@ -1165,13 +1171,13 @@ pageExit:
     call    suPrint
     ; what each one does
     mov     dl, 47
-    mov     dh, 4
+    mov     dh, 3
     call    suGoto
     mov     si, msg_su_savehelp
     mov     bl, SU_PAPER
     call    suPrint
     mov     dl, 47
-    mov     dh, 7
+    mov     dh, 5
     call    suGoto
     mov     si, msg_su_discardhelp
     mov     bl, SU_PAPER

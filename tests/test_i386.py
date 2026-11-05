@@ -250,6 +250,20 @@ class I386SetupTests(unittest.TestCase):
         mach = self._setup(keys)
         self.assertEqual(mach.cmos[0x31], 0xA5, "the setup checksum was written")
 
+    def test_the_exit_page_keeps_its_own_rows(self) -> None:
+        mach = self._setup([0x53, 0x4D, 0x4D, 0x50])   # Del, Right x2, Down
+        screen = mach.text()
+        self.assertIn("Save and exit", screen)
+        self.assertIn("Discard and exit", screen)
+        self.assertNotIn("Month", screen, "the exit page repainted itself")
+
+    def test_discard_and_exit_boots_and_writes_nothing(self) -> None:
+        keys = [0x53, 0x50, 0x50, 0x1C, 0x4D, 0x1C]   # Year -> 2026, kept
+        keys += [0x4D, 0x4D, 0x50, 0x1C]               # Exit, Discard, Enter
+        mach = self._setup(keys)
+        self.assertEqual(mach.cmos[0x09], 0x25, "the year was not written")
+        self.assertIn("Booting from disk 0x80", mach.text())
+
     def test_escape_asks_before_it_leaves(self) -> None:
         mach = self._setup([0x53, 0x01])               # Del, Esc
         screen = mach.text()
