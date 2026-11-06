@@ -885,8 +885,10 @@ class I386JswTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         import subprocess
 
-        out = ROOT / "build" / "i386" / "i386.sb3"
-        back = ROOT / "build" / "i386" / "i386.back.jsw"
+        # `i386.sb3` is the artifact that ships, so the tests build beside it:
+        # they need the list-RAM variant, and must not overwrite the real one.
+        out = ROOT / "build" / "i386" / "i386-test.sb3"
+        back = ROOT / "build" / "i386" / "i386-test.back.jsw"
         # no --target: the simulator has no extensions, so this is the build
         # that keeps RAM in a list. The two builds differ in how memory is
         # held, not in what the CPU does, which is what is compared here.

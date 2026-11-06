@@ -29,8 +29,10 @@ import i386_image  # noqa: E402
 import i386_ref as ref  # noqa: E402
 import jsw_sim  # noqa: E402
 
-BUILD = ROOT / "build" / "i386" / "i386.sb3"
-DECOMPILED = ROOT / "build" / "i386" / "i386.back.jsw"
+#: beside the shipped artifact, never on top of it: what ships is the TurboWarp
+#: build with the memory extension, and this harness needs the list build.
+BUILD = ROOT / "build" / "i386" / "i386-test.sb3"
+DECOMPILED = ROOT / "build" / "i386" / "i386-test.back.jsw"
 
 
 def prepare(target: str | None = None) -> None:

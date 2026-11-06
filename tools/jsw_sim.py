@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Run a decompiled JSW project in Python, so a Scratch program can be tested.
 
-    python3 tools/jsw_sim.py build/i386/i386.sb3 --entry Cpu.greenFlag --budget 200000
+    python3 tools/jsw_sim.py build/i386/i386-test.sb3 --entry Cpu.greenFlag --budget 200000
 
 The input is the *decompiled* source, which is what the .sb3 actually contains:
 `jswc decompile` turns blocks back into statements, so simulating it is testing
