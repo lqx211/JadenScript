@@ -28,9 +28,11 @@
 
 SU_BUF   equ 0x500                  ; the working copy: 16 bytes in the data area
 SU_ITEM  equ 0x510                  ; which row is selected
-SU_TAB   equ 0x50C                  ; which page: 0 Main, 1 Info, 2 Exit
-SU_OLD   equ 0x50D                  ; the value before an edit, for Esc
-SU_OPT   equ 0x50E                  ; which button the exit prompt has lit
+; these three used to live inside SU_BUF (0x50C..0x50E), which was fine while
+; the buffer only had eleven rows. It has fifteen now, so they moved out.
+SU_TAB   equ 0x511                  ; which page: 0 Main, 1 Info, 2 Exit
+SU_OLD   equ 0x512                  ; the value before an edit, for Esc
+SU_OPT   equ 0x513                  ; which button the exit prompt has lit
 SU_N     equ 11                     ; how many rows (the last is read-only)
 
 ; attribute bytes. White on blue, not grey on blue: a 720 x 400 screen that is
@@ -277,6 +279,13 @@ suLoad:
     mov     al, 2                   ; 33 MHz, the number on the crystal
 .frq_ok:
     mov     [es:SU_BUF + 13], al
+    mov     al, 0x37                ; the keyboard's repeat rate
+    call    cmos_read
+    cmp     al, 4
+    jbe     .rep_ok
+    mov     al, 2                   ; 1/8 s, the one that feels like a PC
+.rep_ok:
+    mov     [es:SU_BUF + 14], al
     mov     al, 0x15                ; base memory, low
     call    cmos_read
     mov     bl, al
@@ -368,6 +377,10 @@ suSave:
     mov     al, [es:SU_BUF + 13]
     mov     cl, al
     mov     al, 0x36
+    call    cmos_write
+    mov     al, [es:SU_BUF + 14]
+    mov     cl, al
+    mov     al, 0x37
     call    cmos_write
     ; a checksum a real board keeps, so the battery can be declared good
     mov     al, 0x31
@@ -555,6 +568,36 @@ suAdjust:
 .b_done:
     jmp     .store
 .not_boot:
+    cmp     bl, 10
+    jne     .not_emusw
+    jmp     .memrow                  ; the core count: 0..10, and read-only
+.not_emusw:
+    cmp     bl, 11
+    jb      .memrow                  ; base memory has the same outer range
+    cmp     bl, 12
+    ja      .not_onoff
+    ; the two switches: On and Off, wrapping
+    add     al, dl
+    cmp     al, 2
+    jb      .sw_ok
+    xor     al, al
+.sw_ok:
+    cmp     al, 0
+    jge     .store
+    mov     al, 1
+    jmp     .store
+.not_onoff:
+    ; the clock and the repeat rate: five entries each, wrapping
+    add     al, dl
+    cmp     al, 5
+    jb      .en_ok
+    xor     al, al
+.en_ok:
+    cmp     al, 0
+    jge     .store
+    mov     al, 4
+    jmp     .store
+.memrow:
     ; base memory: the buffer counts 64 KiB steps, the outer range is 0..10
     add     al, dl
     cmp     al, 10
@@ -2051,7 +2094,7 @@ suValue:
     mov     bl, al
     mov     si, bx                  ; si = the row, for the buffer and the tables
     mov     al, [es:SU_BUF + si]    ; the value, 0..99
-    cmp     ah, 13
+    cmp     ah, 14
     jbe     .known
     jmp     .done                   ; no such row
 .known:
@@ -2101,6 +2144,13 @@ suValue:
     call    suPrint
     jmp     .done
 .not_freq:
+    cmp     si, 14
+    jne     .not_repeat
+    mov     si, [di + su_krepeat]
+    mov     bl, [es:SU_INK]
+    call    suPrint
+    jmp     .done
+.not_repeat:
     cmp     si, 6
     jne     .not_flop
     mov     si, [di + su_floppy]
@@ -2297,18 +2347,18 @@ su_row_cpu:     db "CPU cores", 0
 su_labels:
     dw su_row_month, su_row_day, su_row_year, su_row_hour, su_row_min
     dw su_row_sec, su_row_flop, su_row_disk, su_row_boot, su_row_mem
-    dw su_row_cpu, su_row_emu, su_row_batt, su_row_freq
+    dw su_row_cpu, su_row_emu, su_row_batt, su_row_freq, su_row_repeat
 
 ; the detail panel: two short lines per item, the way a setup utility explains
 ; the row that is selected
 su_d1:
     dw su_h_month_a, su_h_day_a, su_h_year_a, su_h_hour_a, su_h_min_a
     dw su_h_sec_a, su_h_flop_a, su_h_disk_a, su_h_boot_a, su_h_mem_a
-    dw su_h_cpu_a, su_h_emu_a, su_h_batt_a, su_h_freq_a
+    dw su_h_cpu_a, su_h_emu_a, su_h_batt_a, su_h_freq_a, su_h_rep_a
 su_d2:
     dw su_h_month_b, su_h_day_b, su_h_year_b, su_h_hour_b, su_h_min_b
     dw su_h_sec_b, su_h_flop_b, su_h_disk_b, su_h_boot_b, su_h_mem_b
-    dw su_h_cpu_b, su_h_emu_b, su_h_batt_b, su_h_freq_b
+    dw su_h_cpu_b, su_h_emu_b, su_h_batt_b, su_h_freq_b, su_h_rep_b
 
 su_h_month_a: db "The clock's month at boot.", 0
 su_h_month_b: db "CMOS keeps it in BCD.", 0
@@ -2342,6 +2392,18 @@ su_h_freq_b:  db "It wanders around this value.", 0
 su_row_emu:   db "Emulation", 0
 su_row_batt:  db "BIOS Battery", 0
 su_row_freq:  db "CPU Frequency", 0
+su_row_repeat: db "Key Repeat", 0
+
+su_h_rep_a:   db "How often a held key repeats.", 0
+su_h_rep_b:   db "The delay before it starts is 2/5 s.", 0
+
+su_kr_0:      db "1/2 s", 0
+su_kr_1:      db "1/4 s", 0
+su_kr_2:      db "1/8 s", 0
+su_kr_3:      db "1/16 s", 0
+su_kr_4:      db "1/24 s", 0
+su_krepeat:
+    dw su_kr_0, su_kr_1, su_kr_2, su_kr_3, su_kr_4
 
 su_on_0:      db "Off", 0
 su_on_1:      db "On", 0

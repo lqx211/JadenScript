@@ -173,16 +173,21 @@ public X.cpuBasePort = 1448;     // 0x5A8, write: the clock the board should kee
 public X.emuMasterPort = 1449;   // 0x5A9, write: 0 turns the emulation off
 public X.emuOn = 1;
 public X.cpuBase = 33;
+/* The keyboard's typematic rate, in milliseconds: how often a held key repeats
+ * once the delay has passed. 0 turns the repeat off. Port 0x5AA carries it in
+ * units of 10 ms, because a byte cannot hold half a second. */
+public X.keyRepeatPort = 1450;   // 0x5AA, write: repeat interval in 10 ms units
+public X.keyRepeat = 120;
 public X.coreUsage = [0, 0, 0, 0, 0, 0, 0, 0];
-public X.coreMHz = [33, 33, 33, 33, 33, 33, 33, 33];
+public X.coreMHz = [0, 0, 0, 0, 0, 0, 0, 0];   // measured MHz, updated twice a second
 public X.core1Usage = 0;
-public X.core1MHz = 33;
+public X.core1MHz = 0;
 public X.core2Usage = 0;
-public X.core2MHz = 33;
+public X.core2MHz = 0;
 public X.core3Usage = 0;
-public X.core3MHz = 33;
+public X.core3MHz = 0;
 public X.core4Usage = 0;
-public X.core4MHz = 33;
+public X.core4MHz = 0;
 /* what the monitor shows: core 1 copies its own state here once a frame */
 public X.monSteps = 0;
 public X.monIp = 0;
@@ -247,6 +252,10 @@ class Cpu {
     private ea = 0;
     private eseg = 4;
     private coreId = 1;
+    /* the hardware monitor's stopwatch: instructions retired since `hwAt`
+       seconds, so the clock the board reports is measured, not invented */
+    private hwAt = 0;
+    private hwSteps = 0;
     /* the fetch buffer: one Scratch list read serves four instruction bytes,
        and the ROM is where instructions live. `fbAddr` is the aligned physical
        address of the cached word; -1 means empty. */
@@ -421,6 +430,10 @@ class Cpu {
         X.cmos.set(49, 0x00);        // 0x30 boot counter
         X.cmos.set(50, 0x00);        // 0x31 POST result
         X.cmos.set(51, 0x20);        // 0x32 century
+        X.cmos.set(53, 1);           // 0x34 emulation: on
+        X.cmos.set(54, 1);           // 0x35 battery: fitted
+        X.cmos.set(55, 2);           // 0x36 CPU frequency: 33 MHz
+        X.cmos.set(56, 2);           // 0x37 key repeat: 1/8 s
         X.cmosReady = 1;
         X.rtcSeconds = 0;
     }
@@ -518,35 +531,68 @@ class Cpu {
      * a core hops between waiting for the timer and a full batch of work, and
      * an unsmoothed number flickers between nothing and everything.
      *
-     * The clock is the emulated part: the cores all run at the speed they run
-     * at, and the board reports the frequency the setup utility asked for, with
-     * a small wander either side of it -- the way a real board's reported clock
-     * is never quite the number on the crystal. */
+     * The clock is measured, not made up: instructions retired divided by the
+     * wall clock that passed, in MHz. That is what this machine actually is --
+     * a few instructions at a time -- and the number moves when the screen gets
+     * busy or a core goes idle, which is exactly what a hardware monitor is
+     * for. The setup's "CPU Frequency" is the nominal on the box, and the
+     * monitor page prints both. */
     private void reportCore(done) { // warp
         _pct = Operators.math("round", done * 100 / X.batch);
         if (_pct > 100) { _pct = 100; }
         _old = X.coreUsage.get(coreId) + 0;
         _pct = Operators.math("round", (_old * 3 + _pct) / 4);
         X.coreUsage.set(coreId, _pct);
-        _mhz = 0;
-        if (X.emuOn > 0) {
-            _mhz = X.cpuBase + Operators.random(-1, 1);
-        }
-        X.coreMHz.set(coreId, _mhz);
         if (coreId == 1) {
             X.core1Usage = _pct;
-            X.core1MHz = _mhz;
         }
         if (coreId == 2) {
             X.core2Usage = _pct;
-            X.core2MHz = _mhz;
         }
         if (coreId == 3) {
             X.core3Usage = _pct;
-            X.core3MHz = _mhz;
         }
         if (coreId == 4) {
             X.core4Usage = _pct;
+        }
+        measureClock();
+    }
+
+    /* The stopwatch. Half a second of wall clock is long enough that the count
+     * is not noise and short enough that the number still moves; the reading is
+     * the instructions that were retired in that window over that window. */
+    private void measureClock() { // warp
+        _now = Sensing.timer();
+        if (hwAt == 0) {
+            hwAt = _now;
+            hwSteps = steps;
+            return;
+        }
+        _dt = _now - hwAt;
+        if (_dt < 0.5) {
+            return;
+        }
+        _done = steps - hwSteps;
+        hwAt = _now;
+        hwSteps = steps;
+        if (_done < 1) {
+            return;                     // a halted core keeps the speed it last ran at
+        }
+        _mhz = 0;
+        if (X.emuOn > 0) {
+            _mhz = Operators.math("round", _done / _dt / 10000) / 100;
+        }
+        X.coreMHz.set(coreId, _mhz);
+        if (coreId == 1) {
+            X.core1MHz = _mhz;
+        }
+        if (coreId == 2) {
+            X.core2MHz = _mhz;
+        }
+        if (coreId == 3) {
+            X.core3MHz = _mhz;
+        }
+        if (coreId == 4) {
             X.core4MHz = _mhz;
         }
     }
@@ -1071,7 +1117,10 @@ class Cpu {
         if (p == 1016) { v = 96; return; }
         if (p == 1021) { v = 96; return; }
         if (p == X.coreUsagePort) { v = X.coreUsage.get(X.coreSel) + 0; return; }
-        if (p == X.coreMHzPort) { v = X.coreMHz.get(X.coreSel) + 0; return; }
+        if (p == X.coreMHzPort) {
+            v = Operators.math("round", (X.coreMHz.get(X.coreSel) + 0) * 10);
+            return;
+        }
         if (p == X.dispViewPort) { v = X.dispViewCols; return; }
         if (p == X.dispRowsPort) { v = X.dispViewRows; return; }
         if (p == X.coreCountPort) { v = X.cores; return; }
@@ -1108,6 +1157,10 @@ class Cpu {
         }
         if (p == X.emuMasterPort) {
             X.emuOn = _oV;
+            return;
+        }
+        if (p == X.keyRepeatPort) {
+            X.keyRepeat = _oV * 10;
             return;
         }
         if (p == X.coreReleasePort) {

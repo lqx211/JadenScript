@@ -341,7 +341,8 @@ class I386SetupTests(unittest.TestCase):
     TO_HW = [0x50] * 17
     TO_EMU_SWITCH = [0x50] * 18
     TO_FREQ = [0x50] * 20
-    TO_MONITOR = [0x50] * 21
+    TO_REPEAT = [0x50] * 21
+    TO_MONITOR = [0x50] * 22
 
     def test_the_hw_emulation_group_lists_what_the_board_pretends(self) -> None:
         screen = self._setup([self.F2] + self.TO_HW).text()
@@ -350,7 +351,8 @@ class I386SetupTests(unittest.TestCase):
         self.assertIn("Emulation is the master switch.", screen)
         # each child is a page of its own, titled with its own name
         for downs, title in ((18, "Emulation"), (19, "BIOS Battery"),
-                             (20, "CPU Frequency"), (21, "Hardware Monitor")):
+                             (20, "CPU Frequency"), (21, "Key Repeat"),
+                             (22, "Hardware Monitor")):
             page = self._setup([self.F2] + [0x50] * downs).text()
             self.assertIn(title, page.splitlines()[0] + page)
 
@@ -365,6 +367,16 @@ class I386SetupTests(unittest.TestCase):
         self.assertIn("usage", screen)
         self.assertIn("MHz", screen)
         self.assertIn("Emulation is on.", screen)
+
+    def test_the_key_repeat_rate_reaches_the_keyboard(self) -> None:
+        """The setup stores a choice; the keyboard gets a time. Half a second
+        does not fit in a byte of port 0x5AA, so the port speaks in 10 ms
+        units and the ROM keeps the table."""
+        keys = ([self.F2] + self.TO_REPEAT
+                + [self.ENTER, self.RIGHT, self.ENTER, self.ESC, self.ENTER])
+        mach = self._setup(keys)
+        self.assertEqual(mach.cmos[0x37], 0x03, "1/16 s, one entry up from 1/8")
+        self.assertEqual(mach.key_repeat, 60, "and the keyboard was told, in ms")
 
     def test_the_emulation_switch_reaches_the_chipset(self) -> None:
         """Off is a CMOS byte, and the chipset hears about it at POST: the

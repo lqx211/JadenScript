@@ -89,6 +89,7 @@ CMOS_DEFAULTS = {
     0x34: 0x01,          # emulation: on, so the board has a clock to report
     0x35: 0x01,          # battery: fitted
     0x36: 0x02,          # CPU frequency: 33 MHz, the setup's table entry 2
+    0x37: 0x02,          # key repeat: 1/8 s, the entry that feels like a PC
 }
 
 
@@ -409,6 +410,7 @@ class Machine:
         self.core_sel = 1
         self.cpu_base = 33
         self.emu_on = 1
+        self.key_repeat = 120             # ms between repeats of a held key
         self.core_run = [0] * 16
         self.cmos = bytearray(128)
         self.cmos_index = 0
@@ -571,8 +573,12 @@ class Machine:
             return self.cores
         if port == 0x5A6:                 # the core selected on 0x5A5
             return self.core_usage(self.core_sel)
-        if port == 0x5A7:                 # ... and the clock it reports
-            return self.cpu_base if self.emu_on else 0
+        if port == 0x5A7:                 # ... and the clock it reports, in
+            # tenths of a MHz. The model has no wall clock to divide by, so it
+            # answers with the figure the real machine measures on this host --
+            # a couple of million instructions a second -- rather than with a
+            # number it cannot know.
+            return 25 if self.emu_on else 0
         if port == 0x5A3:                 # the card: cells across the stage
             return self.view_cols
         if port == 0x5A4:                 # ... and cells down
@@ -636,6 +642,9 @@ class Machine:
             return
         if port == 0x5A9:                 # the emulation master switch
             self.emu_on = value & 0x01
+            return
+        if port == 0x5AA:                 # key repeat, in units of 10 ms
+            self.key_repeat = (value & 0xFF) * 10
             return
         if port == 0xCF9:                 # the reset control register
             if value & 0x04:              # SYS_RST: start again from the ROM

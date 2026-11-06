@@ -36,7 +36,7 @@ GX_COL   equ 0x527                  ; ... and the column
 GX_LINE  equ 0x528                  ; ... and the line of a detail being printed
 GX_EXP   equ 0x5A0                  ; one byte per node: a group is open at 1
 GX_VIS   equ 0x5C0                  ; 32 bytes: the node index of each visible row
-GX_NODES equ 30
+GX_NODES equ 31
 GX_LIVE  equ 0xFFFF                 ; a page that reads the hardware, not the ROM
 
 GX_TOP_I equ 1                      ; the outer frame's first row inside
@@ -786,7 +786,20 @@ gxMonitor:
     call    putn
     mov     si, msg_hw_pct
     call    suPrint
+    ; the clock arrives in tenths of a MHz, and gets a decimal point
     mov     al, bh
+    xor     ah, ah
+    mov     cl, 10
+    div     cl                      ; al = MHz, ah = tenths
+    push    ax
+    xor     ah, ah
+    call    putn
+    pop     ax
+    push    ax
+    mov     al, '.'
+    call    putc
+    pop     ax
+    mov     al, ah
     xor     ah, ah
     call    putn
     mov     si, msg_hw_mhz
@@ -801,17 +814,29 @@ gxMonitor:
     inc     dh
     call    suGoto
     mov     si, msg_hw_all
-    mov     bl, SU_PAPER
+    call    suPrint
+    ; the nominal, which is what the setup utility says, beside the measured
+    ; figure above -- the two are not the same number, and that is the point
+    mov     al, 0x36
+    call    cmos_read
+    cmp     al, 4
+    jbe     .nom
+    mov     al, 2
+.nom:
+    xor     ah, ah
+    mov     si, ax
+    mov     al, [cs:hw_mhz + si]
+    xor     ah, ah
+    call    putn
+    mov     si, msg_hw_nom
     call    suPrint
     mov     dx, 0x5A9
-    xor     al, al
     in      al, dx
     mov     si, msg_hw_off
     test    al, al
     jz      .say
     mov     si, msg_hw_on
 .say:
-    mov     bl, SU_PAPER
     call    suPrint
     pop     si
     pop     dx
@@ -984,6 +1009,7 @@ gx_nodes:
     NODE 1, KIND_EDIT | 11,         msg_gx_emusw,    gx_d_emusw
     NODE 1, KIND_EDIT | 12,         msg_gx_batt,     gx_d_batt
     NODE 1, KIND_EDIT | 13,         msg_gx_freq,     gx_d_freq
+    NODE 1, KIND_EDIT | 14,         msg_gx_repeat,   gx_d_repeat
     NODE 1, 0,                      msg_gx_hwmon,    gx_d_hwmon
     NODE 0, 0,                      msg_gx_video,    gx_d_video
     NODE 0, 0,                      msg_gx_perf,     gx_d_perf
@@ -1018,6 +1044,7 @@ gx_d_emu:       dw msg_gx_emu, l_em1, l_em2, l_blank, l_em3, 0
 gx_d_emusw:     dw msg_gx_emusw, l_emsw1, l_blank, l_edit, 0
 gx_d_batt:      dw msg_gx_batt, l_bt1, l_bt2, l_blank, l_edit, 0
 gx_d_freq:      dw msg_gx_freq, l_fq1, l_fq2, l_blank, l_edit, 0
+gx_d_repeat:    dw msg_gx_repeat, l_kr1, l_kr2, l_blank, l_edit, 0
 gx_d_hwmon:     dw msg_gx_hwmon, GX_LIVE, 0
 gx_d_video:     dw msg_gx_video, l_vd1, l_vd2, l_vd3, l_blank, l_fixed, 0
 gx_d_perf:      dw msg_gx_perf, l_pf1, l_blank, l_fixed, 0
@@ -1038,7 +1065,8 @@ msg_hw_core:       db "Core ", 0
 msg_hw_usage:      db "     usage ", 0
 msg_hw_pct:        db " %     ", 0
 msg_hw_mhz:        db " MHz", 0
-msg_hw_all:        db "Emulation is ", 0
+msg_hw_all:        db "Nominal ", 0
+msg_hw_nom:        db " MHz. Emulation is ", 0
 msg_hw_on:         db "on.", 0
 msg_hw_off:        db "off.", 0
 msg_gx_emu:        db "HW Emulation", 0
@@ -1046,6 +1074,7 @@ msg_gx_emusw:      db "Emulation", 0
 msg_gx_batt:       db "BIOS Battery", 0
 msg_gx_freq:       db "CPU Frequency", 0
 msg_gx_hwmon:      db "Hardware Monitor", 0
+msg_gx_repeat:     db "Key Repeat", 0
 msg_gx_system:     db "System", 0
 msg_gx_sysinfo:    db "System Info", 0
 msg_gx_cpu:        db "Processor Info", 0
@@ -1080,6 +1109,8 @@ l_bt1:   db "The CMOS battery keeps the clock and", 0
 l_bt2:   db "these settings across a power cut.", 0
 l_fq1:   db "The clock each core reports. It is not", 0
 l_fq2:   db "measured: it wanders by a MHz either way.", 0
+l_kr1:   db "A held key repeats, the way the keyboard", 0
+l_kr2:   db "itself does. This is how often.", 0
 l_blank:  db "", 0
 l_fixed:  db "None of these fields are changeable.", 0
 l_edit:   db "Enter edits it; Esc leaves it alone.", 0

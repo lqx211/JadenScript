@@ -364,12 +364,24 @@ hwApply:
     mov     al, [cs:hw_mhz + si]
     mov     dx, 0x5A8
     out     dx, al
+    mov     al, 0x37                ; and how often a held key repeats
+    call    cmos_read
+    cmp     al, 4
+    jbe     .repeat
+    mov     al, 2                   ; 1/8 s
+.repeat:
+    xor     ah, ah
+    mov     si, ax
+    mov     al, [cs:hw_keyrep + si]
+    mov     dx, 0x5AA               ; in units of 10 ms: a byte cannot hold 1/2 s
+    out     dx, al
     pop     dx
     pop     bx
     pop     ax
     ret
 
-hw_mhz: db 16, 25, 33, 40, 50
+hw_mhz:    db 16, 25, 33, 40, 50
+hw_keyrep: db 50, 25, 12, 6, 4      ; 1/2 s, 1/4 s, 1/8 s, 1/16 s, 1/24 s
 
 ; ---------------------------------------------------------------------------
 ; gxSplash -- the power-on screen, and the way back to the text underneath.

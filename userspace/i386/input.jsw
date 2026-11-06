@@ -31,15 +31,23 @@ public K.ext = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
     1, 1, 1, 1, 1];
 public K.count = 59;
 public K.down = [];
+public K.nextAt = [];
 public K.last = "";
+public K.sent = 0;                       // scan codes pushed, repeats included
+/* The typematic delay: how long a key is held before it starts repeating. A PC
+ * keyboard waits about half a second, then repeats at the rate the setup
+ * utility picked. */
+public K.delay = 0.4;
 
 class Input {
     public void inputStart() { // hook: green flag
         Looks.hide();
         K.down.clear();
+        K.nextAt.clear();
         _i = 1;
         while (_i <= K.count) {
             K.down.add(0);
+            K.nextAt.add(0);
             _i += 1;
         }
         K.ready = 1;
@@ -56,14 +64,26 @@ class Input {
             _now = Sensing.isKeyPressed(_name);
             _was = K.down.get(_i) + 0;
             if (_now && _was == 0) {
-                _code = K.codes.get(_i) + 0;
-                if (K.ext.get(_i) == 1) {
-                    K.fifo.add(224);       // the 0xE0 of a set-1 extended key
+                keySend(_i);
+                K.nextAt.set(_i, Sensing.timer() + K.delay);
+            } else {
+              if (_now && X.keyRepeat > 0) {
+                /* Held: the keyboard repeats the key itself, the way a real one
+                 * does, so the CPU never has to guess whether a key is still
+                 * down. The next repeat is scheduled from the last one, not from
+                 * now, so the rate does not drift; but if the tab was asleep
+                 * long enough to fall behind, it is rescheduled rather than
+                 * firing a burst. */
+                _due = K.nextAt.get(_i) + 0;
+                if (Sensing.timer() >= _due) {
+                    keySend(_i);
+                    _due = _due + X.keyRepeat / 1000;
+                    if (_due < Sensing.timer()) {
+                        _due = Sensing.timer() + X.keyRepeat / 1000;
+                    }
+                    K.nextAt.set(_i, _due);
                 }
-                K.fifo.add(_code);
-                X.port60 = _code;
-                X.port64 = 1;
-                K.last = _name;
+              }
             }
             if (_now) {
                 K.down.set(_i, 1);
@@ -72,5 +92,19 @@ class Input {
             }
             _i += 1;
         }
+    }
+
+    /* One make code into the controller's output buffer, extended prefix and
+     * all: the same three bytes whether this is the press or a repeat. */
+    private void keySend(index) { // warp
+        _code = K.codes.get(index) + 0;
+        if (K.ext.get(index) == 1) {
+            K.fifo.add(224);               // the 0xE0 of a set-1 extended key
+        }
+        K.fifo.add(_code);
+        X.port60 = _code;
+        X.port64 = 1;
+        K.sent = K.sent + 1;
+        K.last = K.names.get(index);
     }
 }
