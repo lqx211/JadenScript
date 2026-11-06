@@ -179,7 +179,7 @@ public X.cpuBase = 33;
 public X.keyRepeatPort = 1450;   // 0x5AA, write: repeat interval in 10 ms units
 public X.keyRepeat = 120;
 public X.coreUsage = [0, 0, 0, 0, 0, 0, 0, 0];
-public X.coreMHz = [0, 0, 0, 0, 0, 0, 0, 0];   // measured MHz, updated twice a second
+public X.coreMHz = [0, 0, 0, 0, 0, 0, 0, 0];   // measured, updated twice a second
 public X.core1Usage = 0;
 public X.core1MHz = 0;
 public X.core2Usage = 0;
@@ -578,9 +578,18 @@ class Cpu {
         if (_done < 1) {
             return;                     // a halted core keeps the speed it last ran at
         }
+        /* The machine retires instructions, not clock cycles, so the measured
+         * figure is MIPS. An 80386DX retired about a tenth of an instruction
+         * per clock -- 3.3 MIPS at 33 MHz -- so dividing the rate by that
+         * ratio turns "what this emulator actually does" into "what a 386 would
+         * have to be clocked at to keep up", which is the number a 1990s setup
+         * screen would show: tens of MHz, not fractions of one. */
         _mhz = 0;
         if (X.emuOn > 0) {
-            _mhz = Operators.math("round", _done / _dt / 10000) / 100;
+            _mhz = Operators.math("round", _done / _dt / 100000);
+            if (_mhz > 255) {
+                _mhz = 255;
+            }
         }
         X.coreMHz.set(coreId, _mhz);
         if (coreId == 1) {
@@ -1117,10 +1126,7 @@ class Cpu {
         if (p == 1016) { v = 96; return; }
         if (p == 1021) { v = 96; return; }
         if (p == X.coreUsagePort) { v = X.coreUsage.get(X.coreSel) + 0; return; }
-        if (p == X.coreMHzPort) {
-            v = Operators.math("round", (X.coreMHz.get(X.coreSel) + 0) * 10);
-            return;
-        }
+        if (p == X.coreMHzPort) { v = X.coreMHz.get(X.coreSel) + 0; return; }
         if (p == X.dispViewPort) { v = X.dispViewCols; return; }
         if (p == X.dispRowsPort) { v = X.dispViewRows; return; }
         if (p == X.coreCountPort) { v = X.cores; return; }

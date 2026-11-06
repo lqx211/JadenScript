@@ -573,11 +573,11 @@ class Machine:
             return self.cores
         if port == 0x5A6:                 # the core selected on 0x5A5
             return self.core_usage(self.core_sel)
-        if port == 0x5A7:                 # ... and the clock it reports, in
-            # tenths of a MHz. The model has no wall clock to divide by, so it
-            # answers with the figure the real machine measures on this host --
-            # a couple of million instructions a second -- rather than with a
-            # number it cannot know.
+        if port == 0x5A7:                 # ... and the clock it reports, in MHz.
+            # The model has no wall clock to divide by, so it answers with the
+            # figure the real machine measures on this host -- two and a half
+            # million instructions a second, which is a 25 MHz 80386 -- rather
+            # than with a number it cannot know.
             return 25 if self.emu_on else 0
         if port == 0x5A3:                 # the card: cells across the stage
             return self.view_cols

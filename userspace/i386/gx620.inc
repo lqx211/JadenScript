@@ -786,20 +786,7 @@ gxMonitor:
     call    putn
     mov     si, msg_hw_pct
     call    suPrint
-    ; the clock arrives in tenths of a MHz, and gets a decimal point
-    mov     al, bh
-    xor     ah, ah
-    mov     cl, 10
-    div     cl                      ; al = MHz, ah = tenths
-    push    ax
-    xor     ah, ah
-    call    putn
-    pop     ax
-    push    ax
-    mov     al, '.'
-    call    putc
-    pop     ax
-    mov     al, ah
+    mov     al, bh                   ; the clock, in whole MHz
     xor     ah, ah
     call    putn
     mov     si, msg_hw_mhz
