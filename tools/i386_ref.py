@@ -287,6 +287,27 @@ def sext(value: int, bits: int) -> int:
     return value - (1 << bits) if value & (1 << (bits - 1)) else value
 
 
+class Segments(list):
+    """The six segment registers, with their hidden halves attached.
+
+    On a real 386 a segment register is two things: a selector you can see and
+    a base/limit/attributes triple you cannot.  The visible half changes when
+    you load it; the hidden half changes at the same moment and *never* any
+    other time -- which is why clearing CR0.PE leaves the previous segment
+    working, and why SeaBIOS can switch to real mode and jump through a
+    descriptor it loaded while still protected.
+    """
+
+    def __init__(self, machine, values):
+        super().__init__(values)
+        self.machine = machine
+
+    def __setitem__(self, index, value):
+        value &= 0xFFFF
+        super().__setitem__(index, value)
+        self.machine.cache_segment(index, value)
+
+
 class Machine:
     """A 386 with 1 MiB of RAM, a text plane and an interrupt table."""
 
@@ -294,11 +315,8 @@ class Machine:
         self.ram = bytearray(ram_size)
         self.ram_size = ram_size
         self.reg = [0] * 8
-        self.sreg = [0] * 6
-        # the segment registers' hidden halves: what each selector last meant
-        self.base = [0] * 6
-        self.limit = [0xFFFF] * 6
-        # the control registers and the two table registers
+        # the control registers and the two table registers, before the segment
+        # registers because loading a selector reads the descriptor table
         self.cr = [0] * 5
         self.gdtr = [0, 0]
         self.idtr = [0, 0]
@@ -308,6 +326,10 @@ class Machine:
         self.dsz = 2                 # default operand size of the code we run
         self.ipmask = 0xFFFF
         self.spmask = 0xFFFF
+        # the segment registers' hidden halves: what each selector last meant
+        self.base = [0] * 6
+        self.limit = [0xFFFF] * 6
+        self.sreg = Segments(self, [0] * 6)
         self.eip = 0
         self.eflags = FLAG_ALWAYS | FLAG_IF
         self.halted = False
@@ -363,12 +385,9 @@ class Machine:
     # ---- registers ---------------------------------------------------
 
     def sbase(self, index):
-        """Where a segment starts.  Real mode computes it from the selector
-        every time; protected mode uses the descriptor the selector was loaded
-        with, which is why the cached copy has to exist at all."""
-        if self.pe:
-            return self.base[index]
-        return self.sreg[index] << 4
+        """Where a segment starts: always the cached answer, never a fresh
+        computation.  The cache is only rewritten when the selector is."""
+        return self.base[index]
 
     # ---- protected mode ----------------------------------------------
 
@@ -399,27 +418,26 @@ class Machine:
         self.cr[0] = value & 0xFFFF_FFFF
         self.pe = bool(value & 1)
         if not was and self.pe:
-            for i in range(6):          # the cached halves keep their values
+            for i in range(6):          # the hidden halves keep their values
                 self.base[i] = self.sreg[i] << 4
                 self.limit[i] = 0xFFFF
-        if was and not self.pe:
-            for i in range(6):
-                self.base[i] = self.sreg[i] << 4
-                self.limit[i] = 0xFFFF
-            self.dsz = 2
-            self.ipmask = 0xFFFF
-            self.spmask = 0xFFFF
+        # clearing PE does not reload anything: a segment keeps the base it was
+        # loaded with until the next `mov sreg`. SeaBIOS's __call16 depends on
+        # exactly that -- it clears PE and jumps through a 16-bit descriptor
+        # whose base is the ROM, all without touching the cach again.
 
     def loadseg(self, index, selector):
-        """Point a segment register at a selector, and cache what it means."""
-        selector &= 0xFFFF
+        """Point a segment register at a selector; the cache follows."""
         self.sreg[index] = selector
+
+    def cache_segment(self, index, selector):
+        """Fill in the hidden half of a segment register."""
         flags = 0
-        if not self.pe:
+        if self.pe:
+            self.base[index], self.limit[index], _attr, flags = self.descriptor(selector)
+        else:
             self.base[index] = selector << 4
             self.limit[index] = 0xFFFF
-        else:
-            self.base[index], self.limit[index], _attr, flags = self.descriptor(selector)
         if index == SEG_CS:
             # the D bit decides what an unprefixed instruction means: a 32-bit
             # code segment reads `push eax` as four bytes, a 16-bit one as two
