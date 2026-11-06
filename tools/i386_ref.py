@@ -1552,9 +1552,11 @@ def execute(m):
         m.loadseg(SEG_DS, m.pop(size)); return
     if op == 0x60:
         sp = m.reg[4]
-        for i in (0, 1, 2, 3):
+        for i in (0, 1, 2, 3):                  # AX CX DX BX
             m.push(m.reg[i], size)
-        m.push(sp, size)
+        m.push(sp, size)                        # the original SP
+        for i in (5, 6, 7):                     # BP SI DI
+            m.push(m.reg[i], size)
         return
     if op == 0x61:
         for i in (7, 6, 5, 4, 3, 2, 1, 0):
@@ -1944,7 +1946,11 @@ def execute(m):
                 return
         for _ in range(count):
             if op in (0x6C, 0x6D):           # ins: port -> es:di
-                value = m.port_in(m.reg[2] & 0xFFFF, osize)
+                # the port model is byte-granular, so a 16-bit read is two of
+                # them -- the same thing `in ax, dx` does
+                value = m.port_in(m.reg[2] & 0xFFFF, 1)
+                if osize == 2:
+                    value |= m.port_in(m.reg[2] & 0xFFFF, 1) << 8
                 m.write(m.phys(SEG_ES, m.reg[7] & amask), value, osize)
                 m.reg[7] = (m.reg[7] + delta) & amask
             else:                            # outs: ds:si -> port
@@ -2307,7 +2313,9 @@ def two_byte(m, size, seg, addr_size=2):
         else:
             m.reg[0] = m.reg[1] = m.reg[2] = m.reg[3] = 0
         return
-    if op == 0x31:
-        m.ticks += 1
+    if op == 0x31:                               # rdtsc: a Pentium instruction,
+        m.ticks += 1                             # kept because a kernel times
+        m.setreg(0, m.ticks & 0xFFFF, 2)         # itself with it
+        m.setreg(2, (m.ticks >> 16) & 0xFFFF, 2)
         return
     raise NotImplementedError(f"two-byte opcode 0f {op:02x}")

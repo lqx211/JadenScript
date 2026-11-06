@@ -1320,6 +1320,96 @@ class I386DriveTests(unittest.TestCase):
         self.assertIn("drvStr", source, "and the buffer needs its own data segment")
 
 
+class I386OpcodeCoverageTests(unittest.TestCase):
+    """Every opcode both machines implement has to do the same thing.
+
+    `tools/i386_opcode_sweep.py` is the full sweep -- 512 probes, one fresh
+    machine each, four minutes. This runs the handful that were wrong, so a
+    regression is caught in a second rather than in a nightly run.
+    """
+
+    #: the ones this work fixed, by the reason they were wrong
+    CASES = [
+        (0x60, "pusha pushes eight registers, not nine"),
+        (0x61, "popa pops eight, and skips sp"),
+        (0x62, "bound: the index is a register, the bounds are memory"),
+        (0x6D, "insw writes a word and steps di by two"),
+        (0x6F, "outsw reads a word and steps si by two"),
+        (0x9D, "popf forces bit 1, which a 386 always reads as one"),
+        (0xC8, "enter builds a frame: bp is 5 and sp is 4"),
+        (0xC9, "leave unbuilds the same frame"),
+        (0xCF, "iret forces bit 1 too"),
+    ]
+    TWO_BYTE = [
+        (0x00, "sldt / str / lldt / ltr / verr / verw"),
+        (0x31, "rdtsc leaves a timestamp in edx:eax"),
+        (0xBA, "bt with an immediate consumes the immediate"),
+    ]
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        import subprocess
+
+        out = ROOT / "build" / "i386" / "i386-test.sb3"
+        back = ROOT / "build" / "i386" / "i386-test.back.jsw"
+        subprocess.run([sys.executable, "-m", "jswc", "build",
+                        str(RVDIR / "i386.jsw"), "-o", str(out)],
+                       cwd=ROOT, check=True, capture_output=True)
+        subprocess.run([sys.executable, "-m", "jswc", "decompile", str(out),
+                        "-o", str(back), "--skip-assets"],
+                       cwd=ROOT, check=True, capture_output=True)
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location(
+            "sweep", ROOT / "tools" / "i386_opcode_sweep.py")
+        cls.sweep = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.sweep)
+        # the sweep reads the project it was pointed at; make it read this one
+        cls.sweep.BUILD = out
+        cls.sweep.DECOMPILED = back
+        cls.source = back.read_text()
+
+    def run_probe(self, code: bytes) -> tuple[dict, dict]:
+        import importlib.util
+
+        env = jsw_sim.Env()
+        classes = jsw_sim.parse_program(self.source, env)
+        env.procs = classes["Cpu"].procs
+        env.threads.append({})
+        env.current = 0
+        for name, asset in (("rom", "bios"), ("disk", "disk"), ("ident", "ident")):
+            env.lists[name] = json.loads(
+                (RVDIR / "assets" / "lists" / f"{asset}.jsa").read_text())
+        env.vars["X.cores"] = 1
+        gen = jsw_sim.call(env, env.procs["powerOn"], [])
+        try:
+            while True:
+                next(gen)
+        except StopIteration:
+            pass
+        return (self.sweep.probe_jsw(env, env.procs, code),
+                self.sweep.probe_ref(code))
+
+    def check(self, opcode: int, why: str) -> None:
+        code = bytes([opcode]) + b"\0" * 7
+        jsw, model = self.run_probe(code)
+        verdict = self.sweep.compare(f"{opcode:02X}", jsw, model)
+        self.assertEqual(verdict, "ok", f"{opcode:02X} ({why}): {verdict}")
+
+    def test_the_one_byte_cases(self) -> None:
+        for opcode, why in self.CASES:
+            with self.subTest(opcode=f"{opcode:02X}"):
+                self.check(opcode, why)
+
+    def test_the_two_byte_cases(self) -> None:
+        for opcode, why in self.TWO_BYTE:
+            with self.subTest(opcode=f"0F{opcode:02X}"):
+                code = bytes([0x0F, opcode]) + b"\0" * 6
+                jsw, model = self.run_probe(code)
+                verdict = self.sweep.compare(f"0F{opcode:02X}", jsw, model)
+                self.assertEqual(verdict, "ok", f"0F{opcode:02X} ({why}): {verdict}")
+
+
 class I386AhciTests(unittest.TestCase):
     """SATA is not a register file behind ports, it is memory.
 

@@ -451,6 +451,8 @@ class Cpu {
     private sbase = [0, 0, 0, 0, 0, 0, 0];
     private slimit = [65535, 65535, 65535, 65535, 65535, 65535, 65535];
     private dsz = 2;                    // what an unprefixed instruction means
+    private ldtr = 0;                   // the two descriptor-table registers
+    private tr = 0;                     // a protected-mode kernel sets up
     /* the hardware monitor's stopwatch: instructions retired since `hwAt`
        seconds, so the clock the board reports is measured, not invented */
     private hwAt = 0;
@@ -1462,6 +1464,7 @@ class Cpu {
         setSeg(2, v);
         pop16();
         fl = v % 65536;
+        setFlagTo(1, 1);
     }
 
     /* ---- ports -------------------------------------------------------- *
@@ -2749,37 +2752,46 @@ class Cpu {
             return;
         }
         if (op == 96) {                        // pusha
-            getReg16(5);
+            /* The order is AX, CX, DX, BX, the *original* SP, BP, SI, DI. The
+             * register file is 8086 order -- AX CX DX BX SP BP SI DI -- so SP is
+             * 4, not 5, and the second run starts at BP. Getting that wrong
+             * pushes nine registers instead of eight, and every pop afterwards
+             * is one place out. */
+            getReg16(4);
             _sp0 = v;
-            _i = 0;
-            while (_i < 4) {
-                getReg16(_i);
+            /* Counting in `_n8`, not `_i`: push16 writes through wrw, and wrw
+             * keeps its own index in `_i`. Two pushes then, not eight. */
+            _n8 = 0;
+            while (_n8 < 4) {
+                getReg16(_n8);
                 push16(v);
-                _i += 1;
+                _n8 += 1;
             }
             push16(_sp0);
-            _i = 4;
-            while (_i < 8) {
-                getReg16(_i);
+            _n8 = 5;
+            while (_n8 < 8) {
+                getReg16(_n8);
                 push16(v);
-                _i += 1;
+                _n8 += 1;
             }
             return;
         }
         if (op == 97) {                        // popa
-            _i = 7;
-            while (_i >= 1) {
+            _n8 = 7;                           // DI, SI, BP
+            while (_n8 >= 5) {
                 pop16();
-                putReg16(_i, v);
-                _i -= 1;
+                putReg16(_n8, v);
+                _n8 -= 1;
             }
             pop16();                           // sp itself is thrown away
-            _i = 0;
-            while (_i >= 0) {
+            _n8 = 3;                           // BX, DX, CX
+            while (_n8 >= 1) {
                 pop16();
-                putReg16(_i, v);
-                _i -= 1;
+                putReg16(_n8, v);
+                _n8 -= 1;
             }
+            pop16();
+            putReg16(0, v);                    // and AX
             return;
         }
         if (op == 104) { f16(); push16(v); return; }
@@ -2798,7 +2810,12 @@ class Cpu {
 
         /* --- the flag register --- */
         if (op == 156) { push16(fl); return; }
-        if (op == 157) { pop16(); fl = v % 65536; return; }
+        if (op == 157) {
+            pop16();
+            fl = v % 65536;
+            setFlagTo(1, 1);                   // bit 1 is always one on a 386
+            return;
+        }
         if (op == 158) {                       // sahf: ah into the low flags
             getReg8(4);
             _v0 = v;
@@ -2958,15 +2975,17 @@ class Cpu {
         }
         if (op == 200) {                       // enter
             f16();
-            _v0 = v;
+            _v0 = v;                           // bytes of locals
             f8();
             _lvl = v % 32;
-            getReg16(5);
+            getReg16(5);                       // push the caller's BP
             push16(v);
-            _frame = r.get(5);
-            _k = 0;
-            while (_k < _lvl) {
-                putReg16(5, r.get(5) - 2);
+            getReg16(4);                       // the frame is where SP is now
+            _frame = v;
+            _k = 1;
+            while (_k < _lvl) {                // copy the enclosing frames
+                getReg16(5);
+                putReg16(5, v - 2);
                 getReg16(5);
                 phys(3, v);
                 rdw(v);
@@ -2974,14 +2993,16 @@ class Cpu {
                 _k += 1;
             }
             if (_lvl > 0) { push16(_frame); }
-            putReg16(5, _frame);
-            putReg16(4, r.get(4) - _v0);
+            putReg16(5, _frame);               // BP = frame
+            getReg16(4);
+            putReg16(4, v - _v0);              // and make room for the locals
             return;
         }
         if (op == 201) {                       // leave
-            putReg16(4, r.get(5));
+            getReg16(5);                       // SP = BP
+            putReg16(4, v);
             pop16();
-            putReg16(5, v);
+            putReg16(5, v);                    // and BP = the caller's
             return;
         }
         if (op == 196 || op == 197) {          // les / lds
@@ -3204,20 +3225,20 @@ class Cpu {
         }
         if (op == 98) {                   // bound: #BR when out of range
             modrm();
-            getOp(2);
-            _v0 = v;
+            getReg16(mreg);               // the index is a register; the pair
+            _v0 = v;                      // of bounds is what memory holds
             phys(eseg, ea);
             rdw(v);
-            _lo = v;
+            _blo = v;                          // not `_lo`: rdw keeps its own
             phys(eseg, (ea + 2) % 65536);
             rdw(v);
-            _hi = v;
+            _bhi = v;
             // both bounds and the index are signed, so a negative index below
             // a negative bound is inside -- compare after sign-extending
             if (_v0 >= 32768) { _v0 = _v0 - 65536; }
-            if (_lo >= 32768) { _lo = _lo - 65536; }
-            if (_hi >= 32768) { _hi = _hi - 65536; }
-            if (_v0 < _lo || _v0 > _hi) {
+            if (_blo >= 32768) { _blo = _blo - 65536; }
+            if (_bhi >= 32768) { _bhi = _bhi - 65536; }
+            if (_v0 < _blo || _v0 > _bhi) {
                 interrupt(5);
             }
             return;
@@ -3238,25 +3259,34 @@ class Cpu {
                 getReg16(2);
                 _port = v;
                 getFlagBit(10);
-                _sh = 1;
-                if (v == 1) { _sh = 0; _sh = -1; }
+                _dir = 1;                      // not `_sh`: wrb keeps a shift there
+                if (v == 1) { _dir = -1; }
                 if (op == 108 || op == 109) {
                     portIn(_port);
                     _v0 = v % 256;
                     getReg16(7);
                     _v1 = v;
                     phys(1, _v1);
-                    wrb(_v0);
-                    _v0 = _v1 + _sz * _sh;
+                    _addr = v;             // phys leaves the address in v
+                    if (_sz == 2) {
+                        portIn(_port);
+                        _v0 = _v0 + (v % 256) * 256;
+                        wrw(_addr, _v0);
+                    } else {
+                        wrb(_addr, _v0);
+                    }
+                    _v0 = _v1 + _sz * _dir;
                     putReg16(7, _v0 % 65536);
                 } else {
                     getReg16(6);
                     _v1 = v;
                     phys(seg, _v1);
-                    rdb(v);
+                    _addr = v;
+                    if (_sz == 2) { rdw(_addr); } else { rdb(_addr); }
                     _v0 = v;
-                    portOut(_port, _v0);
-                    _v0 = _v1 + _sz * _sh;
+                    portOut(_port, _v0 % 256);
+                    if (_sz == 2) { portOut(_port, Operators.math("floor", _v0 / 256) % 256); }
+                    _v0 = _v1 + _sz * _dir;
                     putReg16(6, _v0 % 65536);
                 }
                 _nSi += 1;
@@ -3523,6 +3553,45 @@ class Cpu {
                 writeCr0((cr0 - cr0 % 16) + v % 16);
                 return;
             }
+            return;
+        }
+        if (_tOp == 0) {                       // sldt / str / lldt / ltr / verr / verw
+            modrm();
+            if (mreg == 0) { putOp(2, ldtr); return; }
+            if (mreg == 1) { putOp(2, tr); return; }
+            if (mreg == 2) {
+                getOp(2);
+                ldtr = v - v % 8;              // a selector, so the low three
+                return;                        // bits are the privilege level
+            }
+            if (mreg == 3) {
+                getOp(2);
+                tr = v - v % 8;
+                return;
+            }
+            /* verr / verw: can this selector be used? A selector with an index
+             * of zero names nothing, and the answer to "can I use it" is no. */
+            getOp(2);
+            _tSet = 0;
+            if (v - v % 4 > 0) { _tSet = 1; }
+            setFlagTo(6, _tSet);
+            return;
+        }
+        if (_tOp == 186) {                     // bt / bts / btr / btc r/m, imm8
+            modrm();
+            _tKind = mreg;
+            getOp(2);
+            _tV = v;
+            f8();
+            _tBit = (v % 16) + 0;
+            _tMask = X.pow2.get(_tBit + 1) + 0;
+            _tOn = Operators.math("floor", _tV / _tMask) % 2;
+            setFlagTo(0, _tOn);
+            if (_tKind == 0) { return; }
+            setBit(_tV, _tMask);
+            if (_tKind == 2) { clrBit(_tV, _tMask); }
+            if (_tKind == 3) { xorBit(_tV, _tMask); }
+            putOp(2, v);
             return;
         }
         if (_tOp == 49) {                      // rdtsc, once there is a TSC
