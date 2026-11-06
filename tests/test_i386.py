@@ -259,11 +259,14 @@ class I386SetupTests(unittest.TestCase):
 
     def test_f2_opens_the_setup_on_the_system_page(self) -> None:
         screen = self._setup([self.F2]).text()
-        self.assertIn("Dell System GX620", screen)
+        self.assertIn("JSW System 80386", screen)
         self.assertIn("System Info", screen)
         self.assertIn("Date/Time", screen)
         self.assertIn("Drives", screen)
-        self.assertIn("OptiPlex GX620", screen)
+        self.assertIn("System            = JSW 80386", screen)
+        self.assertNotIn("Dell", screen)
+        self.assertNotIn("OptiPlex", screen)
+        self.assertNotIn("Pentium", screen)
 
     def test_the_system_info_page_is_behind_it(self) -> None:
         screen = self._setup([self.F2, self.DOWN]).text()
@@ -731,7 +734,7 @@ class I386SmpTests(unittest.TestCase):
         mach.halted = False
         mach.steps = 0
         mach.run(limit=900_000)
-        self.assertIn("Dell System GX620", mach.text())
+        self.assertIn("JSW System 80386", mach.text())
         used = set()
         for row in range(25):
             for col in range(80):

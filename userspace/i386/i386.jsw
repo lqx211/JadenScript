@@ -123,9 +123,10 @@ public X.stageW = 640;
 public X.stageH = 480;
 public X.dispCols = 80;
 public X.dispRows = 30;
-/* How many of those cells the stage can show. The stage is measured at boot
- * (Runtime.stageWidth/Height); on Scratch's own 480 x 360 it is 60 x 22, and
- * the firmware cuts its console down to that. */
+/* How many of those cells the stage can show. The card measures the stage at
+ * boot with a costume and the fence -- no extension does it for us, see
+ * dispMeasure -- and on Scratch's own 480 x 360 the answer is 60 x 22, which
+ * is what the firmware cuts its console down to. */
 public X.dispViewCols = 80;
 public X.dispViewRows = 30;
 public X.dispOffX = 0;                   // where the screen starts on the stage

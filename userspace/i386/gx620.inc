@@ -1,11 +1,12 @@
 ; ---------------------------------------------------------------------------
-; The setup utility, laid out the way a Dell OptiPlex GX620 lays its own out.
+; The setup utility, laid out the way a Dell OptiPlex GX620 lays its own out,
+; with this machine's name in the title bar where Dell's used to be.
 ;
-;   +- Dell System GX620 --------------------------------------------------+
+;   +- JSW System 80386 ---------------------------------------------------+
 ;   |+--------------------------+ +--------------------------------------+|
 ;   ||- System                  | |                      System Info     ||
 ;   ||    System Info           |^|--------------------------------------||
-;   ||    Processor Info        |#| System          = OptiPlex GX620    ||
+;   ||    Processor Info        |#| System          = JSW 80386         ||
 ;   ||+ Drives                  |v| BIOS Version    = A07 (03/31/06)    ||
 ;   |+--------------------------+ +--------------------------------------+|
 ;   +----------------------------------------------------------------------+
@@ -908,7 +909,7 @@ gx_d_post:      dw msg_gx_post, l_po1, l_po2, l_blank, l_fixed, 0
 ; ---------------------------------------------------------------------------
 ; the words
 ; ---------------------------------------------------------------------------
-msg_gx_title:      db " Dell System GX620 ", 0
+msg_gx_title:      db " JSW System 80386 ", 0
 msg_gx_hint1:      db "Press Up/Down arrows to select a different field", 0
 msg_gx_hint2:      db "Press Left/Right keys to expand or collapse a group", 0
 msg_gx_hint3:      db "Press Esc to exit Setup", 0
@@ -943,16 +944,16 @@ l_blank:  db "", 0
 l_fixed:  db "None of these fields are changeable.", 0
 l_edit:   db "Enter edits it; Esc leaves it alone.", 0
 
-l_sys1:   db "System            = OptiPlex GX620", 0
+l_sys1:   db "System            = JSW 80386", 0
 l_si2:    db "BIOS Version          = A07 (03/31/06)", 0
 l_si3:    db "Service Tag           = J1Q24BX", 0
 l_si4:    db "Express Service Code  = 41463099501", 0
 l_si5:    db "Asset Tag             = {none}", 0
-l_cpu1:   db "Processor Type     = Intel Pentium D", 0
-l_cpu2:   db "Processor Speed    = 3.00 GHz", 0
-l_cpu3:   db "Processor Bus      = 800 MHz", 0
-l_cpu4:   db "L2 Cache           = 2 MB", 0
-l_cpu5:   db "HyperThreading     = not supported here", 0
+l_cpu1:   db "Processor Type     = JSW 80386", 0
+l_cpu2:   db "Processor Speed    = 33 MHz", 0
+l_cpu3:   db "Processor Bus      = 32-bit registers, 16-bit bus", 0
+l_cpu4:   db "Cache              = not fitted", 0
+l_cpu5:   db "Coprocessor        = 80387 socket, empty", 0
 l_mem1:   db "Installed Memory   = 640 KB", 0
 l_mem2:   db "Memory Type        = conventional", 0
 l_mem3:   db "Cores              = see below", 0

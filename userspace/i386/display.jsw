@@ -28,6 +28,10 @@ public X.dispPen = -1;
 import "assets/lists/font.jsa" as font;
 
 class Display {
+    /* The costume the stage measurement uses: two by two, opaque, so the fence
+     * has something with a real bounding box to hold back. */
+    import "assets/frame.svg" as Frame;
+
     public void displayStart() { // hook: green flag
         Looks.hide();
         dispMeasure();
@@ -43,21 +47,71 @@ class Display {
         }
     }
 
-    /* How big is the stage? TurboWarp answers through Runtime.stageWidth and
-     * Runtime.stageHeight; plain Scratch has no such block, the call comes back
-     * empty, and the project falls back to the 640 x 480 the picture was drawn
-     * for. Either way the answer decides how many cells fit and where the
-     * screen sits: a bigger stage gets the screen in the middle of it, a
-     * smaller one gets it in the corner with the firmware printing less. */
+    /* How big is the stage? There is no block for it, and this project does not
+     * import an extension that would answer: the sprite measures it instead.
+     *
+     * Go to infinity with the 2 x 2 costume every sprite starts with, and read
+     * back where the VM put it. Scratch fences the sprite to the stage, so the
+     * number that comes back is half the stage minus half the costume -- one
+     * pixel each way. TurboWarp's compiler lets the infinity through, so the
+     * position comes back unchanged and the sprite walks out to the edge a
+     * pixel at a time instead. Either way the answer decides how many cells fit
+     * and where the screen sits: a bigger stage gets the screen in the middle
+     * of it, a smaller one gets it in the corner with the firmware printing
+     * less. */
     private void dispMeasure() { // warp
-        _w = Runtime.stageWidth();
-        _h = Runtime.stageHeight();
-        if (_w < 320) { _w = X.stageW; }
+        Looks.switchCostume("Frame");
+        Looks.size = 100;
+        Motion.setXY(1 / 0, 1 / 0);
+        _w = Motion.x;
+        _h = Motion.y;
+        if (_w > 10000 || _h > 10000) {
+            /* TurboWarp kept the infinity, so the fence never ran: walk the
+             * sprite out to the edge instead. It has to be on stage for the
+             * edge to be something to touch, and the walk is bounded, because
+             * a loop that never ends in warp mode is a frozen project. */
+            _w = 0;
+            _h = 0;
+            Looks.show();
+            Motion.setXY(0, 0);
+            _n = 0;
+            while (!Sensing.touching("_edge_") && _n < 4000) {
+                Motion.x += 1;
+                _n += 1;
+            }
+            if (Sensing.touching("_edge_")) {
+                _w = Motion.x * 2;              // the centre is on the edge
+            }
+            Motion.setXY(0, 0);
+            _n = 0;
+            while (!Sensing.touching("_edge_") && _n < 4000) {
+                Motion.y += 1;
+                _n += 1;
+            }
+            if (Sensing.touching("_edge_")) {
+                _h = Motion.y * 2;
+            }
+            Looks.hide();
+        } else {
+            _w = _w * 2 + 2;                    // the fence held half of it back
+            _h = _h * 2 + 2;
+        }
+        if (_w < 320) { _w = X.stageW; }        // no answer worth having
         if (_h < 240) { _h = X.stageH; }
+        Motion.setXY(0, 0);
+        /* The fence gives up half a costume on some VMs and not on others, so
+         * the answer is worth a pixel either way: snap it to the cell grid
+         * before anything is drawn on it. */
+        _cols = Operators.math("round", _w / X.dispCellW);
+        _rows = Operators.math("round", _h / X.dispCellH);
+        if (_cols < 1) { _cols = X.dispCols; }
+        if (_rows < 1) { _rows = X.dispRows; }
+        _w = _cols * X.dispCellW;
+        _h = _rows * X.dispCellH;
         X.stageW = _w;
         X.stageH = _h;
-        X.dispViewCols = _w / X.dispCellW;
-        X.dispViewRows = _h / X.dispCellH;
+        X.dispViewCols = _cols;
+        X.dispViewRows = _rows;
         if (X.dispViewCols > X.dispCols) { X.dispViewCols = X.dispCols; }
         if (X.dispViewRows > X.dispRows) { X.dispViewRows = X.dispRows; }
         X.dispOffX = (_w - X.dispCols * X.dispCellW) / 2;
