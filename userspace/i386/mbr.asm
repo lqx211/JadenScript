@@ -43,6 +43,36 @@ start:
     call    puts
     mov     si, msg_done
     call    puts
+
+    ; ---- the timer, as a guest sees it --------------------------------
+    ; The BIOS programmed the 8254 and unmasked IRQ0, so the counter at
+    ; 0x40:0x6C climbs on its own. Three `hlt`s later it has climbed three
+    ; times: the CPU did no work at all between them, but the clock did, and
+    ; that is the whole point of a timer interrupt -- a machine can sleep.
+    mov     si, msg_ticks
+    call    puts
+    xor     ax, ax
+    mov     ds, ax
+    mov     cx, 3
+.wait:
+    sti
+    hlt                             ; the tick wakes the CPU and int 08h runs
+    cli
+    loop    .wait
+    mov     si, msg_count
+    call    puts
+    mov     ax, [ds:0x46C]
+    call    putn
+    mov     al, 13
+    mov     ah, 0x0E
+    mov     bx, 0x0007
+    int     0x10
+    mov     al, 10
+    mov     ah, 0x0E
+    int     0x10
+
+    mov     si, msg_done2
+    call    puts
 .halt:
     cli
     hlt
@@ -75,8 +105,39 @@ puts:
     pop     ax
     ret
 
+; putn: ax = an unsigned number, printed in decimal
+putn:
+    push    ax
+    push    bx
+    push    cx
+    push    dx
+    mov     cx, 0
+.split:
+    xor     dx, dx
+    mov     bx, 10
+    div     bx
+    push    dx
+    inc     cx
+    test    ax, ax
+    jnz     .split
+.emit:
+    pop     ax
+    add     al, '0'
+    mov     ah, 0x0E
+    mov     bx, 0x0007
+    int     0x10
+    loop    .emit
+    pop     dx
+    pop     cx
+    pop     bx
+    pop     ax
+    ret
+
 msg_hello:  db "MBR: hello from a boot sector", 13, 10, 0
-msg_done:   db "MBR: handing nothing on, halting", 13, 10, 0
+msg_ticks:  db "MBR: sleeping through three timer ticks...", 13, 10, 0
+msg_count:  db "MBR: 0x40:0x6C reads ", 0
+msg_done:   db "MBR: handing nothing on", 13, 10, 0
+msg_done2:  db "MBR: the clock kept going while the CPU slept", 13, 10, 0
 msg_err:    db "MBR: int 13h read failed", 13, 10, 0
 
     times 510 - ($ - $$) db 0

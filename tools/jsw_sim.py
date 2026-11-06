@@ -311,6 +311,13 @@ def parse_program(text: str, env: Env) -> dict[str, Klass]:
                 return body, i + 1, False
             if line == "} else {":
                 return body, i + 1, True
+            if line.startswith("} elif ("):
+                # an elif is an else whose body is one more if. Hand the
+                # condition back to the caller, which builds the same nested
+                # structure the project actually holds -- skipping this line
+                # would run every branch's statements in a row.
+                cond = line[line.index("(") + 1:line.rindex(")")]
+                return body, i + 1, (cond,)
             indent = len(raw) - len(raw.lstrip())
             if indent != depth:
                 i += 1
@@ -323,13 +330,8 @@ def parse_program(text: str, env: Env) -> dict[str, Klass]:
                 continue
             if line.startswith("if ("):
                 cond = line[line.index("(") + 1:line.rindex(")")]
-                then, i, has_else = parse_statements_block(lines, i + 1, depth)
-                other = []
-                if has_else:
-                    # `i` already points past "} else {", so the else body
-                    # starts at i, not at i + 1
-                    other, i, _ = parse_statements_block(lines, i, depth)
-                body.append(("if", cond, then, other))
+                node, i = parse_if_chain(cond, lines, i + 1, depth)
+                body.append(node)
                 continue
             if line.startswith("while ("):
                 cond = line[line.index("(") + 1:line.rindex(")")]
@@ -355,6 +357,19 @@ def parse_program(text: str, env: Env) -> dict[str, Klass]:
 
     def parse_statements_block(lines: list[str], i: int, depth: int):
         return parse_statements(i, depth + 4)
+
+    def parse_if_chain(cond, lines: list[str], i: int, depth: int):
+        """One if and whatever hangs off it: nothing, an else, or an elif -- and
+        an elif is itself an else wrapping another if, however many deep."""
+        then, i, tail = parse_statements_block(lines, i, depth)
+        if tail is True:
+            # `i` already points past "} else {", so the body starts there
+            other, i, _ = parse_statements_block(lines, i, depth)
+            return ("if", cond, then, other), i
+        if isinstance(tail, tuple):
+            nested, i = parse_if_chain(tail[0], lines, i, depth)
+            return ("if", cond, then, [nested]), i
+        return ("if", cond, then, []), i
 
     i = 0
     while i < len(lines):

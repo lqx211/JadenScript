@@ -89,6 +89,199 @@ CMOS_DEFAULTS = {
 }
 
 
+#: The 8254's input clock on a real board is a 1.193182 MHz crystal. This board
+#: has no crystal -- it has an instruction counter, which the differential
+#: checker proves both machines advance in lockstep -- so one input tick is
+#: every PIT_DIV retired instructions. At the machine's measured 2.5M
+#: instructions a second that is a 1.25 MHz clock, near enough to the crystal
+#: that the divisors a guest copies from a datasheet give the rates it expects
+#: (11,932 is 100 Hz on both).
+PIT_DIV = 2
+
+#: the programmable interrupt controller: IRQ0 the timer, IRQ1 the keyboard,
+#: IRQ2 the cascade to the second chip, IRQ3/4 serial, IRQ6 the floppy.
+PIC_MASTER = 0x20
+PIC_SLAVE = 0xA0
+PIC_EOI = 0x20
+
+
+class Pic:
+    """One 8259A: the eight request lines, the mask, and who is in service.
+
+    Only the three registers a guest actually programs are here -- IRR, IMR and
+    ISR -- plus the initialization counter, because ICW2 sets the vector base
+    and nothing else in the chip works until that has been written.
+    """
+
+    def __init__(self, base: int = 0x08) -> None:
+        self.irr = 0                     # requested, waiting
+        self.imr = 0xFF                  # masked; a fresh chip masks everything
+        self.isr = 0                     # being serviced
+        self.base = base
+        self.init = 0                    # ICWs still expected: 0 = none
+        self.need4 = 0
+        self.slave_mask = 0              # ICW3: which lines have a slave on them
+        self.read_sel = 0                # 0 = IRR, 1 = ISR
+
+    def raise_line(self, irq: int, level: bool = True) -> None:
+        bit = 1 << irq
+        if level:
+            self.irr |= bit
+        else:
+            self.irr &= ~bit
+
+    def pending(self) -> int:
+        """The highest-priority line that may be acknowledged, or -1.
+
+        Fixed priority, fully nested: line 0 wins, and anything in service
+        blocks a request at the same or a lower priority. That is the whole
+        arbitration rule of the chip.
+        """
+        for irq in range(8):
+            bit = 1 << irq
+            if not self.irr & bit or self.imr & bit:
+                continue
+            if self.isr & ((bit << 1) - 1):
+                continue
+            return irq
+        return -1
+
+    def acknowledge(self) -> int:
+        irq = self.pending()
+        if irq < 0:
+            return -1
+        bit = 1 << irq
+        self.irr &= ~bit
+        self.isr |= bit
+        return self.base + irq
+
+    def eoi(self, specific: bool = False, level: int = 0) -> None:
+        if specific:
+            self.isr &= ~(1 << level)
+        else:
+            self.isr &= self.isr - 1      # the lowest set bit is the top priority
+
+    def command(self, value: int) -> None:
+        if self.init:
+            if self.init == 1:
+                self.base = value & 0xF8
+                self.init = 2 if self.need4 == 2 else 0
+                if self.need4 == 1:
+                    self.init = 3
+            elif self.init == 2:
+                self.slave_mask = value & 0xFF
+                self.init = 3 if self.need4 else 0
+            else:
+                self.init = 0
+            return
+        if value & 0x10:                  # ICW1: start an initialization
+            self.irr = 0
+            self.isr = 0
+            self.need4 = 2 if value & 0x01 else 1
+            self.init = 1
+            return
+        if value & 0x08:                  # OCW3: pick which register is read
+            if value & 0x02:
+                self.read_sel = value & 0x01
+            return
+        if value & 0x40:                  # OCW2 with SL: specific EOI
+            self.eoi(True, value & 0x07)
+        elif not value & 0x10:
+            self.eoi()                    # OCW2 non-specific EOI
+
+
+class Pit:
+    """The 8254: three down counters, each with a reload and a mode.
+
+    Counter 0 raises IRQ0 when it reaches its terminal count, counter 1 is the
+    DRAM refresh counter, and counter 2 is the speaker -- which is why a guest
+    that writes 0x43 and then listens hears nothing: the gate on port 0x61 is
+    what decides, and this board has no speaker.
+    """
+
+    def __init__(self) -> None:
+        self.reload = [0x10000, 18, 0x10000]
+        self.count = [0x10000, 18, 0x10000]
+        self.access = [3, 2, 3]           # 1 lo, 2 hi, 3 lo then hi
+        self.mode = [3, 2, 3]
+        self.bcd = [0, 0, 0]
+        self.next_byte = [0, 0, 0]        # which of the two has been written
+        self.low = [0, 0, 0]
+        self.latched = [None, None, None]
+        self.cmd = 0                      # the control word being written
+        self.cmd_bytes = 0
+
+    def control(self, value: int) -> None:
+        channel = value >> 6
+        access = (value >> 4) & 3
+        if channel == 3:                  # read-back: latch what was asked for
+            for i in range(3):
+                if not value & (2 << i):
+                    self.latched[i] = self.count[i]
+            return
+        self.access[channel] = access if access else self.access[channel]
+        self.mode[channel] = (value >> 1) & 7
+        self.bcd[channel] = value & 1
+        self.next_byte[channel] = 0
+        if access == 0:                   # latch the count for a read
+            self.latched[channel] = self.count[channel]
+
+    def write(self, channel: int, value: int) -> None:
+        value &= 0xFF
+        access = self.access[channel]
+        if access == 1:
+            self.reload[channel] = value or 0x100
+        elif access == 2:
+            self.reload[channel] = (value << 8) or 0x10000
+        elif self.next_byte[channel] == 0:
+            self.low[channel] = value
+            self.next_byte[channel] = 1
+            return
+        else:
+            self.reload[channel] = ((value << 8) | self.low[channel]) or 0x10000
+            self.next_byte[channel] = 0
+        if self.reload[channel] == 0:
+            self.reload[channel] = 0x10000
+        self.count[channel] = self.reload[channel]
+
+    def read(self, channel: int) -> int:
+        if self.latched[channel] is not None:
+            value = self.latched[channel]
+            self.latched[channel] = None
+        else:
+            value = self.count[channel]
+        if self.access[channel] == 1:
+            return value & 0xFF
+        if self.access[channel] == 2:
+            return (value >> 8) & 0xFF
+        low = value & 0xFF
+        self.latched[channel] = (value >> 8) & 0xFF
+        return low
+
+    def tick(self) -> int:
+        """One input clock. Returns the channels that reached their terminal
+        count, which is what raises an interrupt."""
+        fired = 0
+        for i in range(3):
+            self.count[i] -= 1
+            if self.count[i] > 0:
+                continue
+            self.count[i] = self.reload[i]
+            fired |= 1 << i
+            if self.mode[i] in (0, 1):
+                self.count[i] = 0x10000   # one shot: the output stays high
+        return fired
+
+    def to_terminal(self) -> int:
+        """Input ticks until counter 0 next reaches its terminal count."""
+        return max(1, self.count[0])
+
+    def underflow(self) -> None:
+        """Counter 0 reached its terminal count while the CPU was asleep, so
+        the clock skipped straight there instead of counting down every tick."""
+        self.count[0] = 0x10000 if self.mode[0] in (0, 1) else self.reload[0]
+
+
 def sext(value: int, bits: int) -> int:
     value &= (1 << bits) - 1
     return value - (1 << bits) if value & (1 << (bits - 1)) else value
@@ -123,6 +316,12 @@ class Machine:
         self.core_run = [0] * 16
         self.cmos = bytearray(128)
         self.cmos_index = 0
+        # the board's clock and interrupt controller
+        self.pit = Pit()
+        self.pic = Pic(0x08)
+        self.pic2 = Pic(0x70)
+        self.pic2.imr = 0xFF
+        self.pit_acc = 0
         for reg, value in CMOS_DEFAULTS.items():
             self.cmos[reg] = value
 
@@ -180,6 +379,20 @@ class Machine:
     # ---- ports -------------------------------------------------------
 
     def port_in(self, port, size):
+        if 0x40 <= port <= 0x42:
+            return self.pit.read(port - 0x40)
+        if port == 0x43:
+            return self.pit.cmd
+        if port == PIC_MASTER:
+            return self.pic.isr if self.pic.read_sel else self.pic.irr
+        if port == PIC_MASTER + 1:
+            return self.pic.imr
+        if port == PIC_SLAVE:
+            return self.pic2.isr if self.pic2.read_sel else self.pic2.irr
+        if port == PIC_SLAVE + 1:
+            return self.pic2.imr
+        if port == 0x61:                  # the speaker port: timer 2's gate
+            return self.ports.get(0x61, 0)
         if port == 0x5A0:
             return self.cores
         if port == 0x5A2:
@@ -199,6 +412,24 @@ class Machine:
         return self.ports.get(port, 0xFF)
 
     def port_out(self, port, value, size):
+        if port == 0x43:
+            self.pit.control(value & 0xFF)
+            return
+        if 0x40 <= port <= 0x42:
+            self.pit.write(port - 0x40, value)
+            return
+        if port == PIC_MASTER:
+            self.pic.command(value & 0xFF)
+            return
+        if port == PIC_MASTER + 1:
+            self.pic.imr = value & 0xFF
+            return
+        if port == PIC_SLAVE:
+            self.pic2.command(value & 0xFF)
+            return
+        if port == PIC_SLAVE + 1:
+            self.pic2.imr = value & 0xFF
+            return
         if port == 0x5A1:
             core = value & 0xFF
             if 1 <= core <= self.cores:
@@ -351,6 +582,73 @@ class Machine:
         self.reg[4] = (self.reg[4] + 2) & 0xFFFF
         return value
 
+    def raise_irq(self, irq: int) -> None:
+        """A device pulls a line. Lines 8..15 live on the second chip, and its
+        output is the cascade into line 2 of the first -- which is why nothing
+        on the slave ever arrives until IRQ2 is unmasked."""
+        if irq >= 8:
+            self.pic2.raise_line(irq - 8)
+            self.pic.raise_line(2, self.pic2.pending() >= 0)
+        else:
+            self.pic.raise_line(irq)
+
+    def pending_vector(self) -> int:
+        """The vector the controller would hand over now, or -1."""
+        irq = self.pic.pending()
+        if irq < 0:
+            return -1
+        if irq == 2 and self.pic2.pending() >= 0:
+            return self.pic2.base + self.pic2.pending()
+        return self.pic.base + irq
+
+    def acknowledge(self) -> int:
+        irq = self.pic.pending()
+        if irq < 0:
+            return -1
+        if irq == 2 and self.pic2.pending() >= 0:
+            self.pic.acknowledge()
+            return self.pic2.acknowledge()
+        return self.pic.acknowledge()
+
+    def clock_board(self) -> None:
+        """One instruction's worth of board time."""
+        self.pit_acc += 1
+        if self.pit_acc < PIT_DIV:
+            return
+        self.pit_acc = 0
+        fired = self.pit.tick()
+        if fired & 1:
+            self.raise_irq(0)
+
+    def service_irq(self) -> None:
+        """An interrupt is taken between instructions, and only when the
+        guest has interrupts on. That is the whole of the rule."""
+        if not self.flag(FLAG_IF):
+            return
+        vector = self.acknowledge()
+        if vector >= 0:
+            self.interrupt(vector)
+
+    def idle(self) -> None:
+        """A halted core still has a clock.
+
+        The CPU retires nothing, but the timer does not stop for it, so the
+        instruction counter is moved to the moment the next tick lands -- which
+        is exactly the time that passes while the core sleeps, computed rather
+        than guessed, so both machines agree on it. A core that halted with
+        interrupts off stays halted, as a real one does.
+        """
+        if self.pending_vector() < 0:
+            if not self.flag(FLAG_IF):
+                return
+            self.steps += self.pit.to_terminal() * PIT_DIV - self.pit_acc
+            self.pit_acc = 0
+            self.pit.underflow()
+            self.raise_irq(0)
+            if self.pending_vector() < 0:
+                return
+        self.halted = False
+
     def interrupt(self, number):
         self.push(self.eflags & 0xFFFF)
         self.push(self.sreg[SEG_CS])
@@ -378,7 +676,12 @@ class Machine:
         return "\n".join(lines).rstrip()
 
     def run(self, limit=200_000):
-        while self.steps < limit and not self.halted and not self.error:
+        while self.steps < limit and not self.error:
+            if self.halted:
+                self.idle()
+                if self.halted:
+                    break        # parked with nothing left to wake it
+                continue
             self.step()
         if self.error:
             raise RuntimeError(f"{self.error} at {self.sreg[SEG_CS]:04x}:{self.eip:04x}")
@@ -386,9 +689,12 @@ class Machine:
 
     def step(self):
         if self.halted:
+            self.idle()
             return
+        self.service_irq()
         execute(self)
         self.steps += 1
+        self.clock_board()
 
 
 # ----------------------------------------------------------------------
@@ -826,6 +1132,74 @@ def execute(m):
                 m.setreg(0, quotient, osize)
                 m.setreg(2, remainder, osize)
         return
+    if op in (0xD4, 0xD5):
+        # aam / aad: multiply and divide by a base, ten unless told otherwise.
+        # They are the 8080's decimal adjust and nothing in this century uses
+        # them, which is exactly why an emulator that skips them is caught out
+        # by an old test suite.
+        base = m.fetch8() or 10
+        if op == 0xD4:                       # aam
+            al = m.get8(0)
+            m.set8(4, al // base)
+            m.set8(0, al % base)
+        else:                                # aad
+            al = (m.get8(0) + m.get8(4) * base) & 0xFF
+            m.set8(4, 0)
+            m.set8(0, al)
+        m._szp(m.get8(0), 1)
+        return
+    if op == 0xD6:                           # salc: all ones when the carry is set
+        m.set8(0, 0xFF if m.flag(FLAG_CF) else 0x00)
+        return
+    if op == 0xD7:                           # xlat: al = [seg:bx + al]
+        addr = m.phys(m.sreg[seg], (m.reg[3] + m.get8(0)) & 0xFFFF)
+        m.set8(0, m.read(addr, 1))
+        return
+    if op == 0x9B:                           # wait: there is no coprocessor
+        return
+    if op == 0xF1:                           # int1: a breakpoint with a name
+        m.interrupt(1)
+        return
+    if op == 0x63:                           # arpl
+        mod, reg, rm, addr = m.modrm(seg)
+        dest = m.rm_read(mod, rm, addr, 2)
+        src = m.getreg(reg, 2)
+        take = (dest & 3) < (src & 3)
+        m.set_flag(FLAG_ZF, take)
+        if take:
+            m.rm_write(mod, rm, addr, (dest & 0xFFFC) | (src & 3), 2)
+        return
+    if op == 0x62:                           # bound: #BR when out of range
+        mod, reg, rm, addr = m.modrm(seg)
+        index = m.getreg(reg, 2)
+        low = m.read(addr, 2)
+        high = m.read(addr + 2, 2)
+        if not sext(low, 16) <= sext(index, 16) <= sext(high, 16):
+            m.interrupt(5)
+        return
+    if 0x6C <= op <= 0x6F:
+        # ins / outs: the string forms of `in` and `out` at port dx. This board
+        # has no device that streams, so it moves one item per pass like any
+        # other string instruction and lets the port answer what it answers.
+        osize = 1 if op in (0x6C, 0x6E) else size
+        delta = -osize if m.flag(FLAG_DF) else osize
+        count = 1
+        if rep == 0xF3:
+            count = m.reg[1] & 0xFFFF
+            if count == 0:
+                return
+        for _ in range(count):
+            if op in (0x6C, 0x6D):           # ins: port -> es:di
+                value = m.port_in(m.reg[2] & 0xFFFF, osize)
+                m.write(m.phys(m.sreg[SEG_ES], m.reg[7] & 0xFFFF), value, osize)
+                m.reg[7] = (m.reg[7] + delta) & 0xFFFF
+            else:                            # outs: ds:si -> port
+                value = m.read(m.phys(m.sreg[seg], m.reg[6] & 0xFFFF), osize)
+                m.port_out(m.reg[2] & 0xFFFF, value, osize)
+                m.reg[6] = (m.reg[6] + delta) & 0xFFFF
+        if rep == 0xF3:
+            m.reg[1] = 0
+        return
     if op == 0xF5:
         m.set_flag(FLAG_CF, not m.flag(FLAG_CF))
         return
@@ -873,8 +1247,41 @@ def execute(m):
         elif reg == 6:
             m.push(m.rm_read(mod, rm, addr, 2))
         return
-    if op == 0x27 or op == 0x2F or op == 0x37 or op == 0x3F:
-        return                                   # daa/das/aaa/aas: unused
+    if op in (0x27, 0x2F, 0x37, 0x3F):
+        # daa / das / aaa / aas: the decimal adjusts. They are here because the
+        # 8086 had to keep the 8080's BCD arithmetic working, and a BIOS's date
+        # code still uses them. Both tests read the *old* AL -- doing the second
+        # one on the already-adjusted byte is a classic and quiet bug.
+        al = m.get8(0)
+        old_al = al
+        old_cf = m.flag(FLAG_CF)
+        if op in (0x27, 0x2F):
+            step = (al & 0x0F) > 9 or m.flag(FLAG_AF)
+            if step:
+                if op == 0x27:
+                    m.set_flag(FLAG_CF, old_cf or old_al > 0xF9)
+                    al = (al + 6) & 0xFF
+                else:
+                    m.set_flag(FLAG_CF, old_cf or old_al < 0x06)
+                    al = (al - 6) & 0xFF
+            m.set_flag(FLAG_AF, step)
+            if old_cf or old_al > 0x99:
+                al = (al + 0x60 if op == 0x27 else al - 0x60) & 0xFF
+                m.set_flag(FLAG_CF, True)
+            m.set8(0, al)
+            m._szp(al, 1)
+            return
+        # aaa / aas: the low nibble is made decimal and the carry goes into AH
+        if (al & 0x0F) > 9 or m.flag(FLAG_AF):
+            tweak = 0x106 if op == 0x37 else -0x106
+            m.setreg(0, (m.getreg(0, 2) + tweak) & 0xFFFF, 2)
+            m.set_flag(FLAG_AF, True)
+            m.set_flag(FLAG_CF, True)
+        else:
+            m.set_flag(FLAG_AF, False)
+            m.set_flag(FLAG_CF, False)
+        m.set8(0, m.get8(0) & 0x0F)
+        return
     if op == 0x0F:
         two_byte(m, size, seg)
         return
@@ -980,8 +1387,107 @@ def two_byte(m, size, seg):
         else:
             m.sreg[which] = m.pop()
         return
-    if op == 0xA2:
-        raise NotImplementedError("cpuid arrives with the 486-ish device work")
+    if op in (0xA3, 0xAB, 0xB3, 0xBB):
+        # bt / bts / btr / btc, register form: the bit number comes from a
+        # register, and everything but bt writes the bit back
+        mod, reg, rm, addr = m.modrm(seg)
+        value = m.rm_read(mod, rm, addr, size)
+        index = m.getreg(reg, size) % (size * 8)
+        m.set_flag(FLAG_CF, bool(value >> index & 1))
+        if op != 0xA3:
+            if op == 0xAB:
+                value |= 1 << index
+            elif op == 0xB3:
+                value &= ~(1 << index)
+            else:
+                value ^= 1 << index
+            m.rm_write(mod, rm, addr, value & MASK[size], size)
+        return
+    if op in (0xA4, 0xA5, 0xAC, 0xAD):
+        # shld / shrd: a double shift, the second half coming from a register
+        mod, reg, rm, addr = m.modrm(seg)
+        value = m.rm_read(mod, rm, addr, size)
+        source = m.getreg(reg, size)
+        count = (m.fetch8() if op in (0xA4, 0xAC) else m.reg[1]) & 0x1F
+        bits = size * 8
+        if count > bits:
+            count = bits                  # beyond the operand the answer is undefined
+        if count:
+            # one bit at a time: the second half of every step comes in from the
+            # other register, and the last bit out is the carry
+            carry = 0
+            result = value
+            for _ in range(count):
+                if op in (0xA4, 0xA5):    # shld
+                    carry = (result >> (bits - 1)) & 1
+                    result = ((result << 1) | ((source >> (bits - 1)) & 1)) & MASK[size]
+                    source = ((source << 1) | carry) & MASK[size]
+                else:                     # shrd
+                    carry = result & 1
+                    result = ((result >> 1) | ((source & 1) << (bits - 1))) & MASK[size]
+                    source = (source >> 1) | (carry << (bits - 1))
+            m.set_flag(FLAG_CF, bool(carry))
+            m.rm_write(mod, rm, addr, result, size)
+            m._szp(result, size)
+        return
+    if op in (0xBC, 0xBD):
+        # bsf / bsr: where the first one bit is. With no bits at all the
+        # register is left alone and ZF says so -- which is the one thing a
+        # caller is allowed to know.
+        mod, reg, rm, addr = m.modrm(seg)
+        value = m.rm_read(mod, rm, addr, size)
+        bits = size * 8
+        if value == 0:
+            m.set_flag(FLAG_ZF, True)
+            return
+        m.set_flag(FLAG_ZF, False)
+        if op == 0xBC:
+            index = 0
+            while not value >> index & 1:
+                index += 1
+        else:
+            index = bits - 1
+            while not value >> index & 1:
+                index -= 1
+        m.setreg(reg, index, size)
+        return
+    if op in (0xB0, 0xB1):
+        # cmpxchg: compare the accumulator with the destination, and either
+        # store the source or load the accumulator. The compare-and-swap an
+        # operating system builds a lock out of.
+        osize = 1 if op == 0xB0 else size
+        mod, reg, rm, addr = m.modrm(seg)
+        dest = m.rm_read(mod, rm, addr, osize)
+        acc = m.getreg(0, osize)
+        if acc == dest:
+            m.set_flag(FLAG_ZF, True)
+            m.rm_write(mod, rm, addr, m.getreg(reg, osize), osize)
+        else:
+            m.set_flag(FLAG_ZF, False)
+            m.setreg(0, dest, osize)
+        return
+    if op in (0xC0, 0xC1):
+        # xadd: swap, then add. `lock xadd` is how a reference count is taken.
+        osize = 1 if op == 0xC0 else size
+        mod, reg, rm, addr = m.modrm(seg)
+        dest = m.rm_read(mod, rm, addr, osize)
+        source = m.getreg(reg, osize)
+        m.rm_write(mod, rm, addr, m.alu(0, dest, source, osize), osize)
+        m.setreg(reg, dest, osize)
+        return
+    if op == 0x06:                           # clts: no task-switch bit to clear
+        return
+    if op == 0xA2:                           # cpuid: say what we are
+        leaf = m.reg[0]
+        if leaf == 0:
+            m.reg[0] = 1
+            m.reg[3], m.reg[2], m.reg[1] = 0x756E6547, 0x6C65746E, 0x49656E69
+        elif leaf == 1:
+            m.reg[0] = 0x0403                 # family 4, model 0, stepping 3
+            m.reg[1] = m.reg[2] = m.reg[3] = 0
+        else:
+            m.reg[0] = m.reg[1] = m.reg[2] = m.reg[3] = 0
+        return
     if op == 0x31:
         m.ticks += 1
         return

@@ -74,6 +74,43 @@ public X.port64 = 0;                     // status: 1 only while a byte waits
 public X.out = [];                       // serial 0x3F8, byte values
 public X.portLog = [];
 
+/* ---- the board's clock and interrupt controller ------------------------ *
+ * An 8254 counting down and an 8259 deciding who gets the CPU next. Both are
+ * board state, not core state: a clone is a CPU, and the chips are shared.
+ *
+ * The 8254's input clock on a real board is a 1.193182 MHz crystal. This board
+ * has no crystal -- it has an instruction counter, which is the one clock both
+ * machines can agree on to the instruction -- so one input tick is every
+ * PIT_DIV instructions. At the machine's measured 2.5M instructions a second
+ * that is a 1.25 MHz clock, near enough to the crystal that the divisors a
+ * guest copies from a datasheet give the rates it expects: 11,932 is 100 Hz.
+ */
+public X.pitAcc = 0;
+public X.tickNo = 0;
+public X.pitOn = 0;                    // has anyone programmed counter 0 yet
+public X.pitReload = [65536, 18, 65536];
+public X.pitCount = [65536, 18, 65536];
+public X.pitAccess = [3, 2, 3];
+public X.pitMode = [3, 2, 3];
+public X.pitNextByte = [0, 0, 0];
+public X.pitLow = [0, 0, 0];
+public X.pitLatched = [-1, -1, -1];
+public X.picIrr = 0;
+public X.picImr = 255;
+public X.picIsr = 0;
+public X.picBase = 8;
+public X.picInit = 0;
+public X.picNeed4 = 0;
+public X.picSelect = 0;
+public X.picVec = 0;                   // what the controller would hand over now
+public X.pic2Irr = 0;
+public X.pic2Imr = 255;
+public X.pic2Isr = 0;
+public X.pic2Base = 112;
+public X.pic2Init = 0;
+public X.pic2Need4 = 0;
+public X.pic2Select = 0;
+
 /* ---- the card ---------------------------------------------------------- */
 public X.dispReq = 0;
 public X.dispAck = 0;
@@ -146,6 +183,7 @@ class Cpu {
     private sr = [0, 0, 0, 0, 0, 0];
     private ip = 0;
     private fl = 514;
+    private idleAt = 0;
     private halted = 0;
     private steps = 0;
     private err = "";
@@ -362,14 +400,66 @@ class Cpu {
                 X.monErr = err;
                 X.monFrames = X.frames;
             }
-            if (halted == 1) {
-                while (1) {
-                    Control.wait(0);
-                }
+            /* A halted core is not a stopped machine: the clock still runs and
+             * the next tick wakes it. Two things have to be true for that to
+             * work, and both were wrong at first.
+             *
+             * It must not park itself in a loop of its own -- once parked,
+             * nothing ever looks at the timer again.
+             *
+             * And it must sleep for a *frame*, not for a zero-second wait:
+             * `wait 0` comes back inside the same frame, so the idle jump (a
+             * whole tick of emulated time) ran hundreds of times a frame and
+             * the tick counter reached the tens of thousands before the boot
+             * sector had printed. One jump per frame is the honest rate: a
+             * halted CPU retires no instructions, and this board's clock is
+             * the instruction counter.
+             */
+            _h = halted;
+            if (_h == 1) {
+                idleCore();
+                _h = halted;
             }
-            runBatch();
-            Control.wait(0);
+            if (_h == 1) {
+                Control.wait(1);
+            } else {
+                runBatch();
+                Control.wait(0);
+            }
         }
+    }
+
+    /* A halted core still has a clock. The CPU retires nothing, but the timer
+     * does not stop for it, so the instruction counter is moved to the moment
+     * the next tick lands -- exactly the time that passes while the core
+     * sleeps, computed rather than guessed, so both machines agree on it. */
+    private void idleCore() { // warp
+        /* One tick of emulated time per frame, not per call. `wait` inside a
+         * compiled project comes back several times a frame, and a sleeping
+         * core that ticked on every call ran the board clock twenty-nine times
+         * faster than the CPU -- the tick counter read 2037 where the model
+         * read 71. X.tickNo is what makes "a frame has passed" observable. */
+        if (X.tickNo == idleAt) {
+            return;
+        }
+        if (X.picVec < 1) {
+            getFlagBit(9);
+            if (v == 0) { return; }      // cli; hlt hangs, as it should
+            if (X.pitOn == 0) { return; }
+            _s = X.pitCount.get(1) + 0;
+            if (_s < 1) { _s = 1; }
+            steps += _s * 2 - X.pitAcc;
+            X.pitAcc = 0;
+            /* the counter reached its terminal count while the core slept, so
+             * it reloads and pulls the line -- counting down one tick at a time
+             * here would land the interrupt in the wrong place */
+            X.pitCount.set(1, X.pitReload.get(1));
+            if (X.pitMode.get(1) + 0 < 2) { X.pitCount.set(1, 65536); }
+            picRaise(0);
+            idleAt = X.tickNo;
+            if (X.picVec < 1) { return; }
+        }
+        halted = 0;
     }
 
     /* One frame's worth of instructions, under warp: no screen refresh inside. */
@@ -390,6 +480,7 @@ class Cpu {
     /* One RTC second is `X.rtcRate` frames; the registers are BCD, as they are
      * on the real chip, so the guest reads 0x12 for twelve o'clock. */
     private void tickClock() { // warp
+        X.tickNo += 1;
         X.rtcFrames += 1;
         if (X.rtcFrames < X.rtcRate) {
             return;
@@ -402,13 +493,13 @@ class Cpu {
         X.cmos.set(1, Operators.math("floor", _s / 10) * 16 + _s % 10);
         X.cmos.set(3, Operators.math("floor", _m / 10) * 16 + _m % 10);
         X.cmos.set(5, Operators.math("floor", _h / 10) * 16 + _h % 10);
-        // the vector table's tick count, at 18.2 Hz, is derived from the frame
-        _t = X.rtcSeconds * 18;
-        _a = 0x46C;
-        wrb(_a, _t % 256);
-        wrb(_a + 1, Operators.math("floor", _t / 256) % 256);
-        wrb(_a + 2, Operators.math("floor", _t / 65536) % 256);
-        wrb(_a + 3, Operators.math("floor", _t / 16777216) % 256);
+        /* The tick counter at 0x46C used to be invented here -- eighteen ticks
+         * a second, made up from frames, because the RTC was the only clock the
+         * machine had. The 8254 owns that word now, and two owners is not twice
+         * as good: the counter climbs by eighteen every second on top of the
+         * real ticks, so a guest measuring time with it gets an answer that is
+         * wrong by whatever the ratio happens to be. */
+
     }
 
     /* ---- the memory decoder ------------------------------------------ */
@@ -439,6 +530,7 @@ class Cpu {
     }
 
     private void wrb(a, val) { // warp
+        
         _wv = val % 256;
         if (a < X.memBase + X.memWords * 4) {
             _i = Operators.math("floor", a / 4) + 1;
@@ -470,6 +562,7 @@ class Cpu {
     }
 
     private void wrw(a, val) { // warp
+        
         _vv = val % 65536;
         wrb(a, _vv % 256);
         wrb(a + 1, Operators.math("floor", _vv / 256) % 256);
@@ -830,12 +923,14 @@ class Cpu {
         szp(_hV, size);
     }
 
-
     /* ---- the stack ---------------------------------------------------- */
 
     private void push16(val) { // warp
         r.set(5, (r.get(5) + 65534) % 65536);
         phys(3, r.get(5));          // leaves the address in `v`
+        if (v < 4096) {
+            if (X.portLog.length() < 40) { X.portLog.add(join("push ir=", ir, " ip=", ip - 1, " sp=", r.get(5), " ss=", sr.get(3), " at=", v, " v=", val)); }
+        }
         wrw(v, val);
     }
 
@@ -879,6 +974,11 @@ class Cpu {
         if (p == 100) { v = X.port64; return; }
         if (p == 112) { v = X.cmosIndex; return; }
         if (p == 113) { v = X.cmos.get(X.cmosIndex + 1) + 0; return; }
+        if (p >= 64 && p <= 66) { pitRead(p - 64); return; }
+        if (p == 32) { v = X.picIrr; if (X.picSelect == 1) { v = X.picIsr; } return; }
+        if (p == 33) { v = X.picImr; return; }
+        if (p == 160) { v = X.pic2Irr; if (X.pic2Select == 1) { v = X.pic2Isr; } return; }
+        if (p == 161) { v = X.pic2Imr; return; }
         if (p == 1016) { v = 96; return; }
         if (p == 1021) { v = 96; return; }
         if (p == X.coreCountPort) { v = X.cores; return; }
@@ -887,6 +987,12 @@ class Cpu {
 
     private void portOut(p, val) { // warp
         _oV = val % 256;
+        if (p == 43) { pitControl(_oV); return; }
+        if (p >= 64 && p <= 66) { pitWrite(p - 64, _oV); return; }
+        if (p == 32) { picCommand(_oV); picRefresh(); return; }
+        if (p == 33) { X.picImr = _oV; picRefresh(); return; }
+        if (p == 160) { pic2Command(_oV); picRefresh(); return; }
+        if (p == 161) { X.pic2Imr = _oV; picRefresh(); return; }
         if (p == 112) { X.cmosIndex = _oV % 128; return; }
         if (p == 113) {
             X.cmos.set(X.cmosIndex + 1, _oV);
@@ -903,9 +1009,340 @@ class Cpu {
         }
     }
 
+    /* ---- bits, without a bitwise operator ----------------------------- *
+     * The language has and/or/not but nothing that touches one bit of a
+     * number, and `v - v % bit` is only the right clear when bit is two or
+     * more -- for bit 1, `v % 1` is always zero and nothing changes. Split the
+     * number round the bit instead: keep what is above it, force it, keep what
+     * is below.
+     */
+    private void bitSet(value, bit) { // warp
+        _bo = Operators.math("floor", value / (bit * 2)) * bit * 2 + bit + value % bit;
+    }
+
+    private void bitClr(value, bit) { // warp
+        _bo = Operators.math("floor", value / (bit * 2)) * bit * 2 + value % bit;
+    }
+
+    /* The same two, returning the value instead of leaving it in _bo, for the
+     * bit-test instructions where the operand is already a local. */
+    private void setBit(value, bit) { // warp
+        v = value - value % (bit * 2) + bit + value % bit;
+    }
+
+    private void clrBit(value, bit) { // warp
+        v = value - value % (bit * 2) + value % bit;
+    }
+
+    private void xorBit(value, bit) { // warp
+        _bx = Operators.math("floor", value / (bit * 2)) * bit * 2 + value % bit;
+        if (Operators.math("floor", value / bit) % 2 == 0) { _bx = _bx + bit; }
+        v = _bx;
+    }
+
+    /* ---- the 8254 ------------------------------------------------------ *
+     * A down counter per channel. The control word picks the channel, whether
+     * the reload is written low byte, high byte or both, and the mode; the
+     * channel port takes the reload. Reaching zero is what pulls the line.
+     */
+    private void pitControl(word) { // warp
+        _ch = Operators.math("floor", word / 64);
+        _acc = Operators.math("floor", word / 16) % 4;
+        if (_ch == 3) {                     // read-back: latch what was asked
+            _i = 0;
+            while (_i < 3) {
+                if (Operators.math("floor", word / X.pow2.get(_i + 2)) % 2 == 0) {
+                    X.pitLatched.set(_i + 1, X.pitCount.get(_i + 1) + 0);
+                }
+                _i += 1;
+            }
+            return;
+        }
+        if (_acc > 0) { X.pitAccess.set(_ch + 1, _acc); }
+        X.pitMode.set(_ch + 1, Operators.math("floor", word / 2) % 8);
+        X.pitNextByte.set(_ch + 1, 0);
+        if (_acc == 0) {                    // latch the count for a read
+            X.pitLatched.set(_ch + 1, X.pitCount.get(_ch + 1) + 0);
+        }
+    }
+
+    private void pitWrite(ch, byte) { // warp
+        _acc = X.pitAccess.get(ch + 1) + 0;
+        _v = byte + 0;
+        if (_acc == 1) {
+            if (_v == 0) { _v = 256; }
+            X.pitReload.set(ch + 1, _v);
+        } elif (_acc == 2) {
+            _v = _v * 256;
+            if (_v == 0) { _v = 65536; }
+            X.pitReload.set(ch + 1, _v);
+        } elif (X.pitNextByte.get(ch + 1) + 0 == 0) {
+            if (_v == 0) { _v = 256; }
+            X.pitLow.set(ch + 1, _v);
+            X.pitNextByte.set(ch + 1, 1);
+            return;
+        } else {
+            _v = _v * 256 + (X.pitLow.get(ch + 1) + 0);
+            if (_v == 0) { _v = 65536; }
+            X.pitReload.set(ch + 1, _v);
+            X.pitNextByte.set(ch + 1, 0);
+        }
+        X.pitCount.set(ch + 1, X.pitReload.get(ch + 1) + 0);
+        if (ch == 0) { X.pitOn = 1; }
+    }
+
+    private void pitRead(ch) { // warp
+        v = 0;
+        if (X.pitLatched.get(ch + 1) + 0 >= 0) {
+            _pv = X.pitLatched.get(ch + 1) + 0;
+            X.pitLatched.set(ch + 1, -1);
+        } else {
+            _pv = X.pitCount.get(ch + 1) + 0;
+        }
+        _acc = X.pitAccess.get(ch + 1) + 0;
+        if (_acc == 1) {
+            v = _pv % 256;
+            return;
+        }
+        if (_acc == 2) {
+            v = Operators.math("floor", _pv / 256) % 256;
+            return;
+        }
+        v = _pv % 256;
+        X.pitLatched.set(ch + 1, Operators.math("floor", _pv / 256) % 256);
+    }
+
+    /* One input clock. Channels that reached their terminal count come back in
+     * v as a bit mask, and bit 0 is the one wired to IRQ0. */
+    private void pitTick() { // warp
+        v = 0;
+        _i = 0;
+        while (_i < 3) {
+            _c = X.pitCount.get(_i + 1) + 0 - 1;
+            if (_c <= 0) {
+                _c = X.pitReload.get(_i + 1) + 0;
+                v = v + X.pow2.get(_i + 1);
+                if (X.pitMode.get(_i + 1) + 0 < 2) {
+                    _c = 65536;             // one shot: the output stays high
+                }
+            }
+            X.pitCount.set(_i + 1, _c);
+            _i += 1;
+        }
+    }
+
+    /* ---- the 8259 ------------------------------------------------------ *
+     * Fixed priority, fully nested: line 0 wins, and a line in service blocks
+     * a request at the same or a lower priority. Nothing else decides.
+     */
+    private void picCommand(word) { // warp
+        if (X.picInit > 0) {
+            if (X.picInit == 1) {
+                X.picBase = word - word % 8;
+                X.picInit = 0;
+                if (X.picNeed4 == 2) { X.picInit = 2; }
+                return;
+            }
+            if (X.picInit == 2) {
+                X.picInit = 0;
+                if (X.picNeed4 == 2) { X.picInit = 3; }
+                return;
+            }
+            X.picInit = 0;
+            return;
+        }
+        if (Operators.math("floor", word / 16) % 2 == 1) {      // ICW1
+            X.picIrr = 0;
+            X.picIsr = 0;
+            X.picNeed4 = 1;
+            if (word % 2 == 1) { X.picNeed4 = 2; }
+            X.picInit = 1;
+            return;
+        }
+        if (Operators.math("floor", word / 8) % 2 == 1) {       // OCW3
+            if (Operators.math("floor", word / 2) % 2 == 1) {
+                X.picSelect = word % 2;
+            }
+            return;
+        }
+        if (Operators.math("floor", word / 64) % 2 == 1) {      // specific EOI
+            bitClr(X.picIsr, X.pow2.get(word % 8 + 1));
+            X.picIsr = _bo;
+            return;
+        }
+        _i = 0;
+        while (_i < 8) {
+            if (Operators.math("floor", X.picIsr / X.pow2.get(_i + 1)) % 2 == 1) {
+                X.picIsr = X.picIsr - X.pow2.get(_i + 1);
+                return;
+            }
+            _i += 1;
+        }
+    }
+
+    private void pic2Command(word) { // warp
+        if (X.pic2Init > 0) {
+            if (X.pic2Init == 1) {
+                X.pic2Base = word - word % 8;
+                X.pic2Init = 0;
+                if (X.pic2Need4 == 2) { X.pic2Init = 2; }
+                return;
+            }
+            if (X.pic2Init == 2) {
+                X.pic2Init = 0;
+                if (X.pic2Need4 == 2) { X.pic2Init = 3; }
+                return;
+            }
+            X.pic2Init = 0;
+            return;
+        }
+        if (Operators.math("floor", word / 16) % 2 == 1) {
+            X.pic2Irr = 0;
+            X.pic2Isr = 0;
+            X.pic2Need4 = 1;
+            if (word % 2 == 1) { X.pic2Need4 = 2; }
+            X.pic2Init = 1;
+            return;
+        }
+        if (Operators.math("floor", word / 8) % 2 == 1) {
+            if (Operators.math("floor", word / 2) % 2 == 1) {
+                X.pic2Select = word % 2;
+            }
+            return;
+        }
+        if (Operators.math("floor", word / 64) % 2 == 1) {
+            bitClr(X.pic2Isr, X.pow2.get(word % 8 + 1));
+            X.pic2Isr = _bo;
+            return;
+        }
+        _i = 0;
+        while (_i < 8) {
+            if (Operators.math("floor", X.pic2Isr / X.pow2.get(_i + 1)) % 2 == 1) {
+                X.pic2Isr = X.pic2Isr - X.pow2.get(_i + 1);
+                return;
+            }
+            _i += 1;
+        }
+    }
+
+    /* The highest-priority line that may be acknowledged, or -1, in _pv. */
+    private void picPick() { // warp
+        _pv = -1;
+        _i = 0;
+        while (_i < 8) {
+            _bit = X.pow2.get(_i + 1) + 0;
+            if (Operators.math("floor", X.picIrr / _bit) % 2 == 1) {
+                if (Operators.math("floor", X.picImr / _bit) % 2 == 0) {
+                    if (X.picIsr % (_bit * 2) == 0) {
+                        _pv = _i;
+                        return;
+                    }
+                }
+            }
+            _i += 1;
+        }
+    }
+
+    private void pic2Pick() { // warp
+        _pv = -1;
+        _i = 0;
+        while (_i < 8) {
+            _bit = X.pow2.get(_i + 1) + 0;
+            if (Operators.math("floor", X.pic2Irr / _bit) % 2 == 1) {
+                if (Operators.math("floor", X.pic2Imr / _bit) % 2 == 0) {
+                    if (X.pic2Isr % (_bit * 2) == 0) {
+                        _pv = _i;
+                        return;
+                    }
+                }
+            }
+            _i += 1;
+        }
+    }
+
+    /* A device pulls a line. Lines 8..15 live on the second chip, and its
+     * output is the cascade into line 2 of the first. */
+    private void picRaise(irq) { // warp
+        if (irq >= 8) {
+            bitSet(X.pic2Irr, X.pow2.get(irq - 7));
+            X.pic2Irr = _bo;
+            pic2Pick();
+            if (_pv >= 0) { picRaise(2); return; }
+            picRefresh();
+            return;
+        }
+        bitSet(X.picIrr, X.pow2.get(irq + 1));
+        X.picIrr = _bo;
+        picRefresh();
+    }
+
+    /* The answer to "what would you hand over now" is cached, because it is
+     * asked before every instruction and the arbitration is a loop. It is
+     * recomputed whenever the chip's state changes: a line raised, an EOI, an
+     * initialization word, a mask. */
+    private void picRefresh() { // warp
+        picVector();
+        X.picVec = 0;
+        if (_pv >= 0) { X.picVec = _pv; }
+    }
+
+    /* The vector the controller would hand over now, or -1, in _pv. */
+    private void picVector() { // warp
+        picPick();
+        if (_pv == 2) {
+            _v2 = _pv;
+            pic2Pick();
+            if (_pv >= 0) { _pv = X.pic2Base + _pv; return; }
+            _pv = _v2;
+        }
+        if (_pv >= 0) { _pv = X.picBase + _pv; }
+    }
+
+    /* An interrupt is taken between instructions, and only when the guest has
+     * interrupts on. That is the whole of the rule. */
+    private void serviceIrq() { // warp
+        /* the cheap test first: no request means no work at all */
+        if (X.picVec < 1) { return; }
+        getFlagBit(9);
+        if (v == 0) { return; }
+        _v2 = X.picVec;
+        picPick();
+        if (_pv == 2) {
+            bitClr(X.picIrr, 4);
+            X.picIrr = _bo;
+            bitSet(X.picIsr, 4);
+            X.picIsr = _bo;
+            pic2Pick();
+            _bit = X.pow2.get(_pv + 1) + 0;
+            bitClr(X.pic2Irr, _bit);
+            X.pic2Irr = _bo;
+            bitSet(X.pic2Isr, _bit);
+            X.pic2Isr = _bo;
+        } else {
+            _bit = X.pow2.get(_pv + 1) + 0;
+            bitClr(X.picIrr, _bit);
+            X.picIrr = _bo;
+            bitSet(X.picIsr, _bit);
+            X.picIsr = _bo;
+        }
+        picRefresh();
+        interrupt(_v2);
+    }
+
+    private void clockBoard() { // warp
+        X.pitAcc += 1;
+        if (X.pitAcc < 2) { return; }
+        X.pitAcc = 0;
+        pitTick();
+        if (v % 2 == 1) { picRaise(0); }
+    }
+
     /* ---- the decoder -------------------------------------------------- */
 
     private void cpuStep() { // warp
+        /* an interrupt is taken between instructions, and only when the guest
+         * has interrupts on -- so the check comes before the fetch */
+        serviceIrq();
         seg = 4;
         rep = 0;
         oz = 2;
@@ -930,6 +1367,7 @@ class Cpu {
             trace.add(join(sr.get(2), ":", ip - 1, ":", ir));
         }
         execute();
+        clockBoard();
     }
 
     private void execute() { // warp
@@ -1004,7 +1442,6 @@ class Cpu {
         alu(_kind, _x, v, 2);
         if (_kind != 7) { putReg16(0, v); }
     }
-
 
     /* ---- the branch conditions ---------------------------------------- *
      * The opcode's low nibble is the condition number, and there are sixteen
@@ -1184,7 +1621,6 @@ class Cpu {
         putReg16(0, _tQ - Operators.math("floor", _tQ / 65536) * 65536);
         putReg16(2, _tRem - Operators.math("floor", _tRem / 65536) * 65536);
     }
-
 
     /* ---- everything else ---------------------------------------------- *
      * One long chain, ordered by how often real 16-bit code meets each opcode:
@@ -1678,44 +2114,195 @@ class Cpu {
         /* --- the two-byte page --- */
         if (op == 15) { twoByte(); return; }
 
-        /* --- daa / das: BCD adjust, for the arithmetic a real BIOS does --- */
+        /* --- daa / das / aaa / aas: the decimal adjusts ----------------- *
+         * Both of daa's tests read the byte as it arrived: doing the second
+         * one on the already-adjusted value is a classic and quiet bug.
+         */
         if (op == 39 || op == 47) {
             getReg8(0);
             _v0 = v;
+            _old = v;
             getFlagBit(0);
             _cf = v;
             getFlagBit(4);
             _af = v;
-            _adj = 0;
-            _newCf = _cf;
-            if (_v0 % 16 > 9 || _af == 1) { _adj = 6; }
-            if (_v0 > 153 || _cf == 1) { _adj = _adj + 96; _newCf = 1; }
-            _lo = _v0 % 16;
-            _hi = Operators.math("floor", _v0 / 16);
-            if (_lo > 9 || _af == 1) { _lo = _lo + 6; }
-            if (_lo > 15) { _lo = _lo - 16; _hi = _hi + 1; }
-            if (_hi > 9 || _cf == 1) { _hi = _hi + 6; }
-            if (_hi > 15) { _hi = (_hi - 16) % 10; _newCf = 1; }
-            if (op == 47) {
-                _lo = _v0 % 16;
-                _hi = Operators.math("floor", _v0 / 16);
-                if (_lo > 9 || _af == 1) { _lo = _lo - 6; }
-                if (_lo < 0) { _lo = _lo + 16; _hi = _hi - 1; }
-                if (_hi > 9 || _cf == 1) { _hi = _hi - 6; }
-                if (_hi < 0) { _hi = _hi + 10; _newCf = 1; }
+            _step = 0;
+            if (_v0 % 16 > 9) { _step = 1; }
+            if (_af == 1) { _step = 1; }
+            if (_step == 1) {
+                if (op == 39) {
+                    _set = 0;
+                    if (_cf == 1 || _old > 249) { _set = 1; }
+                    setFlagTo(0, _set);
+                    _v0 = _v0 + 6;
+                } else {
+                    _set = 0;
+                    if (_cf == 1 || _old < 6) { _set = 1; }
+                    setFlagTo(0, _set);
+                    _v0 = _v0 - 6;
+                }
+                _v0 = _v0 + 2560;
+                _v0 = _v0 % 256;
             }
-            putReg8(0, _hi * 16 + _lo);
-            setFlagTo(0, _newCf);
-            putReg8(0, _hi * 16 + _lo);
+            setFlagTo(4, _step);
+            if (_cf == 1 || _old > 153) {
+                if (op == 39) { _v0 = _v0 + 96; } else { _v0 = _v0 + 160; }
+                _v0 = _v0 % 256;
+                setFlagTo(0, 1);
+            }
+            putReg8(0, _v0);
+            szp(_v0, 1);
+            return;
+        }
+        if (op == 55 || op == 63) {
+            getReg8(0);
+            _v0 = v;
+            getFlagBit(4);
+            _af = v;
+            _hit = 0;
+            if (_v0 % 16 > 9) { _hit = 1; }
+            if (_af == 1) { _hit = 1; }
+            if (_hit == 1) {
+                getReg16(0);
+                _v1 = v;
+                if (op == 55) { _v1 = _v1 + 262; } else { _v1 = _v1 + 65274; }
+                putReg16(0, _v1 % 65536);
+                setFlagTo(4, 1);
+                setFlagTo(0, 1);
+            } else {
+                setFlagTo(4, 0);
+                setFlagTo(0, 0);
+            }
+            getReg8(0);
+            putReg8(0, v % 16);
+            return;
+        }
+        /* --- aam / aad / salc / xlat ------------------------------------ */
+        if (op == 212 || op == 213) {
+            f8();
+            _v0 = v;
+            if (_v0 == 0) { _v0 = 10; }
+            getReg8(0);
+            _v1 = v;
+            getReg8(4);
+            _v2 = v;
+            if (op == 212) {
+                putReg8(4, Operators.math("floor", _v1 / _v0));
+                putReg8(0, _v1 % _v0);
+            } else {
+                _v2 = (_v1 + _v2 * _v0) % 256;
+                putReg8(4, 0);
+                putReg8(0, _v2);
+            }
             getReg8(0);
             szp(v, 1);
+            return;
+        }
+        if (op == 214) {
+            getFlagBit(0);
+            _set = 0;
+            if (v == 1) { _set = 255; }
+            putReg8(0, _set);
+            return;
+        }
+        if (op == 215) {
+            getReg8(0);
+            _v0 = v;
+            getReg16(3);
+            _v1 = v;
+            phys(seg, (_v1 + _v0) % 65536);
+            rdb(v);
+            _v2 = v;
+            _dummy = 0;
+            putReg8(0, _v2);
+            return;
+        }
+        if (op == 155) {
+            return;                       // wait: there is no coprocessor
+        }
+        if (op == 241) {
+            interrupt(1);
+            return;
+        }
+        if (op == 99) {                   // arpl r/m16, r16
+            modrm();
+            getOp(2);
+            _v0 = v;
+            getReg16(mreg);
+            _v1 = v;
+            _set = 0;
+            if (_v0 % 4 < _v1 % 4) { _set = 1; }
+            setFlagTo(6, _set);
+            if (_set == 1) {
+                putOp(2, _v0 - _v0 % 4 + _v1 % 4);
+            }
+            return;
+        }
+        if (op == 98) {                   // bound: #BR when out of range
+            modrm();
+            getOp(2);
+            _v0 = v;
+            phys(eseg, ea);
+            rdw(v);
+            _lo = v;
+            phys(eseg, (ea + 2) % 65536);
+            rdw(v);
+            _hi = v;
+            // both bounds and the index are signed, so a negative index below
+            // a negative bound is inside -- compare after sign-extending
+            if (_v0 >= 32768) { _v0 = _v0 - 65536; }
+            if (_lo >= 32768) { _lo = _lo - 65536; }
+            if (_hi >= 32768) { _hi = _hi - 65536; }
+            if (_v0 < _lo || _v0 > _hi) {
+                interrupt(5);
+            }
+            return;
+        }
+        /* --- ins / outs: the string forms of in and out ---------------- */
+        if (op >= 108 && op <= 111) {
+            _sz = 1;
+            if (op == 109 || op == 111) { _sz = oz; }
+            _count = 1;
+            if (rep == 243) {
+                getReg16(1);
+                _count = v;
+                if (_count == 0) { return; }
+                putReg16(1, 0);
+            }
+            _nSi = 0;
+            while (_nSi < _count) {
+                getReg16(2);
+                _port = v;
+                getFlagBit(10);
+                _sh = 1;
+                if (v == 1) { _sh = 0; _sh = -1; }
+                if (op == 108 || op == 109) {
+                    portIn(_port);
+                    _v0 = v % 256;
+                    getReg16(7);
+                    _v1 = v;
+                    phys(1, _v1);
+                    wrb(_v0);
+                    _v0 = _v1 + _sz * _sh;
+                    putReg16(7, _v0 % 65536);
+                } else {
+                    getReg16(6);
+                    _v1 = v;
+                    phys(seg, _v1);
+                    rdb(v);
+                    _v0 = v;
+                    portOut(_port, _v0);
+                    _v0 = _v1 + _sz * _sh;
+                    putReg16(6, _v0 % 65536);
+                }
+                _nSi += 1;
+            }
             return;
         }
 
         err = join("opcode ", op, " at ", sr.get(2), ":", ip - 1);
         halted = 1;
     }
-
 
     /* ---- group 4 and 5: inc/dec/call/jmp/push, and the far forms ------ */
     private void group45(size, op) { // warp
@@ -1930,6 +2517,153 @@ class Cpu {
             pop16();
             if (_tOp == 161) { sr.set(5, v % 65536); return; }
             sr.set(6, v % 65536);
+            return;
+        }
+        if (_tOp == 163 || _tOp == 171 || _tOp == 179 || _tOp == 187) {
+            // bt / bts / btr / btc with the bit number in a register
+            modrm();
+            getOp(oz);
+            _tV = v;
+            getReg16(mreg);
+            _tN = v % (oz * 8);
+            _tBit = Operators.math("floor", _tV / X.pow2.get(_tN + 1)) % 2;
+            setFlagTo(0, _tBit);
+            if (_tOp != 163) {
+                // the helpers take a mask, not a bit number
+                _tBit = X.pow2.get(_tN + 1);
+                if (_tOp == 171) { setBit(_tV, _tBit); _tV = v; }
+                if (_tOp == 179) { clrBit(_tV, _tBit); _tV = v; }
+                if (_tOp == 187) { xorBit(_tV, _tBit); _tV = v; }
+                putOp(oz, _tV);
+            }
+            return;
+        }
+        if (_tOp == 164 || _tOp == 165 || _tOp == 172 || _tOp == 173) {
+            // shld / shrd: a double shift, the second half from a register.
+            // One bit at a time, because the second half changes as it goes
+            // and the last bit out is the carry. Every step is its own
+            // statement: a compound expression here is where the operand width
+            // gets lost.
+            modrm();
+            getOp(oz);
+            _tV = v;
+            getReg16(mreg);
+            _tS = v;
+            if (_tOp == 164 || _tOp == 172) { f8(); } else { getReg16(1); }
+            _tN = v % 32;
+            _tWidth = 256;
+            _tHalf = 128;
+            if (oz == 2) { _tWidth = 65536; _tHalf = 32768; }
+            if (oz == 4) { _tWidth = 4294967296; _tHalf = 2147483648; }
+            if (_tN > oz * 8) { _tN = oz * 8; }
+            _tCf = 0;
+            _i = 0;
+            while (_i < _tN) {
+                if (_tOp == 164 || _tOp == 165) {
+                    _tCf = Operators.math("floor", _tV / _tHalf) % 2;
+                    _tBit = Operators.math("floor", _tS / _tHalf) % 2;
+                    _tV = _tV * 2;
+                    _tV = _tV + _tBit;
+                    _tV = _tV % _tWidth;
+                    _tS = _tS * 2;
+                    _tS = _tS + _tCf;
+                    _tS = _tS % _tWidth;
+                } else {
+                    _tCf = _tV % 2;
+                    _tBit = _tS % 2;
+                    _tV = Operators.math("floor", _tV / 2);
+                    _tV = _tV + _tBit * _tHalf;
+                    _tV = _tV % _tWidth;
+                    _tS = Operators.math("floor", _tS / 2);
+                    _tS = _tS + _tCf * _tHalf;
+                    _tS = _tS % _tWidth;
+                }
+                _i += 1;
+            }
+            if (_tN > 0) {
+                setFlagTo(0, _tCf);
+                putOp(oz, _tV);
+                szp(_tV, oz);
+            }
+            return;
+        }
+        if (_tOp == 188 || _tOp == 189) {
+            // bsf / bsr: where the first one bit is. No bits at all leaves the
+            // register alone and says so in ZF.
+            modrm();
+            getOp(oz);
+            _tV = v;
+            if (_tV == 0) {
+                setFlagTo(6, 1);
+                return;
+            }
+            setFlagTo(6, 0);
+            _tN = 0;
+            if (_tOp == 188) {
+                while (Operators.math("floor", _tV / X.pow2.get(_tN + 1)) % 2 == 0) {
+                    _tN += 1;
+                }
+            } else {
+                _tN = oz * 8 - 1;
+                while (Operators.math("floor", _tV / X.pow2.get(_tN + 1)) % 2 == 0) {
+                    _tN += -1;
+                }
+            }
+            putReg16(mreg, _tN);
+            return;
+        }
+        if (_tOp == 176 || _tOp == 177) {
+            // cmpxchg: compare the accumulator with the destination, then
+            // either store the source or load the destination
+            _tSz = oz;
+            if (_tOp == 176) { _tSz = 1; }
+            modrm();
+            getOp(_tSz);
+            _tV = v;
+            getReg16(0);
+            _tA = v;
+            if (_tSz == 1) { _tA = _tA % 256; _tV = _tV % 256; }
+            getReg16(mreg);
+            _tS = v;
+            if (_tSz == 1) { _tS = _tS % 256; }
+            if (_tA == _tV) {
+                setFlagTo(6, 1);
+                putOp(_tSz, _tS);
+                return;
+            }
+            setFlagTo(6, 0);
+            if (_tSz == 1) {
+                putReg8(0, _tV);
+            } else {
+                putReg16(0, _tV);
+            }
+            return;
+        }
+        if (_tOp == 192 || _tOp == 193) {
+            // xadd: swap, then add -- `lock xadd` is how a count is taken
+            _tSz = oz;
+            if (_tOp == 192) { _tSz = 1; }
+            modrm();
+            getOp(_tSz);
+            _tV = v;
+            getReg16(mreg);
+            _tS = v;
+            if (_tSz == 1) {
+                _tV = _tV % 256;
+                _tS = _tS % 256;
+                _tA = (_tV + _tS) % 256;
+                alu(0, _tV, _tS, 1);
+                putOp(1, _tA);
+                putReg8(mreg, _tV);
+            } else {
+                alu(0, _tV, _tS, 2);
+                _tA = (_tV + _tS) % 65536;
+                putOp(2, _tA);
+                putReg16(mreg, _tV);
+            }
+            return;
+        }
+        if (_tOp == 6) {                       // clts: nothing to clear yet
             return;
         }
         if (_tOp == 162) {                     // cpuid: say what we are

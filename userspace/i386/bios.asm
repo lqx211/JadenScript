@@ -41,6 +41,9 @@ ROWS            equ 30
 BDA_CURSOR_COL  equ 0x450
 BDA_CURSOR_ROW  equ 0x451
 BDA_TICKS       equ 0x46C
+BDA_KB_HEAD     equ 0x41A
+BDA_KB_TAIL     equ 0x41C
+BDA_KB_BUFFER   equ 0x41E
 BDA_EQUIP       equ 0x410
 BDA_MEMK        equ 0x413
 ; scratch the console keeps between calls: free space in the data area, at an
@@ -50,6 +53,11 @@ ARG_AX          equ 0x4F0
 ARG_AH          equ 0x4F1
 ARG_BL          equ 0x4F2
 BDA_CORES       equ 0x4F3
+PIC_CMD         equ 0x20
+PIC_MSK         equ 0x21
+PIT_CH0         equ 0x40
+PIT_CMD         equ 0x43
+PIT_RATE        equ 11932           ; 1.193182 MHz / 100 Hz, the divisor a PC uses
 CON_ATTR        equ 0x4F4          ; the attribute the console prints with
 SU_ROWSAVE      equ 0x520
 
@@ -80,6 +88,9 @@ start:
     mov     byte [es:BDA_CURSOR_COL], 0
     mov     byte [es:BDA_CURSOR_ROW], 0
     mov     byte [es:CON_ATTR], 0x07
+    ; the keyboard ring the interrupt fills and int 16h drains starts empty
+    mov     word [es:BDA_KB_HEAD], 0
+    mov     word [es:BDA_KB_TAIL], 0
 
     ; what this machine has comes out of the CMOS, not out of this listing:
     ; 0x14 is the equipment word, 0x15/0x16 the base memory in KiB
@@ -103,6 +114,38 @@ start:
     mov     al, 0x31
     mov     cl, 0xA5
     call    cmos_write
+
+    ; ---- the two chips the tick depends on ------------------------------
+    ; The 8259: four initialization words, all of them to the *command* port --
+    ; only the mask goes to the port next door, and getting that wrong is how a
+    ; controller ends up waiting for an ICW2 that never comes, acknowledging
+    ; one interrupt and then never another. ICW1 initialize, ICW2 vectors start
+    ; at 0x08, ICW3 a slave on IRQ2, ICW4 8086 mode.
+    mov     al, 0x11
+    out     PIC_CMD, al
+    mov     al, 0x08
+    out     PIC_CMD, al
+    mov     al, 0x04
+    out     PIC_CMD, al
+    mov     al, 0x01
+    out     PIC_CMD, al
+    mov     al, 0xFE                ; OCW1: only IRQ0 gets through
+    out     PIC_MSK, al
+    ; The 8254: channel 0, both bytes, mode 2 (rate generator), binary. The
+    ; divisor is the one a PC uses for 100 Hz -- and on this board, whose clock
+    ; is the instruction counter, it comes out at about that.
+    mov     al, 0x34
+    out     PIT_CMD, al
+    mov     al, PIT_RATE % 256
+    out     PIT_CH0, al
+    mov     al, PIT_RATE / 256
+    out     PIT_CH0, al
+    mov     al, 0xB6                ; channel 2, both bytes, mode 3: the speaker
+    out     PIT_CMD, al
+    mov     al, 0x9C                ; 533 Hz, which nothing listens to yet
+    out     PIT_CH0 + 2, al
+    mov     al, 0x2E
+    out     PIT_CH0 + 2, al
 
     ; the interrupt vector table
     mov     ax, cs
@@ -131,7 +174,10 @@ start:
     mov     dx, int08
     call    set_vector
     mov     bx, 0x09 * 4
-    mov     dx, int08
+    mov     dx, int09
+    call    set_vector
+    mov     bx, 0x1C * 4
+    mov     dx, int1c
     call    set_vector
 
     ; from here on the ROM is the data segment
@@ -778,8 +824,62 @@ int1a:
     pop     bp
     iret
 
-; int 08h: the timer tick, once there is a timer to tick
+; ---------------------------------------------------------------------------
+; int 08h: the timer
+;
+; The 8254 counts down, reaches zero, and pulls IRQ0; the 8259 hands the CPU
+; the vector; this runs. Its whole job is the tick counter every program reads
+; at 0x40:0x6C -- and calling int 1Ch, which is the hook a guest may steal
+; without touching the BIOS's own work.
+;
+; EOI comes last and cannot be forgotten: without it the controller keeps IRQ0
+; in service and no further timer interrupt is ever delivered.
+; ---------------------------------------------------------------------------
 int08:
+    push    ax
+    push    ds
+    xor     ax, ax
+    mov     ds, ax
+    inc     word [ds:BDA_TICKS]
+    jnz     .noHigh
+    inc     word [ds:BDA_TICKS + 2]
+.noHigh:
+    int     0x1C                    ; the user's hook, which is iret by default
+    mov     al, 0x20
+    out     PIC_CMD, al             ; non-specific EOI
+    pop     ds
+    pop     ax
+    iret
+
+; int 1Ch: the hook int 08h calls. A guest that wants a timer replaces this
+; vector and chains to the old one if it wants the BIOS's tick as well.
+int1c:
+    iret
+
+; ---------------------------------------------------------------------------
+; int 09h: the keyboard
+;
+; The 8042 raises IRQ1 when a scan code lands in its output buffer. This takes
+; the byte, appends the scan code to the buffer at 0x40:0x1E, and EOIs. int 16h
+; is what reads the buffer back.
+; ---------------------------------------------------------------------------
+int09:
+    push    ax
+    push    bx
+    push    ds
+    xor     ax, ax
+    mov     ds, ax
+    in      al, 0x60                ; the scan code, and that clears the buffer
+    mov     bx, [ds:BDA_KB_TAIL]
+    mov     [ds:BDA_KB_BUFFER + bx], al
+    inc     bx
+    and     bx, 0x1F                ; a ring of thirty-two scan codes
+    mov     [ds:BDA_KB_TAIL], bx
+    mov     al, 0x20
+    out     PIC_CMD, al
+    pop     ds
+    pop     bx
+    pop     ax
     iret
 
 %include "setup.inc"

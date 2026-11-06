@@ -75,7 +75,15 @@ class I386BootTests(unittest.TestCase):
         screen = mach.text()
         self.assertIn("MBR: hello from a boot sector", screen)
         self.assertIn("STAGE2: this sector came through int 13h", screen)
-        self.assertIn("MBR: handing nothing on, halting", screen)
+        self.assertIn("MBR: handing nothing on", screen)
+        self.assertIn("MBR: the clock kept going while the CPU slept", screen)
+        # the tick counter belongs to the 8254 and to nothing else: one owner
+        # is a clock, two owners is a number that means nothing
+        import re
+        found = re.search(r"0x40:0x6C reads (\d+)", screen)
+        self.assertIsNotNone(found, screen)
+        self.assertLess(int(found.group(1)), 400,
+                        "the tick counter is being written by more than one device")
         self.assertTrue(mach.halted, "the MBR ends with hlt")
 
     def test_every_cell_carries_the_same_attribute(self) -> None:
@@ -290,6 +298,187 @@ class I386SetupTests(unittest.TestCase):
         self.assertEqual(mach.cmos[0x09], 0x25, "the year was not written")
 
 
+class I386OpcodeTests(unittest.TestCase):
+    """The instructions the machine learned after the first boot, checked
+    against what the manual says rather than against itself."""
+
+    def _run(self, code: bytes, steps: int = 1, **regs):
+        mach = rv.Machine()
+        for i, byte in enumerate(code):
+            mach.write(i, byte, 1)
+        for name, value in regs.items():
+            mach.reg[int(name[1:])] = value
+        for _ in range(steps):
+            mach.step()
+        return mach
+
+    def test_daa_fixes_a_byte_that_carried_out_of_its_nibble(self) -> None:
+        mach = self._run(bytes([0x27]), r0=0x1A)          # daa
+        self.assertEqual(mach.reg[0] & 0xFF, 0x20)
+        self.assertEqual(mach.flag(rv.FLAG_CF), 0, "0x1a did not carry past 99")
+
+    def test_das_borrows_sixty_when_the_high_nibble_is_over_nine(self) -> None:
+        mach = self._run(bytes([0x2F]), r0=0x9F)          # das
+        self.assertEqual(mach.reg[0] & 0xFF, 0x39)
+        self.assertEqual(mach.flag(rv.FLAG_CF), 1)
+
+    def test_aaa_puts_the_carry_in_ah(self) -> None:
+        mach = self._run(bytes([0x37]), r0=0x000B)        # aaa
+        self.assertEqual(mach.reg[0], 0x0101, "ah carries one, al keeps the digit")
+
+    def test_aas_takes_the_carry_out_of_ah(self) -> None:
+        mach = self._run(bytes([0x3F]), r0=0x010B)        # aas
+        self.assertEqual(mach.reg[0], 0x0005)
+
+    def test_aam_and_aad_are_inverses(self) -> None:
+        mach = self._run(bytes([0xD4, 0x0A]), r0=47)      # aam
+        self.assertEqual(mach.reg[0], 0x0407, "forty-seven is ah=4, al=7")
+        mach = self._run(bytes([0xD5, 0x0A]), r0=0x0407)  # aad
+        self.assertEqual(mach.reg[0] & 0xFF, 47)
+
+    def test_salc_is_all_ones_when_the_carry_is_set(self) -> None:
+        self.assertEqual(self._run(bytes([0xF9, 0xD6]), steps=2, r0=0).reg[0] & 0xFF, 0xFF)
+        self.assertEqual(self._run(bytes([0xF8, 0xD6]), steps=2, r0=0).reg[0] & 0xFF, 0x00)
+
+    def test_bsf_and_bsr_find_the_first_one_bit(self) -> None:
+        self.assertEqual(self._run(bytes([0x0F, 0xBC, 0xC1]), r1=0x0010).reg[0], 4)
+        self.assertEqual(self._run(bytes([0x0F, 0xBD, 0xC1]), r1=0x8000).reg[0], 15)
+        mach = self._run(bytes([0x0F, 0xBC, 0xC1]), r0=0x1234, r1=0)
+        self.assertEqual(mach.flag(rv.FLAG_ZF), 1)
+        self.assertEqual(mach.reg[0], 0x1234, "no bits: the register is left alone")
+
+    def test_the_bit_tests_set_and_clear_and_flip(self) -> None:
+        self.assertEqual(self._run(bytes([0x0F, 0xAB, 0xC8]), r0=0, r1=3).reg[0], 0x0008)
+        self.assertEqual(self._run(bytes([0x0F, 0xB3, 0xC8]), r0=0x0008, r1=3).reg[0], 0)
+        self.assertEqual(self._run(bytes([0x0F, 0xBB, 0xC8]), r0=0x0008, r1=3).reg[0], 0)
+        self.assertEqual(self._run(bytes([0x0F, 0xA3, 0xC8]), r0=0x0004, r1=2).flag(rv.FLAG_CF), 1)
+
+    def test_the_double_shifts_pull_bits_from_the_other_register(self) -> None:
+        mach = self._run(bytes([0x0F, 0xA4, 0xC8, 0x04]), r0=0x1234, r1=0x5678)
+        self.assertEqual(mach.reg[0], 0x2345)
+        self.assertEqual(mach.reg[1], 0x5678, "shld does not touch the source")
+        mach = self._run(bytes([0x0F, 0xAC, 0xC8, 0x04]), r0=0x4556, r1=0x5678)
+        self.assertEqual(mach.reg[0], 0x8455)
+        mach = self._run(bytes([0x0F, 0xA4, 0xC8, 0x10]), r0=0x1234, r1=0x5678)
+        self.assertEqual(mach.reg[0], 0x5678, "a shift of sixteen is a move")
+
+    def test_xadd_swaps_and_adds(self) -> None:
+        mach = self._run(bytes([0x0F, 0xC1, 0xC8]), r0=10, r1=5)
+        self.assertEqual((mach.reg[0], mach.reg[1]), (15, 10))
+
+    def test_cmpxchg_is_a_compare_and_swap(self) -> None:
+        code = bytes([0x0F, 0xB1, 0x0E, 0x00, 0x02])      # cmpxchg [0x200], cx
+        mach = self._run(code, steps=0, r0=10, r1=99)
+        mach.write(0x200, 10, 2)
+        mach.step()
+        self.assertEqual(mach.flag(rv.FLAG_ZF), 1)
+        self.assertEqual(mach.read(0x200, 2), 99, "equal: the source is stored")
+        mach = self._run(code, steps=0, r0=10, r1=99)
+        mach.write(0x200, 7, 2)
+        mach.step()
+        self.assertEqual(mach.flag(rv.FLAG_ZF), 0)
+        self.assertEqual(mach.reg[0], 7, "not equal: the destination is loaded")
+
+    def test_bound_faults_only_outside_its_limits(self) -> None:
+        code = bytes([0x62, 0x06, 0x00, 0x02])            # bound ax, [0x200]
+        mach = self._run(code, steps=0, r0=0x0100)
+        mach.write(0x200, 0x0000, 2)
+        mach.write(0x202, 0x0200, 2)
+        mach.write(5 * 4, 0x0000, 2)
+        mach.write(5 * 4 + 2, 0x1200, 2)
+        mach.step()
+        self.assertEqual(mach.sreg[rv.SEG_CS], 0, "inside the bounds, so no fault")
+        mach = self._run(code, steps=0, r0=0x0300)
+        mach.write(0x200, 0x0000, 2)
+        mach.write(0x202, 0x0200, 2)
+        mach.write(5 * 4, 0x0000, 2)
+        mach.write(5 * 4 + 2, 0x1200, 2)
+        mach.step()
+        self.assertEqual(mach.sreg[rv.SEG_CS], 0x1200, "outside them: #BR")
+
+    def test_cpuid_names_the_processor(self) -> None:
+        mach = self._run(bytes([0x0F, 0xA2]), r0=0)
+        self.assertEqual(mach.reg[3], 0x756E6547, "'Genu'")
+        self.assertEqual(mach.reg[2], 0x6C65746E, "'ntel'")
+        self.assertEqual(mach.reg[1], 0x49656E69, "'ineI'")
+        mach = self._run(bytes([0x0F, 0xA2]), r0=1)
+        self.assertEqual(mach.reg[0] >> 8, 4, "family 4")
+
+
+class I386BoardTests(unittest.TestCase):
+    """The 8254 counting down and the 8259 deciding who runs next."""
+
+    def _board(self, rate: int = 11932):
+        """A machine with the chips programmed and a guest that spins."""
+        mach = rv.Machine()
+        for i, byte in enumerate(bytes([0xEB, 0xFE])):     # jmp $
+            mach.write(0x20000 + i, byte, 1)
+        # the handler: inc word [0x500]; out 0x20, 0x20; iret
+        handler = bytes([0xFF, 0x06, 0x00, 0x05, 0xB0, 0x20, 0xE6, 0x20, 0xCF])
+        for i, byte in enumerate(handler):
+            mach.write(0x10000 + i, byte, 1)
+        mach.write(8 * 4, 0x0000, 2)
+        mach.write(8 * 4 + 2, 0x1000, 2)
+        mach.sreg[rv.SEG_CS] = 0x2000
+        mach.eip = 0
+        mach.sreg[rv.SEG_SS] = 0x0A00
+        mach.reg[4] = 0xFFFE
+        mach.pic.command(0x11)                    # ICW1: initialize
+        mach.pic.command(0x08)                    # ICW2: vectors start at 8
+        mach.pic.command(0x04)                    # ICW3
+        mach.pic.command(0x01)                    # ICW4: 8086 mode
+        mach.pic.imr = 0xFE                       # IRQ0 through
+        mach.pit.control(0x34)                    # channel 0, both bytes, mode 2
+        mach.pit.write(0, rate % 256)
+        mach.pit.write(0, rate // 256)
+        return mach
+
+    def test_the_counter_reloads_and_raises_the_line(self) -> None:
+        mach = self._board(rate=100)
+        mach.run(limit=1000)
+        self.assertGreaterEqual(mach.read(0x500, 2), 1)
+        ticks = mach.read(0x500, 2)
+        self.assertEqual(mach.pic.isr, 0, "the handler sent its EOI")
+
+    def test_the_mask_keeps_the_line_out(self) -> None:
+        mach = self._board(rate=100)
+        mach.pic.imr = 0xFF                       # mask everything
+        mach.run(limit=5000)
+        self.assertEqual(mach.read(0x500, 2), 0, "a masked line never arrives")
+        self.assertEqual(mach.pic.irr & 1, 1, "but the request is still latched")
+
+    def test_the_rate_follows_the_divisor(self) -> None:
+        """The clock is the instruction counter, so the count of ticks between
+        two instruction counts is exactly the divisor times the reload."""
+        fast, slow = self._board(rate=100), self._board(rate=400)
+        fast.run(limit=50_000)
+        slow.run(limit=50_000)
+        self.assertGreater(fast.read(0x500, 2), slow.read(0x500, 2) * 3)
+
+    def test_a_halted_core_wakes_on_the_tick(self) -> None:
+        mach = self._board(rate=100)
+        for i, byte in enumerate(bytes([0xF4, 0xEB, 0xFD])):   # hlt; jmp -3
+            mach.write(0x20000 + i, byte, 1)
+        mach.run(limit=20_000)
+        self.assertGreaterEqual(mach.read(0x500, 2), 3)
+        self.assertFalse(mach.halted, "the tick woke it up")
+
+    def test_a_halted_core_with_interrupts_off_stays_halted(self) -> None:
+        mach = self._board(rate=100)
+        for i, byte in enumerate(bytes([0xFA, 0xF4])):          # cli; hlt
+            mach.write(0x20000 + i, byte, 1)
+        mach.run(limit=20_000)
+        self.assertTrue(mach.halted, "nothing can wake it, so it stays down")
+        self.assertEqual(mach.read(0x500, 2), 0)
+
+    def test_the_eoi_lets_the_next_one_in(self) -> None:
+        mach = self._board(rate=100)
+        mach.run(limit=200)
+        first = mach.read(0x500, 2)
+        mach.run(limit=400)
+        self.assertGreater(mach.read(0x500, 2), first)
+
+
 class I386SmpTests(unittest.TestCase):
     """Cores 2..N are woken through the chipset and check in through memory."""
 
@@ -404,6 +593,86 @@ class I386JswTests(unittest.TestCase):
                        f"jsw {int(env.lists['sr'][1]):04x}:{int(env.vars['ip']):04x} "
                        f"ref {mach.sreg[rv.SEG_CS]:04x}:{mach.eip:04x}")
                 self.fail(msg)
+
+    #: One program, every opcode the machine learned after the first boot: the
+    #: BCD adjusts, aam/aad, salc, xlat, the bit tests, the double shifts,
+    #: xadd, cmpxchg, arpl, bound, cpuid, wait and int1. Assembled with nasm
+    #: from the listing in the tool that produced it, and run on both machines.
+    OPCODE_PROGRAM = bytes(int(part, 16) for part in """
+        B0 1A 27 B0 9F 2F B8 0B 00 37 B8 0B 01 3F B0 2F D4 0A D5 0A F9 D6
+        BB 00 02 B0 03 D7 B9 10 00 0F BC C1 0F BD D1 B8 04 00 B9 02 00
+        0F A3 C8 0F AB C8 0F B3 C8 0F BB C8 B8 01 00 0F A3 C8 0F AB C8
+        B8 34 12 B9 78 56 0F A4 C8 04 0F A4 C8 08 0F AC C8 04 B8 0A 00
+        B9 05 00 0F C1 C8 B8 0A 00 B9 63 00 0F B1 0E 04 02 B8 0B 00
+        0F B1 0E 04 02 B8 05 00 B9 02 00 63 C8 B8 05 01 62 06 10 02
+        9B F1 EB FE
+    """.split())
+
+    def test_the_new_opcodes_agree_with_the_model(self) -> None:
+        """Not just that each instruction runs: that it lands on the same
+        registers and flags as the model, step by step."""
+        import jsw_sim
+
+        env, classes = self._machine()
+        cpu = classes["Cpu"].procs
+        mach = rv.Machine()
+
+        for i, byte in enumerate(self.OPCODE_PROGRAM):
+            mach.write(0x10000 + i, byte, 1)
+            # the Scratch machine keeps RAM as a list of little-endian dwords
+            slot = (0x10000 + i) // 4
+            shift = (0x10000 + i) % 4
+            word = int(env.lists["X.mem"][slot])
+            env.lists["X.mem"][slot] = word + byte * 256 ** shift
+        for m, at in ((mach, 0x203),):
+            m.write(at, 0x42, 1)
+        env.lists["X.mem"][0x203 // 4] += 0x42 * 256 ** (0x203 % 4)
+        # bound's low and high limit, and a first value for cmpxchg
+        for at, value in ((0x210, 0x0000), (0x212, 0x0200), (0x204, 10)):
+            mach.write(at, value, 2)
+            slot = at // 4
+            env.lists["X.mem"][slot] += value * 256 ** (at % 4)
+
+        mach.sreg[rv.SEG_CS] = 0x1000
+        mach.eip = 0
+        # the Scratch machine's RAM window is 128 KiB at zero, so the stack has
+        # to live inside it -- 0x0A00 is free space in both machines
+        mach.sreg[rv.SEG_SS] = 0x0A00
+        mach.reg[4] = 0xFFFE
+        mach.write(0x11000, 0xCF, 1)                     # an iret for int1
+        mach.write(1 * 4, 0x0000, 2)
+        mach.write(1 * 4 + 2, 0x1100, 2)
+        env.vars["ip"] = 0
+        env.lists["sr"][1] = 0x1000                      # sr.get(2) is cs
+        env.lists["sr"][2] = 0x0A00                      # sr.get(3) is ss
+        env.lists["r"][4] = 0xFFFE                       # r.get(5) is sp
+        env.lists["X.mem"][0x11000 // 4] += 0xCF * 256 ** 0
+        # vector 1 lives at 0:0x04 -- ip at 4..5, cs at 6..7, which is the
+        # second byte pair of the dword in item 2
+        env.lists["X.mem"][1] += 0x1100 * 256 ** 2
+
+        for i in range(len(self.OPCODE_PROGRAM) + 40):
+            gen = jsw_sim.call(env, cpu["cpuStep"], [])
+            try:
+                while True:
+                    next(gen)
+            except StopIteration:
+                pass
+            mach.step()
+            jcs, jip = int(env.lists["sr"][1]), int(env.vars["ip"])
+            if jcs != mach.sreg[rv.SEG_CS] or jip != mach.eip:
+                self.fail(f"diverged at instruction {i}: jsw {jcs:04x}:{jip:04x} "
+                          f"ref {mach.sreg[rv.SEG_CS]:04x}:{mach.eip:04x}")
+            for n in range(8):
+                want = mach.reg[n]
+                got = int(env.lists["r"][n])         # r.get(n + 1)
+                if n in (4, 5):
+                    want &= 0xFFFF
+                if got != want:
+                    self.fail(f"instruction {i}: register {n} jsw {got:#x} ref {want:#x}")
+            if int(env.vars["fl"]) != mach.eflags & 0xFFFF:
+                self.fail(f"instruction {i}: flags jsw {int(env.vars['fl']):#x} "
+                          f"ref {mach.eflags & 0xFFFF:#x}")
 
     def test_the_cmos_is_a_real_device_on_70_and_71(self) -> None:
         """Index at 0x70, data at 0x71, and the byte comes back."""
