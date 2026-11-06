@@ -1739,6 +1739,106 @@
     ]
    ]
   },
+  "Ram": {
+   "members": [
+    [
+     "alloc",
+     {
+      "kind": "reporter",
+      "detail": "alloc(bytes)",
+      "doc": "reporter"
+     }
+    ],
+    [
+     "fill",
+     {
+      "kind": "command",
+      "detail": "fill(addr, len, value)",
+      "doc": "command"
+     }
+    ],
+    [
+     "load",
+     {
+      "kind": "command",
+      "detail": "load(addr, len, list)",
+      "doc": "command"
+     }
+    ],
+    [
+     "read16",
+     {
+      "kind": "reporter",
+      "detail": "read16(addr)",
+      "doc": "reporter"
+     }
+    ],
+    [
+     "read32",
+     {
+      "kind": "reporter",
+      "detail": "read32(addr)",
+      "doc": "reporter"
+     }
+    ],
+    [
+     "read8",
+     {
+      "kind": "reporter",
+      "detail": "read8(addr)",
+      "doc": "reporter"
+     }
+    ],
+    [
+     "save",
+     {
+      "kind": "command",
+      "detail": "save(addr, len, list)",
+      "doc": "command"
+     }
+    ],
+    [
+     "size",
+     {
+      "kind": "reporter",
+      "detail": "size()",
+      "doc": "reporter"
+     }
+    ],
+    [
+     "stats",
+     {
+      "kind": "reporter",
+      "detail": "stats()",
+      "doc": "reporter"
+     }
+    ],
+    [
+     "write16",
+     {
+      "kind": "command",
+      "detail": "write16(addr, value)",
+      "doc": "command"
+     }
+    ],
+    [
+     "write32",
+     {
+      "kind": "command",
+      "detail": "write32(addr, value)",
+      "doc": "command"
+     }
+    ],
+    [
+     "write8",
+     {
+      "kind": "command",
+      "detail": "write8(addr, value)",
+      "doc": "command"
+     }
+    ]
+   ]
+  },
   "Runtime": {
    "members": [
     [

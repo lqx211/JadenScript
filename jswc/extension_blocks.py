@@ -24,6 +24,26 @@ EXTENSION_BLOCKS: dict[str, dict] = {
             "stats": {"type": "REPORTER", "args": []},
         },
     },
+    # The 80386 machine's memory, same arrangement, different board: 128 MiB of
+    # flat RAM for the TurboWarp build. Namespace `Ram`, because `Mem` is the
+    # RISC-V board's and one project may hold both.
+    "i386mem": {
+        "namespace": "Ram",
+        "blocks": {
+            "alloc": {"type": "REPORTER", "args": [["BYTES", "NUMBER", ""]]},
+            "size": {"type": "REPORTER", "args": []},
+            "read8": {"type": "REPORTER", "args": [["ADDR", "NUMBER", ""]]},
+            "write8": {"type": "COMMAND", "args": [["ADDR", "NUMBER", ""], ["VALUE", "NUMBER", ""]]},
+            "read16": {"type": "REPORTER", "args": [["ADDR", "NUMBER", ""]]},
+            "write16": {"type": "COMMAND", "args": [["ADDR", "NUMBER", ""], ["VALUE", "NUMBER", ""]]},
+            "read32": {"type": "REPORTER", "args": [["ADDR", "NUMBER", ""]]},
+            "write32": {"type": "COMMAND", "args": [["ADDR", "NUMBER", ""], ["VALUE", "NUMBER", ""]]},
+            "fill": {"type": "COMMAND", "args": [["ADDR", "NUMBER", ""], ["LEN", "NUMBER", ""], ["VALUE", "NUMBER", ""]]},
+            "load": {"type": "COMMAND", "args": [["ADDR", "NUMBER", ""], ["LEN", "NUMBER", ""], ["LIST", "LIST", ""]]},
+            "save": {"type": "COMMAND", "args": [["ADDR", "NUMBER", ""], ["LEN", "NUMBER", ""], ["LIST", "LIST", ""]]},
+            "stats": {"type": "REPORTER", "args": []},
+        },
+    },
     "skyhigh173JSON": {
         "namespace": "JSON",
         "blocks": {

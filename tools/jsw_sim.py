@@ -209,6 +209,11 @@ class Env:
         self.procs: dict[str, Proc] = {}
         self.threads: list[dict] = [{}]         # thread-local temps, one per thread
         self.current = 0
+        #: extension blocks the caller supplies, keyed by the call the source
+        #: writes (`Ram.read8`). A project built with `--target turbowarp` calls
+        #: into a JavaScript extension, which this simulator cannot run, so a
+        #: test that wants to step that build registers a stand-in here.
+        self.ext: dict = {}
         self.out: list[int] = []
         self.steps = 0
         self.limit = 0
@@ -474,6 +479,8 @@ def eval_expr(node, env: Env):
 
 
 def call_builtin(name: str, args: list, env: Env):
+    if name in env.ext:
+        return env.ext[name](args)
     if name == "Operators.round":
         return float(math.floor(Env.num(args[0]) + 0.5))
     if name == "Operators.math":
@@ -615,6 +622,9 @@ def exec_block(env: Env, body: list):
                     idx = int(Env.num(args[0])) - 1
                     if 0 <= idx < len(lst):
                         lst[idx] = args[1]
+                continue
+            if name in env.ext:          # an extension command
+                env.ext[name](args)
                 continue
             if name == "Control.wait":
                 yield "wait"

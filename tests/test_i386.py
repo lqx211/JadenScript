@@ -887,9 +887,11 @@ class I386JswTests(unittest.TestCase):
 
         out = ROOT / "build" / "i386" / "i386.sb3"
         back = ROOT / "build" / "i386" / "i386.back.jsw"
+        # no --target: the simulator has no extensions, so this is the build
+        # that keeps RAM in a list. The two builds differ in how memory is
+        # held, not in what the CPU does, which is what is compared here.
         subprocess.run([sys.executable, "-m", "jswc", "build",
-                        str(RVDIR / "i386.jsw"), "-o", str(out),
-                        "--target", "turbowarp"],
+                        str(RVDIR / "i386.jsw"), "-o", str(out)],
                        cwd=ROOT, check=True, capture_output=True)
         subprocess.run([sys.executable, "-m", "jswc", "decompile", str(out),
                         "-o", str(back), "--skip-assets"],
@@ -1133,6 +1135,260 @@ class I386RealRomTests(unittest.TestCase):
         self.assertTrue(mach.pe)
         self.assertEqual(mach.sreg[rv.SEG_CS], 0x08)
         self.assertGreater(mach.eip, 0x000E_0000, "still inside the ROM")
+
+
+class I386BuildTests(unittest.TestCase):
+    """Two builds of one source: the published one and the fast one.
+
+    scratch.mit.edu has no extensions, so the Scratch build holds RAM in a
+    list; TurboWarp can load `tools/i386mem.js`, so that build holds 128 MiB in
+    a `Uint8Array`. Everything else -- the CPU, the firmware, the screen -- is
+    the same program, and `#ifdef` is what decides which is which.
+    """
+
+    SRC = RVDIR / "i386.jsw"
+    EXT = ROOT / "tools" / "i386mem.js"
+
+    def build(self, target: str | None) -> dict:
+        import json
+        import tempfile
+        import zipfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "m.sb3"
+            args = [sys.executable, "-m", "jswc", "build", str(self.SRC), "-o", str(out)]
+            if target is not None:
+                args += ["--target", target]
+            subprocess.run(args, cwd=ROOT, check=True, capture_output=True)
+            with zipfile.ZipFile(out) as z:
+                return json.loads(z.read("project.json"))
+
+    @staticmethod
+    def opcodes(data: dict) -> set[str]:
+        return {b["opcode"] for t in data["targets"]
+                for b in (t.get("blocks") or {}).values() if isinstance(b, dict)}
+
+    def test_the_turbowarp_build_holds_ram_in_the_extension(self) -> None:
+        from jswc import opcodes
+
+        data = self.build("turbowarp")
+        self.assertEqual(data["extensionURLs"],
+                         {"i386mem": opcodes.EXTENSION_URLS["i386mem"]})
+        self.assertIn("i386mem", data["extensions"])
+        used = self.opcodes(data)
+        for opcode in ("i386mem_alloc", "i386mem_size", "i386mem_read8",
+                       "i386mem_write8"):
+            self.assertIn(opcode, used, "the TurboWarp build is the allocation")
+
+    def test_the_scratch_build_declares_no_extension_url(self) -> None:
+        data = self.build("scratch")
+        self.assertNotIn("extensionURLs", data)
+        used = self.opcodes(data)
+        self.assertEqual({o for o in used if o.startswith("i386mem_")}, set(),
+                         "a Scratch project cannot load a memory extension")
+        self.assertIn("pen", data["extensions"], "pen is built in, so it is fine")
+
+    def test_neither_target_is_the_build_the_simulators_run(self) -> None:
+        """No ``--target`` defines neither name: the tests need a project that
+        `jsw_sim` can step, which means RAM in a list."""
+        data = self.build(None)
+        self.assertNotIn("extensionURLs", data)
+        self.assertEqual({o for o in self.opcodes(data) if o.startswith("i386mem_")},
+                         set())
+
+    def test_the_extension_and_the_compiler_agree_on_the_blocks(self) -> None:
+        """The JS and `extension_blocks.py` are two halves of one contract."""
+        import re
+
+        from jswc.extension_blocks import EXTENSION_BLOCKS
+
+        source = self.EXT.read_text(encoding="utf-8")
+        in_js = set(re.findall(r"opcode: '(\w+)'", source))
+        known = set(EXTENSION_BLOCKS["i386mem"]["blocks"])
+        self.assertEqual(in_js, known)
+        self.assertEqual(EXTENSION_BLOCKS["i386mem"]["namespace"], "Ram")
+
+    def test_the_extension_is_a_flat_memory_that_keeps_its_promises(self) -> None:
+        """Run the extension under node with a Scratch shim: 128 MiB, a fill, a
+        halfword and a word at the far end, and the list crossing both ways."""
+        import json
+        import shutil
+        import tempfile
+
+        node = shutil.which("node")
+        if node is None:
+            self.skipTest("node is not installed")
+        script = r"""
+const fs = require('fs');
+let registered = null;
+global.Scratch = {
+  ArgumentType: { NUMBER: 'number', STRING: 'string' },
+  BlockType: { COMMAND: 'command', REPORTER: 'reporter', BOOLEAN: 'boolean' },
+  extensions: { register: (ext) => { registered = ext; } }
+};
+eval(fs.readFileSync(process.argv[2], 'utf8'));
+const mem = registered;
+const out = { id: mem.getInfo().id };
+out.allocated = mem.alloc({ BYTES: 134217728 });
+mem.fill({ ADDR: 0, LEN: 16, VALUE: 90 });
+mem.write16({ ADDR: 32, VALUE: 0x1234 });
+mem.write32({ ADDR: 64, VALUE: 0x89ABCDEF });
+out.byte0 = mem.read8({ ADDR: 0 });
+out.byte16 = mem.read8({ ADDR: 16 });
+out.half = mem.read16({ ADDR: 32 });
+out.halfBytes = [mem.read8({ ADDR: 32 }), mem.read8({ ADDR: 33 })];
+out.word = mem.read32({ ADDR: 64 });
+out.pastEnd = mem.read8({ ADDR: 134217728 });
+mem.write8({ ADDR: 134217728, VALUE: 1 });
+out.stillThere = mem.read8({ ADDR: 134217728 - 1 });
+mem.write8({ ADDR: 134217728 - 1, VALUE: 7 });
+out.lastByte = mem.read8({ ADDR: 134217728 - 1 });
+// the boot image arrives as a Scratch list and has to cross over
+const bytes = [1, 2, 3, 4];
+const fakeList = { length: 4, at: (i) => bytes[i], replace: (i, v) => { out.saved = v; } };
+mem.load({ ADDR: 1000, LEN: 4, LIST: fakeList });
+out.copied = [mem.read8({ ADDR: 1000 }), mem.read8({ ADDR: 1003 })];
+mem.save({ ADDR: 1000, LEN: 4, LIST: fakeList });
+console.log(JSON.stringify(out));
+"""
+        with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False) as fh:
+            fh.write(script)
+            path = fh.name
+        try:
+            done = subprocess.run([node, path, str(self.EXT)], capture_output=True,
+                                  text=True, timeout=120, check=True)
+        finally:
+            Path(path).unlink(missing_ok=True)
+        data = json.loads(done.stdout)
+        self.assertEqual(data["id"], "i386mem")
+        self.assertEqual(data["allocated"], 134217728, "128 MiB, the rv32ima number")
+        self.assertEqual((data["byte0"], data["byte16"]), (90, 0),
+                         "a fill covers exactly what it was asked to")
+        self.assertEqual(data["half"], 0x1234)
+        self.assertEqual(data["halfBytes"], [0x34, 0x12], "low byte first, like a 386")
+        self.assertEqual(data["word"], 0x89ABCDEF, "little-endian word")
+        self.assertEqual(data["pastEnd"], 0, "a read past the end answers zero")
+        self.assertEqual(data["stillThere"], 0, "a write past the end lands nowhere")
+        self.assertEqual(data["copied"], [1, 4], "a list crosses into memory")
+        self.assertEqual(data["saved"], [1, 2, 3, 4], "and memory crosses back")
+
+    def test_the_turbowarp_build_boots_out_of_its_own_memory(self) -> None:
+        """Step the TurboWarp project with a stand-in for `Ram`.
+
+        The blocks are generated, so what has to be checked is the wiring: that
+        `Ram.read8` is called with the offset rather than the address, that the
+        store writes the byte the CPU computed, and that a build whose memory
+        lives somewhere else still runs the same program. The stand-in is a
+        `bytearray`, which is what the extension holds anyway.
+        """
+        import json
+        import tempfile
+        import zipfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "tw.sb3"
+            back = Path(tmp) / "tw.jsw"
+            subprocess.run([sys.executable, "-m", "jswc", "build", str(self.SRC),
+                            "-o", str(out), "--target", "turbowarp"],
+                           cwd=ROOT, check=True, capture_output=True)
+            subprocess.run([sys.executable, "-m", "jswc", "decompile", str(out),
+                            "-o", str(back), "--skip-assets"],
+                           cwd=ROOT, check=True, capture_output=True)
+            source = back.read_text()
+
+        env = jsw_sim.Env()
+        ram = bytearray(128 * 1024 * 1024)
+
+        def store(args):
+            ram[int(args[0]) % len(ram)] = int(jsw_sim.Env.num(args[1])) % 256
+            return 0.0
+
+        env.ext["Ram.alloc"] = lambda args: float(len(ram))
+        env.ext["Ram.size"] = lambda args: float(len(ram))
+        env.ext["Ram.read8"] = lambda args: float(ram[int(args[0]) % len(ram)])
+        env.ext["Ram.write8"] = store
+        classes = jsw_sim.parse_program(source, env)
+        # the ROM and the disk still arrive as lists, because an .sb3 can only
+        # carry bytes that way
+        assets = RVDIR / "assets" / "lists"
+        env.lists["rom"] = json.loads((assets / "bios.jsa").read_text())
+        env.lists["disk"] = json.loads((assets / "disk.jsa").read_text())
+        env.procs = classes["Cpu"].procs
+        env.threads.append({})
+        env.current = 0
+        env.vars["X.cores"] = 1
+        gen = jsw_sim.call(env, classes["Cpu"].procs["powerOn"], [])
+        try:
+            while True:
+                next(gen)
+        except StopIteration:
+            pass
+
+        self.assertGreater(len(ram), 128 * 1024 * 1024 - 1,
+                           "the board asked for 128 MiB and got it")
+        self.assertEqual(int(env.vars["X.memWords"]), 33554432,
+                         "128 MiB counted in 32-bit words, the list build's unit")
+
+        mach = rv.Machine()
+        mach.ram[:] = i386_image.build()
+        mach.sreg[rv.SEG_CS] = rv.RESET_CS
+        mach.eip = rv.RESET_IP
+        gen = jsw_sim.call(env, classes["Cpu"].procs["cpuStep"], [])
+        for i in range(3000):
+            try:
+                next(gen)
+            except StopIteration:
+                gen = jsw_sim.call(env, classes["Cpu"].procs["cpuStep"], [])
+            mach.step()
+            if int(env.lists["sr"][1]) != mach.sreg[rv.SEG_CS] or int(env.vars["ip"]) != mach.eip:
+                self.fail(f"diverged at instruction {i}: "
+                          f"jsw {int(env.lists['sr'][1]):04x}:{int(env.vars['ip']):04x} "
+                          f"ref {mach.sreg[rv.SEG_CS]:04x}:{mach.eip:04x}")
+        self.assertTrue(any(ram[0:0x500]),
+                        "the guest wrote something into the extension's memory")
+
+    def test_a_board_that_cannot_have_128_mib_reports_what_it_got(self) -> None:
+        """`alloc` halves the ask instead of throwing: the project must survive."""
+        import json
+        import shutil
+        import tempfile
+
+        node = shutil.which("node")
+        if node is None:
+            self.skipTest("node is not installed")
+        script = r"""
+const fs = require('fs');
+let registered = null;
+global.Scratch = {
+  ArgumentType: { NUMBER: 'number' },
+  BlockType: { COMMAND: 'command', REPORTER: 'reporter' },
+  extensions: { register: (ext) => { registered = ext; } }
+};
+eval(fs.readFileSync(process.argv[2], 'utf8'));
+const mem = registered;
+let asks = 0;
+const realUint8 = Uint8Array;
+global.Uint8Array = new Proxy(realUint8, {
+  construct(target, args) {
+    asks += 1;
+    if (args[0] > (1 << 24)) { throw new RangeError('nope'); }
+    return new target(...args);
+  }
+});
+const got = mem.alloc({ BYTES: 1 << 28 });
+console.log(JSON.stringify({ got, asks }));
+"""
+        with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False) as fh:
+            fh.write(script)
+            path = fh.name
+        try:
+            done = subprocess.run([node, path, str(self.EXT)], capture_output=True,
+                                  text=True, timeout=120, check=True)
+        finally:
+            Path(path).unlink(missing_ok=True)
+        data = json.loads(done.stdout)
+        self.assertEqual(data["got"], 1 << 24, "the largest ask that fitted")
+        self.assertGreater(data["asks"], 1, "it asked again with less")
 
 
 if __name__ == "__main__":

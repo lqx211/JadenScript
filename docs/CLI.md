@@ -56,6 +56,8 @@ Useful flags:
 | `--locals sprite\|thread` | where bare variables live (`thread` needs `lmsTempVars2`) |
 | `--warp` | every custom block runs without screen refresh |
 | `--enable FEATURE` | turn on a language feature (repeatable, see `jswc features`) |
+| `--target scratch\|turbowarp` | which build of one source: defines `SCRATCH` or `TURBOWARP` for `#ifdef` |
+| `-D/--define NAME` | define `NAME` for `#ifdef` (repeatable) |
 | `--allow-undefined` | undefined globals become warnings instead of errors |
 | `--strict` | exit 1 as soon as a diagnostic is produced |
 | `-v/--verbose` | per-phase timings: parse · generate · validate · write |
@@ -65,6 +67,17 @@ Features are opt-in because they change the shape of the generated project:
 ```bash
 jswc build project.jsw --enable useTempVariables --enable commentMetadata
 jswc build project.jsw --enable namespacedNames --enable doObfuscation
+```
+
+`--target` and `-D` are the preprocessor's, not a feature flag: they are
+resolved before lexing, so the lines they hide never reach the parser. One
+source, two artifacts — a Scratch build that may only use built-in blocks, and
+a TurboWarp build that may load an extension:
+
+```bash
+jswc build machine.jsw -o build/machine.sb3        --target turbowarp
+jswc build machine.jsw -o build/machine-scratch.sb3 --target scratch
+jswc build machine.jsw -o build/debug.sb3 -D TRACE
 ```
 
 `jswc features` prints the current list:

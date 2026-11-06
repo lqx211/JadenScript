@@ -33,20 +33,19 @@ BUILD = ROOT / "build" / "i386" / "i386.sb3"
 DECOMPILED = ROOT / "build" / "i386" / "i386.back.jsw"
 
 
-def prepare(target: str = "turbowarp") -> None:
+def prepare(target: str | None = None) -> None:
     """Build the machine, then decompile it into the project the simulator runs.
 
-    ``--target scratch`` checks the other build of the same source: the one that
-    has to run on scratch.mit.edu, where the stage is always 480 x 360.
+    No ``--target`` by default, which is the build that keeps RAM in lists: the
+    simulator has no way to run an extension block, so the TurboWarp build --
+    the one that allocates through `Ram` -- cannot be stepped here. The two
+    builds differ in how memory is held, not in what the CPU does.
     """
-    global BUILD, DECOMPILED
-    name = "i386" if target == "turbowarp" else f"i386-{target}"
-    BUILD = ROOT / "build" / "i386" / f"{name}.sb3"
-    DECOMPILED = ROOT / "build" / "i386" / f"{name}.back.jsw"
-    subprocess.run([sys.executable, "-m", "jswc", "build",
-                    str(ROOT / "userspace" / "i386" / "i386.jsw"), "-o", str(BUILD),
-                    "--target", target],
-                   cwd=ROOT, check=True, capture_output=True)
+    args = [sys.executable, "-m", "jswc", "build",
+            str(ROOT / "userspace" / "i386" / "i386.jsw"), "-o", str(BUILD)]
+    if target is not None:
+        args += ["--target", target]
+    subprocess.run(args, cwd=ROOT, check=True, capture_output=True)
     subprocess.run([sys.executable, "-m", "jswc", "decompile", str(BUILD),
                     "-o", str(DECOMPILED), "--skip-assets"],
                    cwd=ROOT, check=True, capture_output=True)
@@ -87,8 +86,9 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--keys", default="",
                         help="comma-separated scan codes to press at power-on, e.g. 0x53")
     parser.add_argument("--no-build", action="store_true")
-    parser.add_argument("--target", choices=("turbowarp", "scratch"), default="turbowarp",
-                        help="which build of the machine to check")
+    parser.add_argument("--target", choices=("turbowarp", "scratch"), default=None,
+                        help="which build to check; the default keeps RAM in lists, "
+                             "because the simulator cannot run extension blocks")
     parser.add_argument("--code", type=Path, default=None,
                         help="a flat binary to run instead of the ROM: it is loaded at "
                              "0x1000 and both machines start at 0100:0000, so a test can "

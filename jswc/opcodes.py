@@ -369,6 +369,8 @@ EXTENSION_URLS: dict[str, str] = {
     # any other URL blocks the project behind a modal that can deadlock the
     # editor, which looks like "Downloading assets (2/2) …" forever.
     "rv64mem": "http://localhost:8000/tools/rv64mem.js",
+    # and the 80386's, for the same reason: 128 MiB is not a Scratch list.
+    "i386mem": "http://localhost:8000/tools/i386mem.js",
 }
 
 #: Extension URL prefixes TurboWarp loads without a permission prompt.

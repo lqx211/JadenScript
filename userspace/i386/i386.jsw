@@ -14,17 +14,20 @@
  * memory map. The map is not flat, and that is deliberate -- a real machine
  * decodes addresses, and so does this one:
  *
- *   0x00000 - 0x1FFFF   RAM, 128 KiB of it, behind `X.mem` (32-bit words)
+ *   0x00000 - 0x1FFFF   RAM: 128 KiB in a Scratch list, 128 MiB through `Ram`
  *   0x30000 - 0x3FFFF   the disk window: the ATA device, read-only for now
  *   0xB8000 - 0xB8F9F   the text plane, 80 x 25 cells of (char, attribute)
  *   0xF0000 - 0xFFFFF   the BIOS ROM
  *
- * Everything else answers 0xFF, the way an open bus does.
+ * Everything else answers 0xFF, the way an open bus does. The windows are
+ * checked before the RAM, because the TurboWarp build's RAM is big enough to
+ * cover all of them.
  *
- * Memory is a list of 32-bit words, not of bytes: four times fewer nodes in
- * Scratch's list tree and four times fewer lookups per instruction. Byte
- * accesses cost a divide and a modulo, which is the same trade the RISC-V
- * machine's memory extension makes -- only here it is blocks, not JavaScript.
+ * In a Scratch build memory is a list of 32-bit words, not of bytes: four times
+ * fewer nodes in Scratch's list tree, and a byte costs a divide and a modulo.
+ * The TurboWarp build skips the arithmetic entirely and asks its extension for
+ * the byte index. Both count `X.memWords` in words, so nothing below the
+ * decoder can tell which build it is running in.
  */
 
 /* ---- the CPU ---------------------------------------------------------- */
@@ -41,14 +44,11 @@ public X.maxFrames = 0;                  // 0 = run forever; >0 = a test budget
  *   jswc build i386.jsw --target turbowarp   a real memory extension
  *   jswc build i386.jsw --target scratch     lists, and as much as fits
  *
- * -- and the parts that differ are marked. Until the extension lands, both
- * builds take the list branch and behave identically.
+ * -- and the parts that differ are marked. The RAM below 128 KiB is identical
+ * either way; what the TurboWarp build adds is everything above it.
  */
-#ifdef TURBOWARP
-/* the TurboWarp build will allocate through the extension here */
-#endif
 public X.memBase = 0;                    // the RAM window
-public X.memWords = 32768;               // 128 KiB
+public X.memWords = 32768;               // 128 KiB, or 128 MiB with Ram
 public X.diskBase = 196608;              // 0x3_0000: the disk window
 public X.diskWords = 16384;              // 64 KiB = 128 sectors
 public X.textBase = 753664;              // 0xB_8000
@@ -378,6 +378,16 @@ class Cpu {
         ops = 0;
         trace.clear();
 
+#ifdef TURBOWARP
+        /* Ask for 128 MiB and take what the browser gives back: a loaded
+         * machine may refuse, and a board that lies about its memory is worse
+         * than one that reports less. `X.memWords` counts 32-bit words, the
+         * same unit the list build uses, so nothing downstream has to know
+         * which build it is running in. */
+        _i = Ram.alloc(134217728);
+        X.memWords = Operators.math("floor", Ram.size / 4);
+        X.mem.clear();
+#else
         if (X.mem.length() < X.memWords) {
             X.mem.clear();
             _i = 1;
@@ -392,6 +402,7 @@ class Cpu {
                 _i += 1;
             }
         }
+#endif
         if (X.text.length() < X.textWords) {
             X.text.clear();
             _i = 1;
@@ -703,13 +714,12 @@ class Cpu {
     /* ---- the memory decoder ------------------------------------------ */
 
     /* One byte. The result lands in `v`, because a procedure cannot return. */
+    /* The windows above 128 KiB are checked first. With the extension the RAM
+     * is 128 MiB and covers all of them, so a decoder that tested RAM first
+     * would answer every access to the text buffer, the ROM and the disk out of
+     * the wrong thing -- the failure looks like a screen that never changes. */
     private void rdb(a) { // warp
         v = 0xFF;                      // an open bus reads as all ones
-        if (a < X.memBase + X.memWords * 4) {
-            _w = X.mem.get(Operators.math("floor", a / 4) + 1) + 0;
-            v = Operators.math("floor", _w / X.bw.get(a % 4 + 1)) % 256;
-            return;
-        }
         if (a >= X.diskBase && a < X.diskBase + X.diskWords * 4) {
             _w = X.disk.get(Operators.math("floor", (a - X.diskBase) / 4) + 1) + 0;
             v = Operators.math("floor", _w / X.bw.get((a - X.diskBase) % 4 + 1)) % 256;
@@ -725,19 +735,20 @@ class Cpu {
             v = Operators.math("floor", _w / X.bw.get((a - X.romBase) % 4 + 1)) % 256;
             return;
         }
+        if (a < X.memBase + X.memWords * 4) {
+#ifdef TURBOWARP
+            v = Ram.read8(a - X.memBase);
+#else
+            _w = X.mem.get(Operators.math("floor", a / 4) + 1) + 0;
+            v = Operators.math("floor", _w / X.bw.get(a % 4 + 1)) % 256;
+#endif
+            return;
+        }
     }
 
     private void wrb(a, val) { // warp
-        
+
         _wv = val % 256;
-        if (a < X.memBase + X.memWords * 4) {
-            _i = Operators.math("floor", a / 4) + 1;
-            _sh = X.bw.get(a % 4 + 1);
-            _old = X.mem.get(_i) + 0;
-            _b = Operators.math("floor", _old / _sh) % 256;
-            X.mem.set(_i, _old - _b * _sh + _wv * _sh);
-            return;
-        }
         if (a >= X.textBase && a < X.textBase + X.textWords * 4) {
             _o = a - X.textBase;
             _i = Operators.math("floor", _o / 4) + 1;
@@ -748,8 +759,23 @@ class Cpu {
             markCell(_o);
             return;
         }
-        // a store to the ROM or the disk window goes nowhere: there is no
-        // hardware behind it to latch the value
+        if (a >= X.diskBase && a < X.diskBase + X.diskWords * 4) {
+            return;             // the disk window is read-only: nothing latches
+        }
+        if (a >= X.romBase && a < X.romBase + X.romWords * 4) {
+            return;             // so is the ROM
+        }
+        if (a < X.memBase + X.memWords * 4) {
+#ifdef TURBOWARP
+            Ram.write8(a - X.memBase, _wv);
+#else
+            _i = Operators.math("floor", a / 4) + 1;
+            _sh = X.bw.get(a % 4 + 1);
+            _old = X.mem.get(_i) + 0;
+            _b = Operators.math("floor", _old / _sh) % 256;
+            X.mem.set(_i, _old - _b * _sh + _wv * _sh);
+#endif
+        }
     }
 
     private void rdw(a) { // warp
