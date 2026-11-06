@@ -39,7 +39,13 @@ SU_N     equ 11                     ; how many rows (the last is read-only)
 SU_PAPER equ 0x1F                   ; blue paper, white ink
 SU_HEAD  equ 0x1E                   ; blue paper, yellow ink
 SU_SEL   equ 0x70                   ; light grey paper, black ink
+SU_SHADOW equ 0x00                  ; black on black: the drop shadow
 SU_INK   equ 0x4F5                  ; the ink of the row being drawn
+SU_DLG_L equ 0x4F6                  ; a dialog's left column, while it draws
+SU_DLG_T equ 0x4F7                  ; its top row
+SU_DLG_W equ 0x4F8                  ; its width
+SU_DLG_R equ 0x4F9                  ; which of its rows is being drawn
+SU_DLG_H equ 8                      ; every dialog on this screen is eight rows
 
 ; the frame, drawn with CP437's double-line set, the way the rv64 setup does
 G_HBAR   equ 0xCD
@@ -626,6 +632,169 @@ suEnter:
     ret
 
 ; ---------------------------------------------------------------------------
+; suDialog -- a grey panel with a blue title bar and a black drop shadow.
+;
+; The shadow is drawn first, one row down and two columns right, and the panel
+; then covers all of it but its right and bottom edge -- which is what makes it
+; read as something lying on top of the screen instead of a hole cut in it.
+; The title gets its own row *inside* the frame: a double rule drawn through
+; the text reads as a broken corner, which is exactly how it looked.
+;
+;   dl = left column, dh = top row, cx = width, si = the title
+; ---------------------------------------------------------------------------
+suDialog:
+    push    ax
+    push    bx
+    push    cx
+    push    dx
+    push    si
+    mov     [es:SU_DLG_L], dl
+    mov     [es:SU_DLG_T], dh
+    mov     [es:SU_DLG_W], cl
+    ; --- the shadow, one row down and two columns right
+    mov     byte [es:SU_DLG_R], 1
+.shadow:
+    mov     al, [es:SU_DLG_R]
+    cmp     al, SU_DLG_H + 1
+    jae     .body
+    mov     dh, [es:SU_DLG_T]
+    add     dh, al
+    mov     dl, [es:SU_DLG_L]
+    add     dl, 2
+    mov     cl, [es:SU_DLG_W]
+    mov     al, ' '
+    mov     bl, SU_SHADOW
+    call    suBar
+    inc     byte [es:SU_DLG_R]
+    jmp     .shadow
+    ; --- the paper, every row of it
+.body:
+    mov     byte [es:SU_DLG_R], 0
+.row:
+    mov     al, [es:SU_DLG_R]
+    cmp     al, SU_DLG_H
+    jae     .title
+    mov     dh, [es:SU_DLG_T]
+    add     dh, al
+    mov     dl, [es:SU_DLG_L]
+    mov     cl, [es:SU_DLG_W]
+    mov     al, ' '
+    mov     bl, SU_SEL
+    call    suBar
+    inc     byte [es:SU_DLG_R]
+    jmp     .row
+    ; --- the title bar, one row in from the top rule
+.title:
+    mov     dh, [es:SU_DLG_T]
+    inc     dh
+    mov     dl, [es:SU_DLG_L]
+    inc     dl
+    mov     cl, [es:SU_DLG_W]
+    sub     cl, 2
+    mov     al, ' '
+    mov     bl, SU_HEAD
+    call    suBar
+    mov     dh, [es:SU_DLG_T]
+    inc     dh
+    mov     dl, [es:SU_DLG_L]
+    add     dl, 2
+    call    suGoto
+    mov     bl, SU_HEAD
+    call    suPrint
+    ; --- the frame: a double rule top and bottom, a bar either side
+    mov     dh, [es:SU_DLG_T]
+    call    dlgRuleTop
+    mov     dh, [es:SU_DLG_T]
+    add     dh, SU_DLG_H - 1
+    call    dlgRuleBottom
+    mov     byte [es:SU_DLG_R], 1
+.side:
+    mov     al, [es:SU_DLG_R]
+    cmp     al, SU_DLG_H - 1
+    jae     .done
+    mov     dh, [es:SU_DLG_T]
+    add     dh, al
+    mov     dl, [es:SU_DLG_L]
+    mov     al, G_VBAR
+    mov     bl, SU_SEL
+    call    suPlot
+    mov     dh, [es:SU_DLG_T]
+    add     dh, [es:SU_DLG_R]
+    mov     dl, [es:SU_DLG_L]
+    add     dl, [es:SU_DLG_W]
+    dec     dl
+    mov     al, G_VBAR
+    mov     bl, SU_SEL
+    call    suPlot
+    inc     byte [es:SU_DLG_R]
+    jmp     .side
+.done:
+    pop     si
+    pop     dx
+    pop     cx
+    pop     bx
+    pop     ax
+    ret
+
+; dlgRuleTop: dh = the row, the top border of the dialog being drawn
+dlgRuleTop:
+    push    ax
+    push    bx
+    push    cx
+    push    dx
+    mov     dl, [es:SU_DLG_L]
+    inc     dl
+    mov     cl, [es:SU_DLG_W]
+    sub     cl, 2
+    mov     al, G_HBAR
+    mov     bl, SU_SEL
+    call    suBar
+    mov     dl, [es:SU_DLG_L]
+    mov     al, G_TL
+    mov     bl, SU_SEL
+    call    suPlot
+    mov     dl, [es:SU_DLG_L]
+    add     dl, [es:SU_DLG_W]
+    dec     dl
+    mov     al, G_TR
+    mov     bl, SU_SEL
+    call    suPlot
+    pop     dx
+    pop     cx
+    pop     bx
+    pop     ax
+    ret
+
+; dlgRuleBottom: dh = the row, the bottom border
+dlgRuleBottom:
+    push    ax
+    push    bx
+    push    cx
+    push    dx
+    mov     dl, [es:SU_DLG_L]
+    inc     dl
+    mov     cl, [es:SU_DLG_W]
+    sub     cl, 2
+    mov     al, G_HBAR
+    mov     bl, SU_SEL
+    call    suBar
+    mov     dl, [es:SU_DLG_L]
+    mov     al, G_BL
+    mov     bl, SU_SEL
+    call    suPlot
+    mov     dl, [es:SU_DLG_L]
+    add     dl, [es:SU_DLG_W]
+    dec     dl
+    mov     al, G_BR
+    mov     bl, SU_SEL
+    call    suPlot
+    pop     dx
+    pop     cx
+    pop     bx
+    pop     ax
+    ret
+
+; ---------------------------------------------------------------------------
 ; suEdit -- Enter on a setting. A dialog holds the value with an arrow either
 ; side of it; Left/Right change it and repaint, Enter keeps it, Esc puts the
 ; old one back.
@@ -674,46 +843,29 @@ suEdit:
     pop     ax
     ret
 
-; suEditBox: the editing dialog, 33 columns by 7 rows, centred
+; suEditBox: the editing dialog on the framed panel
 suEditBox:
     push    ax
     push    bx
     push    cx
     push    dx
     push    si
-    mov     dh, 12
-.paper:
-    mov     dl, 24
-    mov     cx, 33
-    mov     al, ' '
-    mov     bl, SU_SEL
-    call    suBar
-    inc     dh
-    cmp     dh, 18
-    jb      .paper
-    ; the title strip carries the row's own name
-    mov     dl, 24
-    mov     dh, 11
-    mov     cx, 33
-    mov     al, ' '
-    mov     bl, SU_HEAD
-    call    suBar
-    mov     dl, 26
-    mov     dh, 11
-    call    suGoto
+    ; the panel, with the setting's own name on its title bar
     mov     al, [es:SU_ITEM]
     xor     ah, ah
     add     ax, ax
     mov     si, ax
     mov     si, [si + su_labels]
-    mov     bl, SU_HEAD
-    call    suPrint
-    ; the value, arrow either side, in the row's own printer
+    mov     dl, 24
+    mov     dh, 10
+    mov     cx, 33
+    call    suDialog
+    ; the value, an arrow either side of it
     mov     dl, 30
     mov     dh, 13
     call    suGoto
     mov     si, msg_su_lt
-    mov     bl, SU_HEAD
+    mov     bl, SU_SEL
     call    suPrint
     mov     dl, 34
     mov     dh, 13
@@ -721,11 +873,11 @@ suEditBox:
     mov     al, [es:SU_ITEM]
     mov     bl, SU_SEL
     call    suValue
-    mov     dl, 52
+    mov     dl, 49
     mov     dh, 13
     call    suGoto
     mov     si, msg_su_gt
-    mov     bl, SU_HEAD
+    mov     bl, SU_SEL
     call    suPrint
     mov     dl, 26
     mov     dh, 15
@@ -803,103 +955,86 @@ suAskExit:
     pop     bx
     ret
 
-; suAskBox: the prompt, 36 columns by 7 rows, centred
+; suAskBox: the save prompt, on the same framed panel
 suAskBox:
     push    ax
     push    bx
     push    cx
     push    dx
     push    si
-    mov     dh, 12
-.paper:
-    mov     dl, 22
-    mov     cx, 36
-    mov     al, ' '
-    mov     bl, SU_PAPER
-    call    suBar
-    inc     dh
-    cmp     dh, 18
-    jb      .paper
-    mov     dl, 22
-    mov     dh, 11
-    mov     cx, 36
-    mov     al, ' '
-    mov     bl, SU_HEAD
-    call    suBar
-    mov     dl, 24
-    mov     dh, 11
-    call    suGoto
     mov     si, msg_su_ask_title
-    mov     bl, SU_HEAD
-    call    suPrint
+    mov     dl, 22
+    mov     dh, 10
+    mov     cx, 36
+    call    suDialog
     ; Save
-    mov     dl, 24
-    mov     dh, 14
+    mov     dl, 23
+    mov     dh, 13
     mov     cx, 11
     mov     al, ' '
-    mov     bl, SU_PAPER
+    mov     bl, SU_SEL
     cmp     byte [es:SU_OPT], 0
     jne     .s0
-    mov     bl, SU_SEL
+    mov     bl, SU_HEAD
 .s0:
     call    suBar
-    mov     dl, 27
-    mov     dh, 14
+    mov     dl, 25
+    mov     dh, 13
     call    suGoto
     mov     si, msg_su_yes
-    mov     bl, SU_PAPER
+    mov     bl, SU_SEL
     cmp     byte [es:SU_OPT], 0
     jne     .s1
-    mov     bl, SU_SEL
+    mov     bl, SU_HEAD
 .s1:
     call    suPrint
     ; Discard
-    mov     dl, 36
-    mov     dh, 14
+    mov     dl, 35
+    mov     dh, 13
     mov     cx, 11
     mov     al, ' '
-    mov     bl, SU_PAPER
+    mov     bl, SU_SEL
     cmp     byte [es:SU_OPT], 1
     jne     .d0
-    mov     bl, SU_SEL
+    mov     bl, SU_HEAD
 .d0:
     call    suBar
-    mov     dl, 37
-    mov     dh, 14
+    mov     dl, 36
+    mov     dh, 13
     call    suGoto
     mov     si, msg_su_no
-    mov     bl, SU_PAPER
+    mov     bl, SU_SEL
     cmp     byte [es:SU_OPT], 1
     jne     .d1
-    mov     bl, SU_SEL
+    mov     bl, SU_HEAD
 .d1:
     call    suPrint
     ; Cancel
-    mov     dl, 48
-    mov     dh, 14
-    mov     cx, 9
+    mov     dl, 47
+    mov     dh, 13
+    mov     cx, 10
     mov     al, ' '
-    mov     bl, SU_PAPER
+    mov     bl, SU_SEL
     cmp     byte [es:SU_OPT], 2
     jne     .c0
-    mov     bl, SU_SEL
+    mov     bl, SU_HEAD
 .c0:
     call    suBar
-    mov     dl, 49
-    mov     dh, 14
+    mov     dl, 48
+    mov     dh, 13
     call    suGoto
     mov     si, msg_su_cancel
-    mov     bl, SU_PAPER
+    mov     bl, SU_SEL
     cmp     byte [es:SU_OPT], 2
     jne     .c1
-    mov     bl, SU_SEL
+    mov     bl, SU_HEAD
 .c1:
     call    suPrint
     mov     dl, 24
-    mov     dh, 16
+    mov     dh, 15
     call    suGoto
     mov     si, msg_su_ask_hint
-    mov     bl, SU_PAPER
+    mov     bl, SU_SEL
     call    suPrint
     pop     si
     pop     dx
@@ -1390,6 +1525,19 @@ suPoke:
     pop     dx
     pop     cx
     pop     bx
+    pop     ax
+    ret
+
+; suPlot: dl/dh = column/row, al = the character, bl = the attribute. Unlike
+; suCell the ink is the caller's -- a dialog's border is grey, not the screen
+; frame's yellow.
+suPlot:
+    push    ax
+    push    cx
+    call    suGoto
+    mov     cx, 1
+    call    suFill
+    pop     cx
     pop     ax
     ret
 

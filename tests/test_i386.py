@@ -273,6 +273,23 @@ class I386SetupTests(unittest.TestCase):
         # the strip along the bottom is eighty cells, the last one included
         self.assertEqual(mach.read(0xB8000 + (29 * 80 + 79) * 2, 2), 0x7020)
 
+    def test_a_dialog_is_a_panel_with_a_shadow(self) -> None:
+        """The editing dialog: a grey panel with a blue title bar, and a black
+        drop shadow one row down and two columns right."""
+        mach = self._setup([0x53, 0x1C])               # Del, Enter: the dialog
+        attrs = {}
+        for row in range(10, 19):
+            for col in range(22, 60):
+                cell = 0xB8000 + (row * 80 + col) * 2
+                attrs.setdefault(mach.read(cell + 1, 1), []).append((row, col))
+        self.assertIn(0x00, attrs, "no shadow")
+        self.assertIn(0x1E, attrs, "no title bar")
+        self.assertIn(0x70, attrs, "no panel")
+        # the shadow is on the right of the panel and under it, never on the left
+        shadow = attrs[0x00]
+        self.assertTrue(all(col >= 56 for row, col in shadow if row < 18), shadow[:4])
+        self.assertTrue(any(row == 18 for row, col in shadow), "no shadow under the panel")
+
     def test_the_exit_page_keeps_its_own_rows(self) -> None:
         mach = self._setup([0x53, 0x4D, 0x4D, 0x50])   # Del, Right x2, Down
         screen = mach.text()
