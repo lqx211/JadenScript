@@ -387,6 +387,8 @@ class Machine:
         self.keys = []
         self.ports = {}
         self.ticks = 0
+        self.reset_pending = False
+        self.resets = 0
         self.trace = None
         # the battery-backed CMOS: 128 bytes behind ports 0x70/0x71, and the
         # one device whose contents survive a power cycle
@@ -595,6 +597,10 @@ class Machine:
                 # the AP runs the trampoline: it records itself and checks in
                 self.write(0x8400 + core, core, 1)
                 self.write(0x8500 + core, 1, 1)
+            return
+        if port == 0xCF9:                 # the reset control register
+            if value & 0x04:              # SYS_RST: start again from the ROM
+                self.reset_pending = True
             return
         if port == 0x70:
             self.cmos_index = value & 0x7F
@@ -894,7 +900,46 @@ class Machine:
             raise RuntimeError(f"{self.error} at {self.sreg[SEG_CS]:04x}:{self.eip:04x}")
         return bytes(self.out).decode("latin-1")
 
+    def reset(self) -> None:
+        """A hardware reset: the CPU starts again at the top of the ROM.
+
+        RAM keeps what it had -- a real reset does not clear memory -- but
+        every register, the control registers, the descriptor tables and both
+        chips go back to the state they come out of the factory in. SeaBIOS
+        asks for this by writing 0xCF9 after it finds nothing to boot, which is
+        the point at which its POST has finished.
+        """
+        self.reg = [0] * 8
+        self.cr = [0] * 5
+        self.gdtr = [0, 0]
+        self.idtr = [0, 0]
+        self.ldtr = 0
+        self.tr = 0
+        self.pe = False
+        self.dsz = 2
+        self.ipmask = 0xFFFF
+        self.spmask = 0xFFFF
+        self.sreg[SEG_DS] = 0
+        self.sreg[SEG_ES] = 0
+        self.sreg[SEG_SS] = 0
+        self.sreg[SEG_FS] = 0
+        self.sreg[SEG_GS] = 0
+        self.sreg[SEG_CS] = 0xF000
+        self.eip = 0xFFF0
+        self.eflags = FLAG_ALWAYS | FLAG_IF
+        self.halted = False
+        self.pit = Pit()
+        self.pic = Pic(0x08)
+        self.pic2 = Pic(0x70)
+        self.pic2.imr = 0xFF
+        self.pit_acc = 0
+        self.reset_pending = False
+        self.resets += 1
+
     def step(self):
+        if self.reset_pending:
+            self.reset()
+            return
         if self.halted:
             self.idle()
             return

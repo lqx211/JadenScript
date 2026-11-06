@@ -822,6 +822,15 @@ class I386RealRomTests(unittest.TestCase):
         self.assertNotEqual(mach.pic.imr, 0xFF, "IRQ0 got unmasked")
         self.assertEqual(mach.pic.isr, 0, "no interrupt stuck in service")
 
+    def test_real_seabios_finishes_post_and_asks_to_reboot(self) -> None:
+        """The end of the road: with nothing to boot, SeaBIOS writes the reset
+        control port and expects the machine to start again. Getting here means
+        a real firmware, compiled by GCC for a 386, walked its entire power-on
+        self test on this machine -- devices, timers, interrupts, PCI, disks and
+        all -- and only stopped because there is no disk to hand over to."""
+        mach = self.boot_rom(8_000_000)
+        self.assertGreaterEqual(mach.resets, 1, "it asked the machine to reboot")
+
     def test_real_seabios_runs_a_hundred_thousand_instructions(self) -> None:
         """No unknown instruction for a long way in: this is a compiler's
         output, not ours, so it wanders through the whole instruction set."""
