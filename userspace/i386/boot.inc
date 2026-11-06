@@ -334,6 +334,44 @@ bmSayBoot:
     jmp     puts
 
 ; ---------------------------------------------------------------------------
+; hwApply -- hand the emulation settings in the CMOS to the chipset.
+;
+; The setup utility edits the CMOS, not the hardware: a board that changed its
+; clock the moment a key was pressed would never remember anything. So the
+; settings are written here, once at POST and once when the setup is left with
+; a save, which is exactly when a real board would load its registers.
+; ---------------------------------------------------------------------------
+hwApply:
+    push    ax
+    push    bx
+    push    dx
+    mov     al, 0x34                ; the master switch
+    call    cmos_read
+    cmp     al, 1
+    jbe     .master
+    mov     al, 1                   ; a blank battery reads as "on"
+.master:
+    mov     dx, 0x5A9
+    out     dx, al
+    mov     al, 0x36                ; the clock, out of the setup's table
+    call    cmos_read
+    cmp     al, 4
+    jbe     .freq
+    mov     al, 2                   ; 33 MHz
+.freq:
+    xor     ah, ah
+    mov     si, ax
+    mov     al, [cs:hw_mhz + si]
+    mov     dx, 0x5A8
+    out     dx, al
+    pop     dx
+    pop     bx
+    pop     ax
+    ret
+
+hw_mhz: db 16, 25, 33, 40, 50
+
+; ---------------------------------------------------------------------------
 ; gxSplash -- the power-on screen, and the way back to the text underneath.
 ;
 ; A real board shows a logo and prints POST straight over it: nothing is

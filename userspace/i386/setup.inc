@@ -256,6 +256,27 @@ suLoad:
     xor     al, al
 .bo_ok:
     mov     [es:SU_BUF + 8], al
+    mov     al, 0x34                ; the emulation master switch
+    call    cmos_read
+    cmp     al, 1
+    jbe     .emu_ok
+    mov     al, 1                   ; a blank battery reads as "on"
+.emu_ok:
+    mov     [es:SU_BUF + 11], al
+    mov     al, 0x35                ; the battery itself
+    call    cmos_read
+    cmp     al, 1
+    jbe     .bat_ok
+    mov     al, 1
+.bat_ok:
+    mov     [es:SU_BUF + 12], al
+    mov     al, 0x36                ; the clock the board reports
+    call    cmos_read
+    cmp     al, 4
+    jbe     .frq_ok
+    mov     al, 2                   ; 33 MHz, the number on the crystal
+.frq_ok:
+    mov     [es:SU_BUF + 13], al
     mov     al, 0x15                ; base memory, low
     call    cmos_read
     mov     bl, al
@@ -335,6 +356,18 @@ suSave:
     shr     ax, cl
     mov     cl, al
     mov     al, 0x16
+    call    cmos_write
+    mov     al, [es:SU_BUF + 11]
+    mov     cl, al
+    mov     al, 0x34
+    call    cmos_write
+    mov     al, [es:SU_BUF + 12]
+    mov     cl, al
+    mov     al, 0x35
+    call    cmos_write
+    mov     al, [es:SU_BUF + 13]
+    mov     cl, al
+    mov     al, 0x36
     call    cmos_write
     ; a checksum a real board keeps, so the battery can be declared good
     mov     al, 0x31
@@ -2018,6 +2051,12 @@ suValue:
     mov     bl, al
     mov     si, bx                  ; si = the row, for the buffer and the tables
     mov     al, [es:SU_BUF + si]    ; the value, 0..99
+    cmp     ah, 13
+    jbe     .known
+    jmp     .done                   ; no such row
+.known:
+    cmp     ah, 11
+    jae     .named                  ; the emulation rows are named values
     cmp     ah, 10
     je      .cores
     cmp     ah, 9
@@ -2041,6 +2080,27 @@ suValue:
     xor     ah, ah
     add     ax, ax
     mov     di, ax
+    cmp     si, 11
+    jne     .not_emu
+    mov     si, [di + su_onoff]
+    mov     bl, [es:SU_INK]
+    call    suPrint
+    jmp     .done
+.not_emu:
+    cmp     si, 12
+    jne     .not_batt
+    mov     si, [di + su_onoff]
+    mov     bl, [es:SU_INK]
+    call    suPrint
+    jmp     .done
+.not_batt:
+    cmp     si, 13
+    jne     .not_freq
+    mov     si, [di + su_freq]
+    mov     bl, [es:SU_INK]
+    call    suPrint
+    jmp     .done
+.not_freq:
     cmp     si, 6
     jne     .not_flop
     mov     si, [di + su_floppy]
@@ -2237,18 +2297,18 @@ su_row_cpu:     db "CPU cores", 0
 su_labels:
     dw su_row_month, su_row_day, su_row_year, su_row_hour, su_row_min
     dw su_row_sec, su_row_flop, su_row_disk, su_row_boot, su_row_mem
-    dw su_row_cpu
+    dw su_row_cpu, su_row_emu, su_row_batt, su_row_freq
 
 ; the detail panel: two short lines per item, the way a setup utility explains
 ; the row that is selected
 su_d1:
     dw su_h_month_a, su_h_day_a, su_h_year_a, su_h_hour_a, su_h_min_a
     dw su_h_sec_a, su_h_flop_a, su_h_disk_a, su_h_boot_a, su_h_mem_a
-    dw su_h_cpu_a
+    dw su_h_cpu_a, su_h_emu_a, su_h_batt_a, su_h_freq_a
 su_d2:
     dw su_h_month_b, su_h_day_b, su_h_year_b, su_h_hour_b, su_h_min_b
     dw su_h_sec_b, su_h_flop_b, su_h_disk_b, su_h_boot_b, su_h_mem_b
-    dw su_h_cpu_b
+    dw su_h_cpu_b, su_h_emu_b, su_h_batt_b, su_h_freq_b
 
 su_h_month_a: db "The clock's month at boot.", 0
 su_h_month_b: db "CMOS keeps it in BCD.", 0
@@ -2272,6 +2332,29 @@ su_h_mem_a:   db "Base memory in 64 KiB steps.", 0
 su_h_mem_b:   db "640 KB is conventional.", 0
 su_h_cpu_a:   db "Cores the chipset reports on", 0
 su_h_cpu_b:   db "port 0x5A0. This one is fixed.", 0
+su_h_emu_a:   db "The master switch for everything", 0
+su_h_emu_b:   db "on the HW Emulation page.", 0
+su_h_batt_a:  db "The CMOS battery the settings", 0
+su_h_batt_b:  db "live on. Off means no battery.", 0
+su_h_freq_a:  db "The clock the cores report.", 0
+su_h_freq_b:  db "It wanders around this value.", 0
+
+su_row_emu:   db "Emulation", 0
+su_row_batt:  db "BIOS Battery", 0
+su_row_freq:  db "CPU Frequency", 0
+
+su_on_0:      db "Off", 0
+su_on_1:      db "On", 0
+su_onoff:
+    dw su_on_0, su_on_1
+
+su_mhz_0:     db "16 MHz", 0
+su_mhz_1:     db "25 MHz", 0
+su_mhz_2:     db "33 MHz", 0
+su_mhz_3:     db "40 MHz", 0
+su_mhz_4:     db "50 MHz", 0
+su_freq:
+    dw su_mhz_0, su_mhz_1, su_mhz_2, su_mhz_3, su_mhz_4
 
 su_fl_0:        db "none", 0
 su_fl_1:        db "360K, 5.25 in", 0

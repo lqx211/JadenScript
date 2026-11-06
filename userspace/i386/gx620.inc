@@ -36,7 +36,8 @@ GX_COL   equ 0x527                  ; ... and the column
 GX_LINE  equ 0x528                  ; ... and the line of a detail being printed
 GX_EXP   equ 0x5A0                  ; one byte per node: a group is open at 1
 GX_VIS   equ 0x5C0                  ; 32 bytes: the node index of each visible row
-GX_NODES equ 25
+GX_NODES equ 30
+GX_LIVE  equ 0xFFFF                 ; a page that reads the hardware, not the ROM
 
 GX_TOP_I equ 1                      ; the outer frame's first row inside
 GX_BOT_I equ 22                     ; ... and its bottom border
@@ -164,6 +165,7 @@ gxDefaults:
     mov     byte [es:GX_EXP + 4], 1
     mov     byte [es:GX_EXP + 12], 1
     mov     byte [es:GX_EXP + 16], 0
+    mov     byte [es:GX_EXP + 19], 1   ; HW Emulation shows what it is doing
     pop     di
     pop     cx
     pop     ax
@@ -716,6 +718,109 @@ gxScrollBar:
     ret
 
 ; ---------------------------------------------------------------------------
+; gxMonitor -- the Hardware Monitor page: one line per core, read live.
+;
+; Every other page is a table in the ROM. This one is not, so the page's detail
+; pointer is GX_LIVE and gxDrawRight calls here instead. The numbers come out of
+; the card's own register file -- select a core on 0x5A5, read its usage on
+; 0x5A6 and its clock on 0x5A7 -- which is the same door a real board's hardware
+; monitor chip would be behind.
+; ---------------------------------------------------------------------------
+gxMonitor:
+    push    ax
+    push    bx
+    push    cx
+    push    dx
+    push    si
+    mov     byte [es:CON_ATTR], SU_PAPER ; the numbers print through the console
+    ; the title, flush right, and the rule under it -- the same furniture the
+    ; static pages get from gxDrawRight
+    mov     si, msg_gx_hwmon
+    call    gxStrLen
+    mov     dl, GX_RR
+    sub     dl, al
+    dec     dl
+    mov     dh, GX_FIRST
+    call    suGoto
+    mov     si, msg_gx_hwmon
+    mov     bl, SU_HEAD
+    call    suPrint
+    mov     dh, GX_FIRST + 1
+    mov     dl, GX_TX
+    mov     cx, GX_TW
+    mov     al, G_HBAR
+    mov     bl, SU_SEL
+    call    suBar
+    mov     byte [es:GX_ROW], GX_FIRST + 2
+    mov     byte [es:GX_NODE], 1        ; the core being printed
+.core:
+    mov     dx, 0x5A0                   ; how many cores are there
+    in      al, dx
+    xor     ah, ah
+    mov     cl, al                      ; cl = how many cores there are
+    mov     al, [es:GX_NODE]
+    cmp     al, cl
+    ja      .out
+    mov     dx, 0x5A5                   ; select it
+    out     dx, al
+    mov     dx, 0x5A6                   ; what it did with its frame
+    in      al, dx
+    mov     ch, al
+    mov     dx, 0x5A7                   ; and the clock it reports
+    in      al, dx
+    mov     bh, al
+    ; "Core n     usage NN %     NN MHz"
+    mov     dl, GX_TX
+    mov     dh, [es:GX_ROW]
+    call    suGoto
+    mov     si, msg_hw_core
+    mov     bl, SU_PAPER
+    call    suPrint
+    mov     al, [es:GX_NODE]
+    add     al, '0'
+    call    putc
+    mov     si, msg_hw_usage
+    call    suPrint
+    mov     al, ch
+    xor     ah, ah
+    call    putn
+    mov     si, msg_hw_pct
+    call    suPrint
+    mov     al, bh
+    xor     ah, ah
+    call    putn
+    mov     si, msg_hw_mhz
+    call    suPrint
+    inc     byte [es:GX_ROW]
+    inc     byte [es:GX_NODE]
+    jmp     .core
+.out:
+    ; and what the emulation switch is set to, under the list
+    mov     dl, GX_TX
+    mov     dh, [es:GX_ROW]
+    inc     dh
+    call    suGoto
+    mov     si, msg_hw_all
+    mov     bl, SU_PAPER
+    call    suPrint
+    mov     dx, 0x5A9
+    xor     al, al
+    in      al, dx
+    mov     si, msg_hw_off
+    test    al, al
+    jz      .say
+    mov     si, msg_hw_on
+.say:
+    mov     bl, SU_PAPER
+    call    suPrint
+    pop     si
+    pop     dx
+    pop     cx
+    pop     bx
+    pop     ax
+    ret
+
+; ---------------------------------------------------------------------------
 ; gxDrawRight -- the page for the selected node: its title at the right of the
 ; pane, a rule under it, then the lines the detail table points at.
 ; ---------------------------------------------------------------------------
@@ -740,6 +845,11 @@ gxDrawRight:
     mov     si, [di + 4]
     test    si, si
     jz      .out
+    cmp     word [si + 2], GX_LIVE      ; the page starts with the sentinel
+    jne     .static
+    call    gxMonitor
+    jmp     .out
+.static:
     ; the title, flush right
     mov     si, [si]
     call    gxStrLen
@@ -870,6 +980,11 @@ gx_nodes:
     NODE 0, KIND_GROUP,             msg_gx_onboard,  gx_d_onboard
     NODE 1, 0,                      msg_gx_serial,   gx_d_serial
     NODE 1, 0,                      msg_gx_audio,    gx_d_audio
+    NODE 0, KIND_GROUP,             msg_gx_emu,      gx_d_emu
+    NODE 1, KIND_EDIT | 11,         msg_gx_emusw,    gx_d_emusw
+    NODE 1, KIND_EDIT | 12,         msg_gx_batt,     gx_d_batt
+    NODE 1, KIND_EDIT | 13,         msg_gx_freq,     gx_d_freq
+    NODE 1, 0,                      msg_gx_hwmon,    gx_d_hwmon
     NODE 0, 0,                      msg_gx_video,    gx_d_video
     NODE 0, 0,                      msg_gx_perf,     gx_d_perf
     NODE 0, 0,                      msg_gx_security, gx_d_security
@@ -899,6 +1014,11 @@ gx_d_drive1:    dw msg_gx_drive1, l_d1a, l_blank, l_fixed, 0
 gx_d_onboard:   dw msg_gx_onboard, l_ob1, l_blank, l_fixed, 0
 gx_d_serial:    dw msg_gx_serial, l_sr1, l_sr2, l_blank, l_fixed, 0
 gx_d_audio:     dw msg_gx_audio, l_au1, l_blank, l_fixed, 0
+gx_d_emu:       dw msg_gx_emu, l_em1, l_em2, l_blank, l_em3, 0
+gx_d_emusw:     dw msg_gx_emusw, l_emsw1, l_blank, l_edit, 0
+gx_d_batt:      dw msg_gx_batt, l_bt1, l_bt2, l_blank, l_edit, 0
+gx_d_freq:      dw msg_gx_freq, l_fq1, l_fq2, l_blank, l_edit, 0
+gx_d_hwmon:     dw msg_gx_hwmon, GX_LIVE, 0
 gx_d_video:     dw msg_gx_video, l_vd1, l_vd2, l_vd3, l_blank, l_fixed, 0
 gx_d_perf:      dw msg_gx_perf, l_pf1, l_blank, l_fixed, 0
 gx_d_security:  dw msg_gx_security, l_se1, l_se2, l_blank, l_fixed, 0
@@ -914,6 +1034,18 @@ msg_gx_hint1:      db "Press Up/Down arrows to select a different field", 0
 msg_gx_hint2:      db "Press Left/Right keys to expand or collapse a group", 0
 msg_gx_hint3:      db "Press Esc to exit Setup", 0
 
+msg_hw_core:       db "Core ", 0
+msg_hw_usage:      db "     usage ", 0
+msg_hw_pct:        db " %     ", 0
+msg_hw_mhz:        db " MHz", 0
+msg_hw_all:        db "Emulation is ", 0
+msg_hw_on:         db "on.", 0
+msg_hw_off:        db "off.", 0
+msg_gx_emu:        db "HW Emulation", 0
+msg_gx_emusw:      db "Emulation", 0
+msg_gx_batt:       db "BIOS Battery", 0
+msg_gx_freq:       db "CPU Frequency", 0
+msg_gx_hwmon:      db "Hardware Monitor", 0
 msg_gx_system:     db "System", 0
 msg_gx_sysinfo:    db "System Info", 0
 msg_gx_cpu:        db "Processor Info", 0
@@ -940,6 +1072,14 @@ msg_gx_power:      db "Power Management", 0
 msg_gx_maint:      db "Maintenance", 0
 msg_gx_post:       db "POST Behavior", 0
 
+l_em1:   db "This board is a program. Everything it", 0
+l_em2:   db "pretends to be is listed below.", 0
+l_em3:   db "Emulation is the master switch.", 0
+l_emsw1: db "Off: the cores report no clock and the", 0
+l_bt1:   db "The CMOS battery keeps the clock and", 0
+l_bt2:   db "these settings across a power cut.", 0
+l_fq1:   db "The clock each core reports. It is not", 0
+l_fq2:   db "measured: it wanders by a MHz either way.", 0
 l_blank:  db "", 0
 l_fixed:  db "None of these fields are changeable.", 0
 l_edit:   db "Enter edits it; Esc leaves it alone.", 0

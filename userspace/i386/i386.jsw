@@ -157,6 +157,32 @@ public X.apCs = 2048;            // 0x0800: the vector a released core starts at
 public X.coreCountPort = 1440;   // 0x5A0, read: how many cores there are
 public X.coreReleasePort = 1441; // 0x5A1, write: the core to wake
 public X.coreIdPort = 1442;      // 0x5A2, read: which core is asking
+/* ---- the hardware monitor --------------------------------------------- *
+ * Every core reports what it did with its last frame: the share of its
+ * instruction budget it retired, and a clock speed. The speed is emulated, not
+ * measured -- every core here runs at the same speed -- so it is the one figure
+ * on this board allowed to wander, and it wanders around the frequency the
+ * setup utility asked for. Ports 0x5A5..0x5A9 are the register file the
+ * firmware reads it through: select a core, then read its two numbers.
+ */
+public X.coreSel = 1;            // 0x5A5, write: which core the next reads mean
+public X.coreSelPort = 1445;
+public X.coreUsagePort = 1446;   // 0x5A6, read: that core's usage, per cent
+public X.coreMHzPort = 1447;     // 0x5A7, read: that core's clock, in MHz
+public X.cpuBasePort = 1448;     // 0x5A8, write: the clock the board should keep
+public X.emuMasterPort = 1449;   // 0x5A9, write: 0 turns the emulation off
+public X.emuOn = 1;
+public X.cpuBase = 33;
+public X.coreUsage = [0, 0, 0, 0, 0, 0, 0, 0];
+public X.coreMHz = [33, 33, 33, 33, 33, 33, 33, 33];
+public X.core1Usage = 0;
+public X.core1MHz = 33;
+public X.core2Usage = 0;
+public X.core2MHz = 33;
+public X.core3Usage = 0;
+public X.core3MHz = 33;
+public X.core4Usage = 0;
+public X.core4MHz = 33;
 /* what the monitor shows: core 1 copies its own state here once a frame */
 public X.monSteps = 0;
 public X.monIp = 0;
@@ -170,6 +196,16 @@ public X.clockMode = 0;                  // 0 = counted, 1 = the project timer
 
 // The stage has to be 640 x 480 for the 80 x 25 grid to fit pixel for pixel.
 metadata note Stage at 50,50 350x170: "{\"width\":640,\"height\":480,\"warpTimer\":true} // _twconfig_";
+/* one watcher per core, so the numbers on the stage are the numbers the
+ * firmware reads back: usage on the left, clock on the right */
+metadata default Stage.X.core1Usage at 5,5 100x24 shown;
+metadata default Stage.X.core1MHz at 108,5 100x24 shown;
+metadata default Stage.X.core2Usage at 5,32 100x24 shown;
+metadata default Stage.X.core2MHz at 108,32 100x24 shown;
+metadata default Stage.X.core3Usage at 5,59 100x24 shown;
+metadata default Stage.X.core3MHz at 108,59 100x24 shown;
+metadata default Stage.X.core4Usage at 5,86 100x24 shown;
+metadata default Stage.X.core4MHz at 108,86 100x24 shown;
 
 import "assets/lists/bios.jsa" as rom;
 import "assets/lists/disk.jsa" as disk;
@@ -431,9 +467,12 @@ class Cpu {
                 _h = halted;
             }
             if (_h == 1) {
+                reportCore(0);                  // a sleeping core has nothing to show
                 Control.wait(1);
             } else {
+                _was = steps;
                 runBatch();
+                reportCore(steps - _was);
                 Control.wait(0);
             }
         }
@@ -470,6 +509,46 @@ class Cpu {
             if (X.picVec < 1) { return; }
         }
         halted = 0;
+    }
+
+    /* What this core did with its frame, said out loud.
+     *
+     * `done` is the instructions it retired out of the `X.batch` it was given,
+     * so the share is the utilisation. It is smoothed over four frames because
+     * a core hops between waiting for the timer and a full batch of work, and
+     * an unsmoothed number flickers between nothing and everything.
+     *
+     * The clock is the emulated part: the cores all run at the speed they run
+     * at, and the board reports the frequency the setup utility asked for, with
+     * a small wander either side of it -- the way a real board's reported clock
+     * is never quite the number on the crystal. */
+    private void reportCore(done) { // warp
+        _pct = Operators.math("round", done * 100 / X.batch);
+        if (_pct > 100) { _pct = 100; }
+        _old = X.coreUsage.get(coreId) + 0;
+        _pct = Operators.math("round", (_old * 3 + _pct) / 4);
+        X.coreUsage.set(coreId, _pct);
+        _mhz = 0;
+        if (X.emuOn > 0) {
+            _mhz = X.cpuBase + Operators.random(-1, 1);
+        }
+        X.coreMHz.set(coreId, _mhz);
+        if (coreId == 1) {
+            X.core1Usage = _pct;
+            X.core1MHz = _mhz;
+        }
+        if (coreId == 2) {
+            X.core2Usage = _pct;
+            X.core2MHz = _mhz;
+        }
+        if (coreId == 3) {
+            X.core3Usage = _pct;
+            X.core3MHz = _mhz;
+        }
+        if (coreId == 4) {
+            X.core4Usage = _pct;
+            X.core4MHz = _mhz;
+        }
     }
 
     /* One frame's worth of instructions, under warp: no screen refresh inside. */
@@ -991,6 +1070,8 @@ class Cpu {
         if (p == 161) { v = X.pic2Imr; return; }
         if (p == 1016) { v = 96; return; }
         if (p == 1021) { v = 96; return; }
+        if (p == X.coreUsagePort) { v = X.coreUsage.get(X.coreSel) + 0; return; }
+        if (p == X.coreMHzPort) { v = X.coreMHz.get(X.coreSel) + 0; return; }
         if (p == X.dispViewPort) { v = X.dispViewCols; return; }
         if (p == X.dispRowsPort) { v = X.dispViewRows; return; }
         if (p == X.coreCountPort) { v = X.cores; return; }
@@ -1012,6 +1093,23 @@ class Cpu {
             return;
         }
         if (p == 1016) { X.out.add(_oV); return; }
+        if (p == X.coreSelPort) {
+            if (_oV >= 1 && _oV <= X.cores) { X.coreSel = _oV; }
+            return;
+        }
+        if (p == X.cpuBasePort) {
+            X.cpuBase = _oV;
+            _i = 1;
+            while (_i <= X.cores) {
+                X.coreMHz.set(_i, _oV);
+                _i += 1;
+            }
+            return;
+        }
+        if (p == X.emuMasterPort) {
+            X.emuOn = _oV;
+            return;
+        }
         if (p == X.coreReleasePort) {
             // wake core n: the device owns the flag, not the firmware
             if (_oV >= 1 && _oV <= X.cores) {

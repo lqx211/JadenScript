@@ -200,6 +200,10 @@ start:
     mov     ax, cs
     mov     ds, ax
 
+    ; the emulation settings in the CMOS go to the chipset before anything
+    ; reads them back
+    call    hwApply
+
     ; how much of the plane the card can actually show. On a 640 x 480 stage
     ; that is all of it; on Scratch's own 480 x 360 it is 60 x 22, and a BIOS
     ; that keeps printing at column 70 would be printing into the void.
@@ -299,6 +303,7 @@ start:
 .setup:
     call    gxSplashHide
     call    gxEnter                 ; comes back when the setup is left
+    call    hwApply                 ; a saved clock takes effect now
     jmp     .boot
 .menu:
     call    gxSplashHide

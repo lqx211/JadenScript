@@ -86,6 +86,9 @@ CMOS_DEFAULTS = {
     0x30: 0x00,          # our boot counter
     0x31: 0x00,          # our POST result
     0x32: 0x20,          # century
+    0x34: 0x01,          # emulation: on, so the board has a clock to report
+    0x35: 0x01,          # battery: fitted
+    0x36: 0x02,          # CPU frequency: 33 MHz, the setup's table entry 2
 }
 
 
@@ -402,6 +405,10 @@ class Machine:
         # asks for a smaller stage, the way Scratch's own 480 x 360 is 60 x 22
         self.view_cols = 80
         self.view_rows = 30
+        # the hardware monitor: a selected core, and the emulated clock
+        self.core_sel = 1
+        self.cpu_base = 33
+        self.emu_on = 1
         self.core_run = [0] * 16
         self.cmos = bytearray(128)
         self.cmos_index = 0
@@ -535,6 +542,16 @@ class Machine:
 
     # ---- ports -------------------------------------------------------
 
+    def core_usage(self, index):
+        """What the core reports it did with its last frame.
+
+        The model retires instructions flat out with no frames at all, so there
+        is nothing real to measure; this invents a number that moves with the
+        instruction counter and stays the same across two runs of the same
+        program, which is what a test wants.
+        """
+        return (self.steps // 997 + index * 13) % 61 + 20
+
     def port_in(self, port, size):
         if 0x40 <= port <= 0x42:
             return self.pit.read(port - 0x40)
@@ -552,6 +569,10 @@ class Machine:
             return self.ports.get(0x61, 0)
         if port == 0x5A0:
             return self.cores
+        if port == 0x5A6:                 # the core selected on 0x5A5
+            return self.core_usage(self.core_sel)
+        if port == 0x5A7:                 # ... and the clock it reports
+            return self.cpu_base if self.emu_on else 0
         if port == 0x5A3:                 # the card: cells across the stage
             return self.view_cols
         if port == 0x5A4:                 # ... and cells down
@@ -605,6 +626,16 @@ class Machine:
                 # the AP runs the trampoline: it records itself and checks in
                 self.write(0x8400 + core, core, 1)
                 self.write(0x8500 + core, 1, 1)
+            return
+        if port == 0x5A5:                 # which core the monitor reads mean
+            if 1 <= (value & 0xFF) <= self.cores:
+                self.core_sel = value & 0xFF
+            return
+        if port == 0x5A8:                 # the clock the board should report
+            self.cpu_base = value & 0xFF
+            return
+        if port == 0x5A9:                 # the emulation master switch
+            self.emu_on = value & 0x01
             return
         if port == 0xCF9:                 # the reset control register
             if value & 0x04:              # SYS_RST: start again from the ROM

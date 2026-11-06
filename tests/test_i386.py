@@ -336,6 +336,52 @@ class I386SetupTests(unittest.TestCase):
                 self.assertIn(attr, (0x1F, 0x1E, 0x70, 0x20),
                               f"cell {row},{col} is 0x{attr:02x}")
 
+    #: System is open, HW Emulation is open: 17 rows down reaches the group,
+    #: 18 the master switch, 19 the battery, 20 the clock, 21 the monitor
+    TO_HW = [0x50] * 17
+    TO_EMU_SWITCH = [0x50] * 18
+    TO_FREQ = [0x50] * 20
+    TO_MONITOR = [0x50] * 21
+
+    def test_the_hw_emulation_group_lists_what_the_board_pretends(self) -> None:
+        screen = self._setup([self.F2] + self.TO_HW).text()
+        self.assertIn("HW Emulation", screen)
+        self.assertIn("This board is a program", screen)
+        self.assertIn("Emulation is the master switch.", screen)
+        # each child is a page of its own, titled with its own name
+        for downs, title in ((18, "Emulation"), (19, "BIOS Battery"),
+                             (20, "CPU Frequency"), (21, "Hardware Monitor")):
+            page = self._setup([self.F2] + [0x50] * downs).text()
+            self.assertIn(title, page.splitlines()[0] + page)
+
+    def test_the_hardware_monitor_reads_every_core(self) -> None:
+        """One line per core, and the line is read out of the chipset's
+        registers on 0x5A5..0x5A7 rather than out of a table in the ROM."""
+        mach = self._setup([self.F2] + self.TO_MONITOR)
+        screen = mach.text()
+        self.assertIn("Hardware Monitor", screen)
+        for core in range(1, mach.cores + 1):
+            self.assertIn(f"Core {core}", screen)
+        self.assertIn("usage", screen)
+        self.assertIn("MHz", screen)
+        self.assertIn("Emulation is on.", screen)
+
+    def test_the_emulation_switch_reaches_the_chipset(self) -> None:
+        """Off is a CMOS byte, and the chipset hears about it at POST: the
+        cores then report no clock at all."""
+        keys = ([self.F2] + self.TO_EMU_SWITCH
+                + [self.ENTER, self.LEFT, self.ENTER, self.ESC, self.ENTER])
+        mach = self._setup(keys)
+        self.assertEqual(mach.cmos[0x34], 0x00, "the master switch, saved off")
+        self.assertEqual(mach.emu_on, 0, "and the chipset was told")
+
+    def test_the_cpu_frequency_is_a_number_the_board_can_keep(self) -> None:
+        keys = ([self.F2] + self.TO_FREQ
+                + [self.ENTER, self.RIGHT, self.ENTER, self.ESC, self.ENTER])
+        mach = self._setup(keys)
+        self.assertEqual(mach.cmos[0x36], 0x03, "40 MHz, the next entry up")
+        self.assertEqual(mach.cpu_base, 40)
+
     def test_the_dialog_is_a_panel_with_a_shadow(self) -> None:
         mach = self._setup([self.F2] + self.TO_MONTH + [self.ENTER])
         shadows = sum(1 for row in range(rv.TEXT_ROWS)
