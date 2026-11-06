@@ -256,10 +256,12 @@ class I386SetupTests(unittest.TestCase):
         mach = self._setup([0x53])
         for row in range(30):
             for col in range(80):
-                if col in (0, 45, 79) or (row, col) == (29, 79):
-                    continue        # the frame, and the cell kept back to avoid a scroll
+                if col in (0, 45, 79):
+                    continue        # the frame's own columns
                 cell = mach.read(0xB8000 + (row * 80 + col) * 2, 2)
                 self.assertNotEqual(cell, 0x0720, f"cell {row},{col} kept the POST paper")
+        # the strip along the bottom is eighty cells, the last one included
+        self.assertEqual(mach.read(0xB8000 + (29 * 80 + 79) * 2, 2), 0x7020)
 
     def test_the_exit_page_keeps_its_own_rows(self) -> None:
         mach = self._setup([0x53, 0x4D, 0x4D, 0x50])   # Del, Right x2, Down

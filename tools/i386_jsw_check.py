@@ -142,7 +142,7 @@ def main(argv: list[str]) -> int:
 def jsw_sim_cells(words: list) -> list[tuple[int, int]]:
     """The text plane as (character, attribute) pairs, in row-major order."""
     cells = []
-    for cell in range(25 * 80):
+    for cell in range(ref.TEXT_ROWS * ref.TEXT_COLS):
         w = int(words[cell // 2])
         value = (w & 0xFFFF) if cell % 2 == 0 else (w >> 16)
         cells.append((value & 0xFF, (value >> 8) & 0xFF))
@@ -151,7 +151,7 @@ def jsw_sim_cells(words: list) -> list[tuple[int, int]]:
 
 def jsw_sim_text(words: list) -> str:
     lines = []
-    for row in range(25):
+    for row in range(ref.TEXT_ROWS):
         chars = []
         for col in range(80):
             cell = row * 80 + col

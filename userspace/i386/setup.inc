@@ -1340,6 +1340,38 @@ frameRule:
     pop     ax
     ret
 
+; suPoke: dl/dh = column/row, al = the character, bl = the attribute. It writes
+; straight into the text plane, so the console cursor never moves -- see the
+; note in suStatus about the last cell of the last row.
+suPoke:
+    push    ax
+    push    bx
+    push    cx
+    push    dx
+    push    di
+    push    fs
+    push    ax                      ; the character, out of the way
+    mov     al, dh
+    xor     ah, ah
+    mov     cl, COLS
+    mul     cl                      ; ax = row * 80
+    xor     dh, dh
+    add     ax, dx                  ; ... and the column
+    shl     ax, 1
+    mov     di, ax
+    pop     ax                      ; the character is back in al
+    mov     cx, TEXT_SEG
+    mov     fs, cx
+    mov     ah, bl
+    mov     [fs:di], ax
+    pop     fs
+    pop     di
+    pop     dx
+    pop     cx
+    pop     bx
+    pop     ax
+    ret
+
 ; suCell: dl/dh = column/row, al = the character. The frame is always drawn in
 ; the header ink, so this sets it rather than trusting whatever bl held.
 suCell:
@@ -1389,9 +1421,15 @@ suStatus:
     mov     si, msg_su_keys
     mov     bl, SU_HEAD
     call    suPrint
-    ; a lit strip, seventy-nine cells wide: eighty wrap the cursor onto the row
-    ; after the last one, and this console answers that by scrolling the whole
-    ; screen up a line
+    ; A lit strip across the row after the frame, all eighty cells. The last
+    ; one goes straight into the plane: the console advances its cursor after a
+    ; character, and a cursor that steps past the last column of the last row
+    ; makes the whole screen scroll up a line.
+    mov     dl, 79
+    mov     dh, SU_BOT + 1
+    mov     al, ' '
+    mov     bl, SU_SEL
+    call    suPoke
     xor     dl, dl
     mov     dh, SU_BOT + 1
     mov     cx, 79
@@ -1874,7 +1912,7 @@ msg_su_cpuline: db "CPU: Intel 80386, real mode", 0
 msg_su_diskline: db "Disk: int 13h, one boot sector", 0
 msg_su_ramline: db "RAM: 640 KB below 1 MB", 0
 msg_su_romline: db "ROM: 64 KB at F000:0000", 0
-msg_su_videoline: db "Video: VGA text, 80x25", 0
+msg_su_videoline: db "Video: VGA text, 80x30", 0
 msg_su_tabhelp: db "< > switches pages", 0
 
 ; the exit page
