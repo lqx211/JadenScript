@@ -37,7 +37,45 @@ TEXT_ROWS = 30
 BIOS_BASE = 0x000F_0000
 RESET_CS = 0xF000
 RESET_IP = 0xFFF0
-DISK_AT = 0x0000_8000
+#: the disk image is staged where the firmware's int 13h window looks for it,
+#: so the model and the machine agree about where a sector lives
+DISK_AT = 0x000C_0000
+
+#: IDENTIFY DEVICE, word for word: the answer every ATA drive has to give, and
+#: the one a setup utility reads the model name out of. The checksum in the last
+#: word makes the block sum to zero, which is what a strict driver checks.
+ATA_IDENT = [
+    0x0040, 0x0080, 0x0000, 0x0004, 0x0000, 0x0000, 0x003F, 0x0000, 0x0000, 0x534A,
+    0x3257, 0x3230, 0x4134, 0x3030, 0x3030, 0x2031, 0x2020, 0x2020, 0x2020, 0x0000,
+    0x0000, 0x0000, 0x3041, 0x2037, 0x2020, 0x2020, 0x534A, 0x2057, 0x4956, 0x5452,
+    0x4155, 0x204C, 0x4944, 0x4B53, 0x3120, 0x3832, 0x204D, 0x2020, 0x2020, 0x2020,
+    0x2020, 0x2020, 0x2020, 0x2020, 0x2020, 0x2020, 0x8000, 0x0000, 0x0200, 0x0000,
+    0x0000, 0x0000, 0x0001, 0x0080, 0x0004, 0x003F, 0x0080, 0x0000, 0x0000, 0x0080,
+    0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+    0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0010,
+    0x0000, 0x4000, 0x0400, 0x0000, 0x0400, 0x0400, 0x4000, 0x0000, 0x0000, 0x0000,
+    0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+    0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+    0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+    0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+    0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+    0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+    0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+    0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+    0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+    0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+    0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+    0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+    0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+    0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+    0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+    0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+    0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0xD23B
+]
+
+#: the five SMART attributes, in the order both boards report them
+ATA_SMART_IDS = [5, 9, 12, 194, 197]
+
 SECTOR = 512
 
 FLAG_CF = 1 << 0
@@ -409,6 +447,21 @@ class Machine:
         self.spin_up_secs = 4.5
         self.emu_on = 1
         self.cpu_base = 33
+        # ---- the ATA channel --------------------------------------------
+        self.ata_err = 0
+        self.ata_count = 0
+        self.ata_lba = 0
+        self.ata_cmd = 0
+        self.ata_feat = 0
+        self.ata_buf = []
+        self.ata_pos = 0
+        self.ata_status = 0x50
+        self.ata_lo = 0
+        self.ata_mid = 0
+        self.ata_hi = 0
+        self.ata_drv = 0
+        self.ata_smart_on = 0
+        self.ata_sectors = 128
         self.thermal_done = 0.0      # emulated seconds already integrated
         self.hw_ticks = 0
         self.smart_sel = 1
@@ -634,6 +687,80 @@ class Machine:
         for i in range(1, 6):
             self.smart_worst[i] = min(self.smart_worst[i], self.smart[i])
 
+    # ---- the ATA channel ---------------------------------------------
+    #
+    # The same register file and the same status bits the Scratch machine
+    # implements, because a drive is a protocol, not an implementation detail:
+    # a guest that polls DRDY has to see the same answer on both boards.
+
+    def ata_in(self) -> int:
+        """One 16-bit read of the data register."""
+        value = 0
+        if self.ata_pos < 256:
+            value = self.ata_buf[self.ata_pos]
+            self.ata_pos += 1
+        if self.ata_pos >= 256:
+            if self.ata_cmd == 0x20 and self.ata_count > 1:
+                self.ata_count -= 1
+                self.ata_lba += 1
+                self._ata_load()
+            else:
+                self.ata_count = 0
+                self.ata_status = 0x50
+        return value & 0xFFFF
+
+    def _ata_load(self) -> None:
+        start = DISK_AT + self.ata_lba * 512
+        blob = self.ram[start:start + 512]
+        self.ata_buf = [blob[i] | (blob[i + 1] << 8) for i in range(0, len(blob), 2)]
+        self.ata_pos = 0
+        self.ata_status = 0x58
+
+    def ata_command(self, cmd: int) -> None:
+        self.ata_cmd = cmd
+        self.ata_err = 0
+        self.ata_lba = self.ata_lo | (self.ata_mid << 8) | (self.ata_hi << 16)
+        if self.ata_lba >= self.ata_sectors:
+            self.ata_err = 0x10
+            self.ata_status = 0x41
+            return
+        if cmd == 0xEC:
+            self.ata_buf = list(ATA_IDENT)
+            self.ata_pos = 0
+            self.ata_status = 0x58
+            return
+        if cmd in (0x20, 0x24, 0x21):
+            self._ata_load()
+            return
+        if cmd == 0xB0:
+            if self.ata_feat == 0xD8:
+                self.ata_smart_on = 1
+                self.ata_status = 0x50
+                return
+            if self.ata_feat == 0xD9:
+                self.ata_smart_on = 0
+                self.ata_status = 0x50
+                return
+            if self.ata_feat in (0xD0, 0xD1):
+                buf = [0] * 256
+                buf[0] = 0x0010
+                for i in range(5):
+                    b = 2 + i * 6
+                    buf[b] = ATA_SMART_IDS[i]
+                    buf[b + 2] = ((self.smart[i + 1] & 0xFF) << 8) | (self.smart_worst[i + 1] & 0xFF)
+                self.ata_buf = buf
+                self.ata_pos = 0
+                self.ata_status = 0x58
+                return
+            self.ata_err = 0x04
+            self.ata_status = 0x41
+            return
+        if cmd in (0x91, 0xEF, 0xE1, 0xF9):
+            self.ata_status = 0x50
+            return
+        self.ata_err = 0x04
+        self.ata_status = 0x41
+
     def port_in(self, port, size):
         if 0x40 <= port <= 0x42:
             return self.pit.read(port - 0x40)
@@ -649,6 +776,22 @@ class Machine:
             return self.pic2.imr
         if port == 0x61:                  # the speaker port: timer 2's gate
             return self.ports.get(0x61, 0)
+        if port == 0x1F0:
+            return self.ata_in()
+        if port == 0x1F1:
+            return self.ata_err
+        if port == 0x1F2:
+            return self.ata_count
+        if port == 0x1F3:
+            return self.ata_lo
+        if port == 0x1F4:
+            return self.ata_mid
+        if port == 0x1F5:
+            return self.ata_hi
+        if port == 0x1F6:
+            return self.ata_drv
+        if port in (0x1F7, 0x3F6):
+            return self.ata_status
         if port == 0x5A0:
             return self.cores
         if port == 0x5A6:                 # the core selected on 0x5A5
@@ -696,12 +839,13 @@ class Machine:
             return self.cmos_index
         if port == 0x71:
             return self.cmos[self.cmos_index & 0x7F]
-        if port in (0x1F7, 0x177, 0x3F6, 0x376):
-            # an IDE channel with no drive on it: not busy, and not ready.
-            # Reading 0xFF here -- a floating bus -- makes an ATA probe spin
-            # for ever on the busy bit, which is what SeaBIOS did.
+        # The primary channel is a real drive now (see ata_command above); the
+        # secondary channel is still empty, and an empty channel has to answer
+        # "not busy, not ready" rather than 0xFF -- a floating bus makes an ATA
+        # probe spin for ever on the busy bit, which is what SeaBIOS did.
+        if port in (0x177, 0x376):
             return 0x00
-        if 0x1F0 <= port <= 0x1F6 or 0x170 <= port <= 0x176:
+        if 0x170 <= port <= 0x176:
             return 0xFF
         if port == 0x3FD:
             return 0x60
@@ -752,6 +896,34 @@ class Machine:
             return
         if port == 0x5AA:                 # key repeat, in units of 10 ms
             self.key_repeat = (value & 0xFF) * 10
+            return
+        if port == 0x1F0:
+            self.ata_pos += 1             # the image is read-only: nothing latches
+            return
+        if port == 0x1F1:
+            self.ata_feat = value & 0xFF
+            return
+        if port == 0x1F2:
+            self.ata_count = value & 0xFF
+            return
+        if port == 0x1F3:
+            self.ata_lo = value & 0xFF
+            return
+        if port == 0x1F4:
+            self.ata_mid = value & 0xFF
+            return
+        if port == 0x1F5:
+            self.ata_hi = value & 0xFF
+            return
+        if port == 0x1F6:
+            self.ata_drv = value & 0xFF
+            if self.ata_drv >= 0xA0:
+                self.ata_hi = self.ata_drv & 0x0F
+            return
+        if port == 0x1F7:
+            self.ata_command(value & 0xFF)
+            return
+        if port in (0x1F7, 0x3F6) or port == 0x3F6:
             return
         if port == 0x5B7:                 # which SMART attribute to read next
             if 1 <= (value & 0xFF) <= 5:

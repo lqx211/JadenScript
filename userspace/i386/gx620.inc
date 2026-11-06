@@ -37,7 +37,8 @@ GX_LINE  equ 0x528                  ; ... and the line of a detail being printed
 GX_EXP   equ 0x5A0                  ; one byte per node: a group is open at 1
 GX_VIS   equ 0x5C0                  ; 32 bytes: the node index of each visible row
 GX_NODES equ 31
-GX_LIVE  equ 0xFFFF                 ; a page that reads the hardware, not the ROM
+GX_LIVE  equ 0xFFFE                 ; a page that reads the hardware, not the ROM
+GX_LIVEDRV equ 0xFFFD               ; ... the drive's identity, which it answers
 
 GX_TOP_I equ 1                      ; the outer frame's first row inside
 GX_BOT_I equ 22                     ; ... and its bottom border
@@ -903,6 +904,217 @@ gxMonitor:
     ret
 
 ; ---------------------------------------------------------------------------
+; gxDrive -- the drive's own page, read out of the drive.
+;
+; A real BIOS asks the device who it is: IDENTIFY DEVICE is one command byte on
+; 0x1F7 and then 256 words out of 0x1F0, and the model, the serial and the
+; capacity are text inside that block. This page streams the block, keeps the
+; fields that are text, and prints them -- so what appears on the screen came
+; out of the emulated drive over the emulated cable, not out of a table in the
+; ROM.
+;
+; The words are streamed; only the interesting ranges are kept. 256 reads is
+; nothing, and it means a drive that changes its mind changes the screen.
+; ---------------------------------------------------------------------------
+DRV_W      equ 0x528                  ; the word being streamed
+DRV_MODEL  equ 0x600                  ; 40 bytes: words 27..46
+DRV_SERIAL equ 0x62A                  ; 20 bytes: words 10..19
+DRV_FW     equ 0x640                  ;  8 bytes: words 23..26
+DRV_CAP    equ 0x658                  ; capacity, in sectors
+DRV_OK     equ 0x65C                  ; did the drive answer at all?
+
+gxDrive:
+    push    ax
+    push    bx
+    push    cx
+    push    dx
+    push    si
+    push    di
+    mov     byte [es:CON_ATTR], SU_PAPER
+    mov     si, msg_gx_drive0
+    call    gxStrLen
+    mov     dl, GX_RR
+    sub     dl, al
+    dec     dl
+    mov     dh, GX_FIRST
+    call    suGoto
+    mov     si, msg_gx_drive0
+    mov     bl, SU_HEAD
+    call    suPrint
+    mov     dh, GX_FIRST + 1
+    mov     dl, GX_TX
+    mov     cx, GX_TW
+    mov     al, G_HBAR
+    mov     bl, SU_SEL
+    call    suBar
+
+    ; ---- ask the drive who it is -------------------------------------
+    mov     byte [es:DRV_OK], 0
+    mov     dx, 0x1F6                 ; drive 0, LBA mode
+    mov     al, 0xA0
+    out     dx, al
+    mov     dx, 0x1F2                 ; one sector's worth
+    mov     al, 1
+    out     dx, al
+    mov     dx, 0x1F7
+    mov     al, 0xEC                  ; IDENTIFY DEVICE
+    out     dx, al
+    mov     dx, 0x1F7                 ; and wait for it to be ready
+    in      al, dx
+    test    al, 0x40
+    jz      .nodrive
+    test    al, 0x01
+    jnz     .nodrive
+    mov     byte [es:DRV_OK], 1
+    mov     word [es:DRV_W], 0
+.stream:
+    mov     dx, 0x1F0
+    in      ax, dx
+    mov     bx, [es:DRV_W]
+    ; model: words 27..46, which is 0-based 26..45
+    cmp     bx, 26
+    jb      .serial
+    cmp     bx, 45
+    ja      .serial
+    mov     di, bx
+    sub     di, 26
+    shl     di, 1
+    add     di, DRV_MODEL
+    mov     [es:di], al
+    mov     [es:di + 1], ah
+.serial:
+    ; serial: words 10..19, 0-based 9..18
+    cmp     bx, 9
+    jb      .firmware
+    cmp     bx, 18
+    ja      .firmware
+    mov     di, bx
+    sub     di, 9
+    shl     di, 1
+    add     di, DRV_SERIAL
+    mov     [es:di], al
+    mov     [es:di + 1], ah
+.firmware:
+    ; firmware: words 23..26, 0-based 22..25
+    cmp     bx, 22
+    jb      .capacity
+    cmp     bx, 25
+    ja      .capacity
+    mov     di, bx
+    sub     di, 22
+    shl     di, 1
+    add     di, DRV_FW
+    mov     [es:di], al
+    mov     [es:di + 1], ah
+.capacity:
+    ; capacity: word 60, 0-based 59
+    cmp     bx, 59
+    jne     .next
+    mov     [es:DRV_CAP], ax
+.next:
+    inc     word [es:DRV_W]
+    cmp     word [es:DRV_W], 256
+    jb      .stream
+    jmp     .show
+
+.nodrive:
+    mov     dl, GX_TX
+    mov     dh, GX_FIRST + 3
+    call    suGoto
+    mov     si, msg_drv_none
+    mov     bl, SU_PAPER
+    call    suPrint
+    jmp     .out
+
+.show:
+    ; The fields were copied into the scratch segment, but this code runs with
+    ; DS = the ROM segment -- `mov si, offset` here means F000:xxxx. So the
+    ; strings need terminators and a DS that points at where they really are,
+    ; or suPrint walks off the end of the buffer into whatever follows.
+    mov     byte [es:DRV_MODEL + 40], 0
+    mov     byte [es:DRV_SERIAL + 20], 0
+    mov     byte [es:DRV_FW + 8], 0
+    mov     dl, GX_TX
+    mov     dh, GX_FIRST + 2
+    call    suGoto
+    mov     si, msg_drv_model
+    mov     bl, SU_PAPER
+    call    suPrint
+    mov     si, DRV_MODEL
+    call    drvStr
+    mov     dl, GX_TX
+    mov     dh, GX_FIRST + 3
+    call    suGoto
+    mov     si, msg_drv_serial
+    mov     bl, SU_PAPER
+    call    suPrint
+    mov     si, DRV_SERIAL
+    call    drvStr
+    mov     dl, GX_TX
+    mov     dh, GX_FIRST + 4
+    call    suGoto
+    mov     si, msg_drv_fw
+    mov     bl, SU_PAPER
+    call    suPrint
+    mov     si, DRV_FW
+    call    drvStr
+    mov     dl, GX_TX
+    mov     dh, GX_FIRST + 5
+    call    suGoto
+    mov     si, msg_drv_cap
+    mov     bl, SU_PAPER
+    call    suPrint
+    mov     ax, [es:DRV_CAP]
+    call    hwNum
+    mov     si, msg_drv_sectors
+    mov     bl, SU_PAPER
+    call    suPrint
+    ; ---- and what the sensors say about it -------------------------
+    mov     dl, GX_TX
+    mov     dh, GX_FIRST + 7
+    call    suGoto
+    mov     si, msg_drv_therm
+    mov     bl, SU_PAPER
+    call    suPrint
+    mov     dx, 0x5B3
+    in      al, dx
+    xor     ah, ah
+    call    hwNum
+    mov     si, msg_hw_drvdeg
+    mov     bl, SU_PAPER
+    call    suPrint
+    call    hwHddRpm
+    call    hwNum
+    mov     si, msg_hw_rpm
+    mov     bl, SU_PAPER
+    call    suPrint
+.out:
+    pop     di
+    pop     si
+    pop     dx
+    pop     cx
+    pop     bx
+    pop     ax
+    ret
+
+; ---------------------------------------------------------------------------
+; drvStr -- print a string that lives in the scratch segment.
+;
+; suPrint reads through DS, and the setup utility runs with DS pointing at the
+; ROM. A buffer filled from the drive is in low memory, so DS has to be borrowed
+; from ES for the length of one string.
+; ---------------------------------------------------------------------------
+drvStr:
+    push    ds
+    push    ax
+    mov     ax, es
+    mov     ds, ax
+    call    suPrint
+    pop     ax
+    pop     ds
+    ret
+
+; ---------------------------------------------------------------------------
 ; hwNum / hwChar -- print a sensor reading in the page's own colour.
 ; suPrint colours a string from BL, and BL is whatever the last call left
 ; there, so a number printed after a highlighted bar came out in the bar's
@@ -970,9 +1182,17 @@ gxDrawRight:
     mov     si, [di + 4]
     test    si, si
     jz      .out
-    cmp     word [si + 2], GX_LIVE      ; the page starts with the sentinel
-    jne     .static
+    mov     ax, [si + 2]                ; the page starts with the sentinel
+    cmp     ax, GX_LIVE
+    je      .monitor
+    cmp     ax, GX_LIVEDRV
+    je      .drive
+    jmp     .static
+.monitor:
     call    gxMonitor
+    jmp     .out
+.drive:
+    call    gxDrive
     jmp     .out
 .static:
     ; the title, flush right
@@ -1135,7 +1355,7 @@ gx_d_second:    dw msg_gx_second, l_sc1, l_blank, l_edit, 0
 gx_d_bootseq:   dw msg_gx_bootseq, l_bs1, l_blank, l_bs2, l_bs3, l_bs4, l_blank, l_edit, 0
 gx_d_drives:    dw msg_gx_drives, l_drv1, l_drv2, l_drv3, 0
 gx_d_diskette:  dw msg_gx_diskette, l_dk1, l_dk2, l_blank, l_dk3, l_blank, l_dk4, l_blank, l_edit, 0
-gx_d_drive0:    dw msg_gx_drive0, l_d01, l_d02, l_d03, l_blank, l_d04, l_d05, l_d06, l_d07, l_blank, l_d08, l_blank, l_d09, l_d10, l_d11, l_d12, 0
+gx_d_drive0:    dw msg_gx_drive0, GX_LIVEDRV, 0
 gx_d_drive1:    dw msg_gx_drive1, l_d1a, l_blank, l_fixed, 0
 gx_d_onboard:   dw msg_gx_onboard, l_ob1, l_blank, l_fixed, 0
 gx_d_serial:    dw msg_gx_serial, l_sr1, l_sr2, l_blank, l_fixed, 0
@@ -1161,6 +1381,13 @@ msg_gx_hint1:      db "Press Up/Down arrows to select a different field", 0
 msg_gx_hint2:      db "Press Left/Right keys to expand or collapse a group", 0
 msg_gx_hint3:      db "Press Esc to exit Setup", 0
 
+msg_drv_model:     db "Model      ", 0
+msg_drv_serial:    db "Serial     ", 0
+msg_drv_fw:        db "Firmware   ", 0
+msg_drv_cap:       db "Capacity   ", 0
+msg_drv_sectors:   db " sectors of 512 bytes", 0
+msg_drv_therm:     db "Drive 0 ", 0
+msg_drv_none:      db "No drive on the primary channel.", 0
 msg_hw_cputherm:   db "CPU ", 0
 msg_hw_drvtherm:   db "Drive 0 ", 0
 msg_hw_deg:        db " C, fan ", 0

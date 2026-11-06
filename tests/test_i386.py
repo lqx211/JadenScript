@@ -1141,6 +1141,184 @@ class I386RealRomTests(unittest.TestCase):
         self.assertGreater(mach.eip, 0x000E_0000, "still inside the ROM")
 
 
+class I386DriveTests(unittest.TestCase):
+    """The ATA channel: a protocol, so both machines must speak the same one.
+
+    A drive is not a file. A guest loads a register file, writes a command and
+    polls a status bit, and a kernel will do exactly that -- so the emulation is
+    the protocol, and the identity it answers with is what a setup screen and
+    `hdparm -I` read out.
+    """
+
+    def ref(self):
+        mach = rv.Machine()
+        mach.ram[:] = i386_image.build()
+        return mach
+
+    def identify(self, mach) -> list[int]:
+        mach.port_out(0x1F6, 0xA0, 1)
+        mach.port_out(0x1F2, 1, 1)
+        mach.port_out(0x1F3, 0, 1)
+        mach.port_out(0x1F4, 0, 1)
+        mach.port_out(0x1F5, 0, 1)
+        mach.port_out(0x1F7, 0xEC, 1)
+        assert mach.port_in(0x1F7, 1) & 0x40, "DRDY after IDENTIFY"
+        assert mach.port_in(0x1F7, 1) & 0x08, "DRQ: a sector is waiting"
+        return [mach.ata_in() for _ in range(256)]
+
+    @staticmethod
+    def text(words, first: int, count: int) -> str:
+        """ATA word numbers are one-based; the list is not."""
+        return "".join(chr(w & 0xFF) + chr(w >> 8)
+                       for w in words[first - 1:first - 1 + count]).strip()
+
+    def test_identify_answers_like_a_drive(self) -> None:
+        words = self.identify(self.ref())
+        self.assertEqual(len(words), 256)
+        self.assertEqual(self.text(words, 27, 20), "JSW VIRTUAL DISK 128M")
+        self.assertEqual(self.text(words, 10, 10), "JSW2024A00001")
+        self.assertEqual(self.text(words, 23, 4), "A07")
+        self.assertEqual(words[59] | (words[60] << 16), 128, "128 sectors")
+        self.assertTrue(words[48] & 0x0200, "LBA is supported (word 49)")
+        self.assertTrue(words[81] & 0x4000, "SMART is supported (word 82)")
+        self.assertEqual(sum(words) & 0xFFFF, 0,
+                         "the block has to checksum to zero")
+
+    def test_a_sector_read_returns_the_sector(self) -> None:
+        mach = self.ref()
+        mach.port_out(0x1F6, 0xA0, 1)
+        mach.port_out(0x1F2, 1, 1)
+        mach.port_out(0x1F3, 0, 1)
+        mach.port_out(0x1F4, 0, 1)
+        mach.port_out(0x1F5, 0, 1)
+        mach.port_out(0x1F7, 0x20, 1)
+        self.assertTrue(mach.port_in(0x1F7, 1) & 0x08, "DRQ after READ SECTORS")
+        words = [mach.ata_in() for _ in range(256)]
+        blob = b"".join(w.to_bytes(2, "little") for w in words)
+        self.assertEqual(blob[510:512], b"\x55\xaa", "the boot signature")
+        self.assertEqual(mach.port_in(0x1F7, 1) & 0x08, 0,
+                         "and DRQ drops when the sector has been taken")
+
+    def test_a_second_sector_carries_the_payload(self) -> None:
+        mach = self.ref()
+        for port, value in ((0x1F6, 0xA0), (0x1F2, 1), (0x1F3, 1),
+                            (0x1F4, 0), (0x1F5, 0), (0x1F7, 0x20)):
+            mach.port_out(port, value, 1)
+        words = [mach.ata_in() for _ in range(256)]
+        blob = b"".join(w.to_bytes(2, "little") for w in words)
+        self.assertIn(b"STAGE2", blob, "the sector int 13h loads at boot")
+
+    def test_a_sector_past_the_end_is_an_error_not_zeros(self) -> None:
+        """A driver that gets spare bytes back writes them somewhere."""
+        mach = self.ref()
+        for port, value in ((0x1F6, 0xA0), (0x1F2, 1), (0x1F3, 200),
+                            (0x1F4, 0), (0x1F5, 0), (0x1F7, 0x20)):
+            mach.port_out(port, value, 1)
+        status = mach.port_in(0x1F7, 1)
+        self.assertTrue(status & 0x01, "ERR")
+        self.assertFalse(status & 0x08, "and no data is offered")
+        self.assertEqual(mach.port_in(0x1F1, 1), 0x10, "ID not found")
+
+    def test_smart_read_data_carries_the_attributes(self) -> None:
+        mach = self.ref()
+        mach.thermal(200, 0.5)
+        mach.port_out(0x1F1, 0xD0, 1)     # SMART READ DATA
+        mach.port_out(0x1F6, 0xA0, 1)
+        mach.port_out(0x1F2, 1, 1)
+        mach.port_out(0x1F3, 0, 1)
+        mach.port_out(0x1F4, 0, 1)
+        mach.port_out(0x1F5, 0, 1)
+        mach.port_out(0x1F7, 0xB0, 1)
+        words = [mach.ata_in() for _ in range(256)]
+        ids = [words[2 + i * 6] for i in range(5)]
+        self.assertEqual(ids, [5, 9, 12, 194, 197])
+        value = words[2 + 3 * 6 + 2]
+        self.assertEqual(value >> 8, mach.smart[4], "temperature attribute")
+
+    def test_an_unknown_command_is_aborted(self) -> None:
+        mach = self.ref()
+        mach.port_out(0x1F6, 0xA0, 1)
+        mach.port_out(0x1F7, 0x77, 1)
+        self.assertTrue(mach.port_in(0x1F7, 1) & 0x01)
+        self.assertEqual(mach.port_in(0x1F1, 1), 0x04, "aborted command")
+
+    def test_the_secondary_channel_has_no_drive(self) -> None:
+        """An empty channel has to say "not ready", not float: a probe that
+        reads 0xFF spins for ever on the busy bit."""
+        mach = self.ref()
+        self.assertEqual(mach.port_in(0x177, 1) & 0x80, 0, "not busy")
+        self.assertEqual(mach.port_in(0x177, 1) & 0x40, 0, "and not ready")
+
+    def test_the_scratch_machine_reads_the_same_identity(self) -> None:
+        """The port file is generated code, so this checks the wiring: the
+        right port, the right command, the right number of words."""
+        import json
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "m.sb3"
+            back = Path(tmp) / "m.jsw"
+            subprocess.run([sys.executable, "-m", "jswc", "build",
+                            str(RVDIR / "i386.jsw"), "-o", str(out)],
+                           cwd=ROOT, check=True, capture_output=True)
+            subprocess.run([sys.executable, "-m", "jswc", "decompile", str(out),
+                            "-o", str(back), "--skip-assets"],
+                           cwd=ROOT, check=True, capture_output=True)
+            source = back.read_text()
+
+        env = jsw_sim.Env()
+        classes = jsw_sim.parse_program(source, env)
+        cpu = classes["Cpu"].procs
+        env.procs = cpu
+        env.threads.append({})
+        env.current = 0
+        env.lists["disk"] = json.loads((RVDIR / "assets" / "lists" / "disk.jsa").read_text())
+        env.lists["rom"] = json.loads((RVDIR / "assets" / "lists" / "bios.jsa").read_text())
+        env.lists["ident"] = json.loads((RVDIR / "assets" / "lists" / "ident.jsa").read_text())
+        env.vars["X.cores"] = 1
+        gen = jsw_sim.call(env, cpu["powerOn"], [])
+        try:
+            while True:
+                next(gen)
+        except StopIteration:
+            pass
+
+        def call(name, *args):
+            g = jsw_sim.call(env, cpu[name], list(args))
+            try:
+                while True:
+                    next(g)
+            except StopIteration:
+                pass
+
+        def word():
+            call("ataIn")
+            return int(jsw_sim.Env.num(env.vars["v"])) & 0xFFFF
+
+        call("portOut", 0x1F6, 0xA0)
+        call("portOut", 0x1F2, 1)
+        call("portOut", 0x1F7, 0xEC)
+        words = [word() for _ in range(256)]
+        self.assertEqual(self.text(words, 27, 20), "JSW VIRTUAL DISK 128M")
+        self.assertEqual(sum(words) & 0xFFFF, 0)
+
+        call("portOut", 0x1F2, 1)
+        call("portOut", 0x1F7, 0x20)
+        blob = b"".join(word().to_bytes(2, "little") for _ in range(256))
+        self.assertEqual(blob[510:512], b"\x55\xaa",
+                         "a sector is 512 bytes: 128 dwords split into 256 words")
+
+    def test_the_firmware_page_reads_the_drive(self) -> None:
+        """The setup page has no table behind it: the model on screen came out
+        of the drive over the port file."""
+        rom = (RVDIR / "bios.lst").read_text() if (RVDIR / "bios.lst").exists() else ""
+        source = (RVDIR / "gx620.inc").read_text()
+        self.assertIn("gxDrive:", source)
+        self.assertIn("0xEC", source, "IDENTIFY DEVICE is what it sends")
+        self.assertIn("GX_LIVEDRV", source, "the page is live, not a ROM table")
+        self.assertIn("drvStr", source, "and the buffer needs its own data segment")
+
+
 class I386MemoryMapTests(unittest.TestCase):
     """Where things live, and why the order of the tests matters.
 

@@ -279,6 +279,49 @@ public X.monHalted = 0;
 public X.monErr = "";
 public X.monFrames = 0;
 
+/* ---- the ATA channel --------------------------------------------------- *
+ * Drive 0 is a 128-sector image in `X.disk` and a register file at the usual
+ * primary-channel addresses. The protocol is the real one, because that is the
+ * only kind a kernel will talk to: load the LBA and the count, write the
+ * command, then drain `0x1F0` a word at a time while DRQ is set. A sector is
+ * available the moment it is asked for -- a real drive makes the guest wait
+ * milliseconds for the platter, and modelling that delay would stall a machine
+ * whose whole disk is 64 KiB for no gain.
+ */
+public X.ataDataPort = 496;      // 0x1F0, the 16-bit data register
+public X.ataErrPort = 497;       // 0x1F1, error / features
+public X.ataCntPort = 498;       // 0x1F2, sector count
+public X.ataLoPort = 499;        // 0x1F3, LBA 0
+public X.ataMidPort = 500;       // 0x1F4, LBA 1
+public X.ataHiPort = 501;        // 0x1F5, LBA 2
+public X.ataDrvPort = 502;       // 0x1F6, drive/head
+public X.ataCmdPort = 503;       // 0x1F7, status (read) / command (write)
+public X.ataAltPort = 1014;      // 0x3F6, alternate status / device control
+public X.ataErr = 0;
+public X.ataCount = 0;
+public X.ataLba = 0;
+public X.ataCmd = 0;
+public X.ataFeat = 0;
+public X.ataBuf = [];
+public X.ataPos = 0;
+public X.ataStatus = 80;         // 0x50: ready, no data wanted
+public X.ataLbaLo = 0;
+public X.ataLbaMid = 0;
+public X.ataLbaHi = 0;
+public X.ataDrv = 0;
+public X.ataSmartOn = 0;
+public X.ataSectors = 128;       // the image is 128 sectors of 512 bytes
+/* the five SMART attributes the drive reports, in the order the monitor shows
+ * them: reallocated sectors, power-on hours, power cycles, temperature, and
+ * the pending sector count */
+public X.ataSmartId = [5, 9, 12, 194, 197];
+/* IDENTIFY DEVICE, generated and checksummed: every word a real drive has to
+ * answer with, including the model string a setup screen reads out. The last
+ * word makes the 256-word block sum to zero, which is what ATA requires and
+ * what a strict driver checks. It lives in an asset list because 256 numbers
+ * inline is a literal the code generator drops on the floor -- the same reason
+ * the font and the ROM are files. */
+
 /* ---- the board --------------------------------------------------------- */
 public X.powerOns = 0;                   // power-ons since this page loaded
 public X.clockMode = 0;                  // 0 = counted, 1 = the project timer
@@ -302,6 +345,7 @@ metadata default Stage.X.core4MHz at 108,86 100x24 shown;
 
 import "assets/lists/bios.jsa" as rom;
 import "assets/lists/disk.jsa" as disk;
+import "assets/lists/ident.jsa" as ident;   // the drive's IDENTIFY DEVICE block
 
 // include "input.jsw"
 // include "display.jsw"
@@ -460,6 +504,22 @@ class Cpu {
 #else
         X.extWords = 0;                  // a Scratch list is base memory only
 #endif
+        /* The ATA transfer buffer is a sector: 256 words, sized here because a
+         * Scratch list does not grow when you `set` past its end -- the write
+         * is simply dropped, and a drive that answers every read with zeros is
+         * a drive that looks broken rather than empty. */
+        X.ataBuf.clear();
+        _i = 1;
+        while (_i <= 256) {
+            X.ataBuf.add(0);
+            _i += 1;
+        }
+        X.ataCount = 1;
+        X.ataLba = 0;
+        X.ataPos = 0;
+        X.ataStatus = 80;
+        X.ataErr = 0;
+        X.ataSmartOn = 0;
         /* Base memory is one flat list of 32-bit words. Growing it from empty
          * costs one `add` a word and happens once, at POST. */
         if (X.mem.length() < X.memWords) {
@@ -1336,6 +1396,134 @@ class Cpu {
      * The CMOS is the interesting one: index at 0x70, data at 0x71, and the
      * bytes behind it live in a Stage list, so they survive a green flag.
      */
+    /* ---- the ATA channel ------------------------------------------------- *
+     * Status is a register, not a suggestion: DRDY means the drive is there,
+     * DRQ means it is holding a word for you, BSY means it is thinking, and a
+     * guest that polls the wrong bit hangs for ever. The data register moves
+     * `X.ataPos` along; when a sector is drained the drive loads the next one
+     * by itself, which is what makes a multi-sector read work without the
+     * guest touching the LBA again.
+     */
+    private void ataLoadSector() { // warp
+        /* A sector is 512 bytes, which is 128 Scratch items but 256 ATA words:
+         * memory here holds four bytes an item and the data register hands over
+         * two at a time, so each item has to be split. Copying 128 items into a
+         * 256-word buffer and reading it back is how a boot sector's 0xAA55
+         * turns into something else entirely. */
+        _base = X.ataLba * 128;
+        _i = 0;
+        while (_i < 256) {
+            _d = 0;
+            if (_base + Operators.math("floor", _i / 2) < X.disk.length()) {
+                _d = X.disk.get(_base + Operators.math("floor", _i / 2) + 1) + 0;
+            }
+            _w = _d % 65536;
+            if (_i % 2 == 1) { _w = Operators.math("floor", _d / 65536) % 65536; }
+            X.ataBuf.set(_i + 1, _w);
+            _i += 1;
+        }
+        X.ataPos = 0;
+        X.ataStatus = 88;                 // ready, and data wanted (DRDY|DRQ|DSC)
+    }
+
+    private void ataIdentify() { // warp
+        _i = 0;
+        while (_i < 256) {
+            X.ataBuf.set(_i + 1, ident.get(_i + 1) + 0);
+            _i += 1;
+        }
+        X.ataPos = 0;
+        X.ataStatus = 88;
+    }
+
+    /* SMART read data: the 512-byte structure a monitoring tool parses. Each
+     * attribute is twelve bytes: id, flags, value, worst, and eight raw bytes.
+     * The five here are the drive's own counters, filled from the same state
+     * the hardware monitor shows. */
+    private void ataSmartData() { // warp
+        _i = 1;
+        while (_i <= 256) {
+            X.ataBuf.set(_i, 0);
+            _i += 1;
+        }
+        X.ataBuf.set(1, 0x0010);          // revision 1.0
+        _i = 0;
+        while (_i < 5) {
+            _b = 2 + _i * 6;              // the twelve bytes as six words
+            _id = X.ataSmartId.get(_i + 1) + 0;
+            _v = X.hwSmart.get(_i + 1) + 0;
+            _worst = X.hwSmartWorst.get(_i + 1) + 0;
+            X.ataBuf.set(_b, _id);
+            X.ataBuf.set(_b + 1, 0);
+            X.ataBuf.set(_b + 2, _v * 256 + _worst);
+            X.ataBuf.set(_b + 3, 0);
+            X.ataBuf.set(_b + 4, 0);
+            X.ataBuf.set(_b + 5, 0);
+            _i += 1;
+        }
+        X.ataPos = 0;
+        X.ataStatus = 88;
+    }
+
+    /* One 16-bit read of the data register. */
+    private void ataIn() { // warp
+        v = 0;
+        if (X.ataPos < 256) {
+            v = X.ataBuf.get(X.ataPos + 1) + 0;
+            X.ataPos += 1;
+        }
+        if (X.ataPos >= 256) {
+            if (X.ataCmd == 32 && X.ataCount > 1) {
+                X.ataCount -= 1;
+                X.ataLba += 1;
+                ataLoadSector();
+            } else {
+                X.ataCount = 0;
+                X.ataStatus = 80;         // nothing left to hand over
+            }
+        }
+    }
+
+    /* A write to the data register. The image in this machine is read-only, so
+     * there is nothing to latch -- but the register has to exist, or a driver
+     * that writes a sector gets a floating bus instead of a drive that says no.
+     */
+    private void ataOut(val) { // warp
+        X.ataPos += 1;
+    }
+
+    private void ataCommand(val) { // warp
+        X.ataCmd = val;
+        X.ataErr = 0;
+        X.ataLba = X.ataLbaLo + X.ataLbaMid * 256 + X.ataLbaHi * 65536;
+        if (X.ataLba >= X.ataSectors) {
+            /* A sector that does not exist is an error, not a read of zeros:
+             * a driver that gets spare bytes back writes them somewhere. */
+            X.ataErr = 0x10;              // ID not found
+            X.ataStatus = 65;             // ready, and an error
+            return;
+        }
+        if (val == 236) { ataIdentify(); return; }          // IDENTIFY DEVICE
+        if (val == 32 || val == 36 || val == 33) {          // READ SECTORS
+            ataLoadSector();
+            return;
+        }
+        if (val == 176) {                                   // SMART
+            if (X.ataFeat == 216) { X.ataSmartOn = 1; X.ataStatus = 80; return; }
+            if (X.ataFeat == 217) { X.ataSmartOn = 0; X.ataStatus = 80; return; }
+            if (X.ataFeat == 208 || X.ataFeat == 209) { ataSmartData(); return; }
+            X.ataErr = 4;                                   // aborted
+            X.ataStatus = 65;
+            return;
+        }
+        if (val == 145 || val == 239 || val == 225 || val == 249) {
+            X.ataStatus = 80;                               // accepted, no data
+            return;
+        }
+        X.ataErr = 4;                                       // aborted command
+        X.ataStatus = 65;
+    }
+
     private void portIn(p) { // warp
         v = 255;
         if (p == 96) { v = X.port60; X.port64 = 0; return; }
@@ -1366,6 +1554,14 @@ class Cpu {
         if (p == X.hwHddLoPort) { v = X.hddRpm % 256; return; }
         if (p == X.hwHddHiPort) { v = Operators.math("floor", X.hddRpm / 256) % 256; return; }
         if (p == X.hwHoursPort) { v = Operators.math("floor", X.powerOnSecs / 3600) % 256; return; }
+        if (p == X.ataErrPort) { v = X.ataErr; return; }
+        if (p == X.ataCntPort) { v = X.ataCount; return; }
+        if (p == X.ataLoPort) { v = X.ataLbaLo; return; }
+        if (p == X.ataMidPort) { v = X.ataLbaMid; return; }
+        if (p == X.ataHiPort) { v = X.ataLbaHi; return; }
+        if (p == X.ataDrvPort) { v = X.ataDrv; return; }
+        if (p == X.ataAltPort) { v = X.ataStatus; return; }
+        if (p == X.ataCmdPort) { v = X.ataStatus; return; }
         if (p == X.hwSmartValPort) { v = X.hwSmart.get(X.hwSmartSel) + 0; return; }
         if (p == X.hwSmartWorstPort) { v = X.hwSmartWorst.get(X.hwSmartSel) + 0; return; }
     }
@@ -1406,6 +1602,18 @@ class Cpu {
             X.keyRepeat = _oV * 10;
             return;
         }
+        if (p == X.ataDataPort) { ataOut(_oV); return; }
+        if (p == X.ataErrPort) { X.ataFeat = _oV; return; }
+        if (p == X.ataCntPort) { X.ataCount = _oV; return; }
+        if (p == X.ataLoPort) { X.ataLbaLo = _oV; return; }
+        if (p == X.ataMidPort) { X.ataLbaMid = _oV; return; }
+        if (p == X.ataHiPort) { X.ataLbaHi = _oV; return; }
+        if (p == X.ataDrvPort) {
+            X.ataDrv = _oV;
+            if (_oV >= 160) { X.ataLbaHi = _oV % 16; }
+            return;
+        }
+        if (p == X.ataCmdPort) { ataCommand(_oV); return; }
         if (p == X.hwSmartPort) {
             if (_oV >= 1 && _oV <= 5) { X.hwSmartSel = _oV; }
             return;
@@ -2468,9 +2676,19 @@ class Cpu {
             f8();
             _p = v;
             if (op == 228) { portIn(_p); putReg8(0, v); return; }
-            if (op == 229) { portIn(_p); putReg16(0, v); return; }
+            if (op == 229) {
+                /* `in ax, dx` is one 16-bit read, not two byte reads: an ATA
+                 * data register hands over a whole word and stepping it twice
+                 * would half every sector. */
+                if (_p == X.ataDataPort) { ataIn(); putReg16(0, v); return; }
+                portIn(_p); putReg16(0, v);
+                return;
+            }
             getReg8(0);
-            if (op == 231) { getReg16(0); }
+            if (op == 231) {
+                getReg16(0);
+                if (_p == X.ataDataPort) { ataOut(v); return; }
+            }
             portOut(_p, v);
             return;
         }
