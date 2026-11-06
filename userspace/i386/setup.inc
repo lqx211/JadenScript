@@ -21,8 +21,9 @@
 ;     ^/v select  </> page  Enter edit  F10 save  Esc exit
 ;
 ; Keys arrive from the 8042 as set-1 scan codes: 48/50 up/down, 4B/4D
-; left/right, 1C Enter, 44 F10, 01 Esc, 0E Backspace, 53 Del, 3C F2. There are
-; no release codes in this machine yet, so one press is one event.
+; left/right, 1C Enter, 01 Esc, 0E Backspace, 53 Del, 3C F2. There are no
+; release codes in this machine yet, so one press is one event. Leaving is a
+; place you go, not a key you press: the Exit page is the only way out.
 ; ---------------------------------------------------------------------------
 
 SU_BUF   equ 0x500                  ; the working copy: 16 bytes in the data area
@@ -32,8 +33,10 @@ SU_OLD   equ 0x50D                  ; the value before an edit, for Esc
 SU_OPT   equ 0x50E                  ; which button the exit prompt has lit
 SU_N     equ 11                     ; how many rows (the last is read-only)
 
-; attribute bytes
-SU_PAPER equ 0x17                   ; blue paper, light grey ink
+; attribute bytes. White on blue, not grey on blue: a 720 x 400 screen that is
+; scaled up in the player has had every pixel line smeared, and grey text turns
+; into fog at that size while white stays readable.
+SU_PAPER equ 0x1F                   ; blue paper, white ink
 SU_HEAD  equ 0x1E                   ; blue paper, yellow ink
 SU_SEL   equ 0x70                   ; light grey paper, black ink
 SU_INK   equ 0x4F5                  ; the ink of the row being drawn
@@ -47,12 +50,17 @@ G_BL     equ 0xC8
 G_BR     equ 0xBC
 G_TJ     equ 0xCB                   ; the rule meets the top border
 G_BJ     equ 0xCA                   ; and the bottom border
+G_ML     equ 0xCC                   ; ... and the rule under the menu bar
+G_MR     equ 0xB9
+G_MJ     equ 0xCE
 
 SU_TOP   equ 1                      ; the frame's top border; row 0 is the title
-SU_BOT   equ 22                     ; and its bottom border
+SU_BOT   equ 28                     ; and its bottom border
+SU_TABS  equ 2                      ; the menu bar, inside the frame
+SU_SEP   equ 3                      ; the rule that closes it off
 SU_SPLIT equ 45                     ; the column rule between menu and panel
 SU_RX    equ 47                     ; the panel's first column
-SU_ROW0  equ 3                      ; the first menu row
+SU_ROW0  equ 5                      ; the first menu row
 SU_VAL   equ 20                     ; the value column
 
 ; ---------------------------------------------------------------------------
@@ -70,10 +78,13 @@ suWindow:
     push    dx
     mov     si, msg_press_del
     call    puts
-    ; long enough to hold DEL through now that the machine runs at about a
-    ; million instructions a second: a key pressed before the prompt is in the
-    ; 8042's buffer, and the first poll takes it
-    mov     cx, 500000
+    ; Long enough to hold DEL through. `loop` counts in cx, and cx is sixteen
+    ; bits -- 500,000 does not fit, it truncates to 41,088 and the window comes
+    ; back to a blink. An outer counter of eight makes it 400,000 polls, about
+    ; half a second on this machine.
+    mov     bx, 8
+.round:
+    mov     cx, 50000
 .wait:
     in      al, 0x64
     test    al, 1
@@ -88,6 +99,8 @@ suWindow:
     jmp     .out
 .next:
     loop    .wait
+    dec     bx
+    jnz     .round
     xor     al, al
     jmp     .out
 .yes:
@@ -497,8 +510,6 @@ suEnter:
     je      .right
     cmp     al, 0x1C                ; Enter: edit, or run the action
     je      .enter
-    cmp     al, 0x44                ; F10 saves and boots
-    je      .save
     cmp     al, 0x01                ; Esc asks
     je      .ask
     cmp     al, 0x0E                ; Backspace asks too
@@ -663,14 +674,14 @@ suEdit:
     pop     ax
     ret
 
-; suEditBox: the editing dialog, 33 columns by 7 rows at (24,8)
+; suEditBox: the editing dialog, 33 columns by 7 rows, centred
 suEditBox:
     push    ax
     push    bx
     push    cx
     push    dx
     push    si
-    mov     dh, 9
+    mov     dh, 12
 .paper:
     mov     dl, 24
     mov     cx, 33
@@ -678,17 +689,17 @@ suEditBox:
     mov     bl, SU_SEL
     call    suBar
     inc     dh
-    cmp     dh, 15
+    cmp     dh, 18
     jb      .paper
     ; the title strip carries the row's own name
     mov     dl, 24
-    mov     dh, 8
+    mov     dh, 11
     mov     cx, 33
     mov     al, ' '
     mov     bl, SU_HEAD
     call    suBar
     mov     dl, 26
-    mov     dh, 8
+    mov     dh, 11
     call    suGoto
     mov     al, [es:SU_ITEM]
     xor     ah, ah
@@ -699,25 +710,25 @@ suEditBox:
     call    suPrint
     ; the value, arrow either side, in the row's own printer
     mov     dl, 30
-    mov     dh, 10
+    mov     dh, 13
     call    suGoto
     mov     si, msg_su_lt
     mov     bl, SU_HEAD
     call    suPrint
     mov     dl, 34
-    mov     dh, 10
+    mov     dh, 13
     call    suGoto
     mov     al, [es:SU_ITEM]
     mov     bl, SU_SEL
     call    suValue
     mov     dl, 52
-    mov     dh, 10
+    mov     dh, 13
     call    suGoto
     mov     si, msg_su_gt
     mov     bl, SU_HEAD
     call    suPrint
     mov     dl, 26
-    mov     dh, 12
+    mov     dh, 15
     call    suGoto
     mov     si, msg_su_edit_hint
     mov     bl, SU_SEL
@@ -792,14 +803,14 @@ suAskExit:
     pop     bx
     ret
 
-; suAskBox: the prompt, 36 columns by 7 rows at (22,9)
+; suAskBox: the prompt, 36 columns by 7 rows, centred
 suAskBox:
     push    ax
     push    bx
     push    cx
     push    dx
     push    si
-    mov     dh, 9
+    mov     dh, 12
 .paper:
     mov     dl, 22
     mov     cx, 36
@@ -807,23 +818,23 @@ suAskBox:
     mov     bl, SU_PAPER
     call    suBar
     inc     dh
-    cmp     dh, 16
+    cmp     dh, 18
     jb      .paper
     mov     dl, 22
-    mov     dh, 9
+    mov     dh, 11
     mov     cx, 36
     mov     al, ' '
     mov     bl, SU_HEAD
     call    suBar
     mov     dl, 24
-    mov     dh, 9
+    mov     dh, 11
     call    suGoto
     mov     si, msg_su_ask_title
     mov     bl, SU_HEAD
     call    suPrint
     ; Save
     mov     dl, 24
-    mov     dh, 11
+    mov     dh, 14
     mov     cx, 11
     mov     al, ' '
     mov     bl, SU_PAPER
@@ -833,7 +844,7 @@ suAskBox:
 .s0:
     call    suBar
     mov     dl, 27
-    mov     dh, 11
+    mov     dh, 14
     call    suGoto
     mov     si, msg_su_yes
     mov     bl, SU_PAPER
@@ -844,7 +855,7 @@ suAskBox:
     call    suPrint
     ; Discard
     mov     dl, 36
-    mov     dh, 11
+    mov     dh, 14
     mov     cx, 11
     mov     al, ' '
     mov     bl, SU_PAPER
@@ -854,7 +865,7 @@ suAskBox:
 .d0:
     call    suBar
     mov     dl, 37
-    mov     dh, 11
+    mov     dh, 14
     call    suGoto
     mov     si, msg_su_no
     mov     bl, SU_PAPER
@@ -865,7 +876,7 @@ suAskBox:
     call    suPrint
     ; Cancel
     mov     dl, 48
-    mov     dh, 11
+    mov     dh, 14
     mov     cx, 9
     mov     al, ' '
     mov     bl, SU_PAPER
@@ -875,7 +886,7 @@ suAskBox:
 .c0:
     call    suBar
     mov     dl, 49
-    mov     dh, 11
+    mov     dh, 14
     call    suGoto
     mov     si, msg_su_cancel
     mov     bl, SU_PAPER
@@ -885,7 +896,7 @@ suAskBox:
 .c1:
     call    suPrint
     mov     dl, 24
-    mov     dh, 13
+    mov     dh, 16
     call    suGoto
     mov     si, msg_su_ask_hint
     mov     bl, SU_PAPER
@@ -922,8 +933,7 @@ drawSetup:
     push    si
     call    suClearBody
     call    suFrame
-    ; row 0 is the title bar, above the frame -- the way the rv64 setup does
-    ; it, so the tabs get the border to themselves
+    ; row 0 is the title bar, above the frame
     xor     dl, dl
     xor     dh, dh
     mov     cx, 80
@@ -965,42 +975,82 @@ drawSetup:
     pop     ax
     ret
 
-; the tabs, written over the top border
+; drawTabs: the menu bar on its own row, closed off by the rule underneath.
+; The page you are on is lit; the others are plain text, and the space either
+; side of a lit one goes with it so it reads as a key rather than a word in
+; the middle of the line.
 drawTabs:
     push    ax
     push    bx
+    push    cx
     push    dx
+    push    si
+    ; Main
     mov     dl, 2
-    mov     dh, SU_TOP
+    mov     dh, SU_TABS
+    mov     cx, 6
+    mov     al, ' '
+    mov     bl, SU_PAPER
+    cmp     byte [es:SU_TAB], 0
+    jne     .m0
+    mov     bl, SU_SEL
+.m0:
+    call    suBar
+    mov     dl, 3
+    mov     dh, SU_TABS
     call    suGoto
     mov     si, msg_tab_main
-    mov     bl, SU_HEAD
+    mov     bl, SU_PAPER
     cmp     byte [es:SU_TAB], 0
-    jne     .t0
+    jne     .m1
     mov     bl, SU_SEL
-.t0:
+.m1:
     call    suPrint
+    ; Info
     mov     dl, 10
-    mov     dh, SU_TOP
+    mov     dh, SU_TABS
+    mov     cx, 6
+    mov     al, ' '
+    mov     bl, SU_PAPER
+    cmp     byte [es:SU_TAB], 1
+    jne     .i0
+    mov     bl, SU_SEL
+.i0:
+    call    suBar
+    mov     dl, 11
+    mov     dh, SU_TABS
     call    suGoto
     mov     si, msg_tab_info
-    mov     bl, SU_HEAD
+    mov     bl, SU_PAPER
     cmp     byte [es:SU_TAB], 1
-    jne     .t1
+    jne     .i1
     mov     bl, SU_SEL
-.t1:
+.i1:
     call    suPrint
+    ; Exit
     mov     dl, 18
-    mov     dh, SU_TOP
+    mov     dh, SU_TABS
+    mov     cx, 6
+    mov     al, ' '
+    mov     bl, SU_PAPER
+    cmp     byte [es:SU_TAB], 2
+    jne     .e0
+    mov     bl, SU_SEL
+.e0:
+    call    suBar
+    mov     dl, 19
+    mov     dh, SU_TABS
     call    suGoto
     mov     si, msg_tab_exit
-    mov     bl, SU_HEAD
+    mov     bl, SU_PAPER
     cmp     byte [es:SU_TAB], 2
-    jne     .t2
+    jne     .e1
     mov     bl, SU_SEL
-.t2:
+.e1:
     call    suPrint
+    pop     si
     pop     dx
+    pop     cx
     pop     bx
     pop     ax
     ret
@@ -1010,7 +1060,7 @@ pageMain:
     push    ax
     push    si
     mov     dl, 2
-    mov     dh, SU_TOP + 1
+    mov     dh, SU_ROW0 - 1
     call    suGoto
     mov     si, msg_su_settings
     mov     bl, SU_HEAD
@@ -1035,26 +1085,26 @@ pageInfo:
     push    ax
     push    si
     mov     dl, 2
-    mov     dh, SU_TOP + 1
+    mov     dh, SU_ROW0 - 1
     call    suGoto
     mov     si, msg_su_info
     mov     bl, SU_HEAD
     call    suPrint
     mov     dl, 2
-    mov     dh, 3
+    mov     dh, SU_ROW0
     call    suGoto
     mov     si, msg_su_biosline
     mov     bl, SU_PAPER
     call    suPrint
     mov     dl, 2
-    mov     dh, 4
+    mov     dh, SU_ROW0 + 1
     call    suGoto
     mov     si, msg_su_cpuline
     mov     bl, SU_PAPER
     call    suPrint
     ; the clock, ticking
     mov     dl, 2
-    mov     dh, 5
+    mov     dh, SU_ROW0 + 2
     call    suGoto
     mov     si, msg_su_clock
     mov     bl, SU_PAPER
@@ -1062,7 +1112,7 @@ pageInfo:
     call    suClock
     ; memory and cores, from the hardware
     mov     dl, 2
-    mov     dh, 6
+    mov     dh, SU_ROW0 + 3
     call    suGoto
     mov     si, msg_su_mem
     mov     bl, SU_PAPER
@@ -1079,7 +1129,7 @@ pageInfo:
     mov     si, msg_su_kb
     call    suPrint
     mov     dl, 2
-    mov     dh, 7
+    mov     dh, SU_ROW0 + 4
     call    suGoto
     mov     si, msg_su_cores
     mov     bl, SU_PAPER
@@ -1091,31 +1141,31 @@ pageInfo:
     call    put2
     ; the disk, and how to get back
     mov     dl, 2
-    mov     dh, 8
+    mov     dh, SU_ROW0 + 5
     call    suGoto
     mov     si, msg_su_diskline
     mov     bl, SU_PAPER
     call    suPrint
-    mov     dl, 47
-    mov     dh, 3
+    mov     dl, SU_RX
+    mov     dh, SU_ROW0 + 1
     call    suGoto
     mov     si, msg_su_tabhelp
-    mov     bl, SU_PAPER
+    mov     bl, SU_HEAD
     call    suPrint
-    mov     dl, 47
-    mov     dh, 5
+    mov     dl, SU_RX
+    mov     dh, SU_ROW0 + 3
     call    suGoto
     mov     si, msg_su_ramline
     mov     bl, SU_PAPER
     call    suPrint
-    mov     dl, 47
-    mov     dh, 6
+    mov     dl, SU_RX
+    mov     dh, SU_ROW0 + 4
     call    suGoto
     mov     si, msg_su_romline
     mov     bl, SU_PAPER
     call    suPrint
-    mov     dl, 47
-    mov     dh, 7
+    mov     dl, SU_RX
+    mov     dh, SU_ROW0 + 5
     call    suGoto
     mov     si, msg_su_videoline
     mov     bl, SU_PAPER
@@ -1128,65 +1178,73 @@ pageInfo:
 pageExit:
     push    ax
     push    bx
+    push    cx
     push    dx
     push    si
     mov     dl, 2
-    mov     dh, SU_TOP + 1
+    mov     dh, SU_ROW0 - 1
     call    suGoto
     mov     si, msg_su_exithead
     mov     bl, SU_HEAD
     call    suPrint
     ; "Save and exit"
+    mov     dl, 1
+    mov     dh, SU_ROW0
+    mov     cx, 43
+    mov     al, ' '
     mov     bl, SU_PAPER
     cmp     byte [es:SU_ITEM], 0
-    jne     .row0
+    jne     .r0
     mov     bl, SU_SEL
-.row0:
-    mov     dl, 1
-    mov     dh, 3
-    mov     cx, 43
-    push    bx
-    mov     al, ' '
+.r0:
     call    suBar
-    pop     bx
     mov     dl, 3
-    mov     dh, 3
+    mov     dh, SU_ROW0
     call    suGoto
     mov     si, msg_su_save
+    mov     bl, SU_PAPER
+    cmp     byte [es:SU_ITEM], 0
+    jne     .r1
+    mov     bl, SU_SEL
+.r1:
     call    suPrint
     ; "Discard and exit"
+    mov     dl, 1
+    mov     dh, SU_ROW0 + 1
+    mov     cx, 43
+    mov     al, ' '
     mov     bl, SU_PAPER
     cmp     byte [es:SU_ITEM], 1
-    jne     .row1
+    jne     .r2
     mov     bl, SU_SEL
-.row1:
-    mov     dl, 1
-    mov     dh, 4
-    mov     cx, 43
-    push    bx
-    mov     al, ' '
+.r2:
     call    suBar
-    pop     bx
     mov     dl, 3
-    mov     dh, 4
+    mov     dh, SU_ROW0 + 1
     call    suGoto
     mov     si, msg_su_discard
+    mov     bl, SU_PAPER
+    cmp     byte [es:SU_ITEM], 1
+    jne     .r3
+    mov     bl, SU_SEL
+.r3:
     call    suPrint
     ; what each one does
-    mov     dl, 47
-    mov     dh, 3
+    mov     dl, SU_RX
+    mov     dh, SU_ROW0
     call    suGoto
     mov     si, msg_su_savehelp
     mov     bl, SU_PAPER
     call    suPrint
-    mov     dl, 47
-    mov     dh, 5
+    mov     dl, SU_RX
+    mov     dh, SU_ROW0 + 2
     call    suGoto
     mov     si, msg_su_discardhelp
     mov     bl, SU_PAPER
     call    suPrint
     pop     si
     pop     dx
+    pop     cx
     pop     bx
     pop     ax
     ret
@@ -1197,20 +1255,15 @@ suFrame:
     push    cx
     push    dx
     push    si
-    ; the two horizontal rules, top and bottom
-    xor     dl, dl
+    ; three horizontal rules: the top border, the line under the menu bar, and
+    ; the bottom border
     mov     dh, SU_TOP
-    mov     cx, 80
-    mov     al, G_HBAR
-    mov     bl, SU_HEAD
-    call    suBar
-    xor     dl, dl
+    call    frameRule
+    mov     dh, SU_SEP
+    call    frameRule
     mov     dh, SU_BOT
-    mov     cx, 80
-    mov     al, G_HBAR
-    mov     bl, SU_HEAD
-    call    suBar
-    ; the four corners
+    call    frameRule
+    ; the corners and the junctions where the column rule crosses them
     xor     dl, dl
     mov     dh, SU_TOP
     mov     al, G_TL
@@ -1218,6 +1271,22 @@ suFrame:
     mov     dl, 79
     mov     dh, SU_TOP
     mov     al, G_TR
+    call    suCell
+    mov     dl, SU_SPLIT
+    mov     dh, SU_TOP
+    mov     al, G_TJ
+    call    suCell
+    xor     dl, dl
+    mov     dh, SU_SEP
+    mov     al, G_ML
+    call    suCell
+    mov     dl, 79
+    mov     dh, SU_SEP
+    mov     al, G_MR
+    call    suCell
+    mov     dl, SU_SPLIT
+    mov     dh, SU_SEP
+    mov     al, G_MJ
     call    suCell
     xor     dl, dl
     mov     dh, SU_BOT
@@ -1227,7 +1296,12 @@ suFrame:
     mov     dh, SU_BOT
     mov     al, G_BR
     call    suCell
-    ; the verticals: the sides and the rule at SU_SPLIT
+    mov     dl, SU_SPLIT
+    mov     dh, SU_BOT
+    mov     al, G_BJ
+    call    suCell
+    ; the verticals: the two sides and the column rule, from under the top
+    ; border to the bottom one
     mov     dh, SU_TOP + 1
 .side:
     xor     dl, dl
@@ -1240,17 +1314,8 @@ suFrame:
     mov     al, G_VBAR
     call    suCell
     inc     dh
-    cmp     dh, 22
+    cmp     dh, SU_BOT
     jb      .side
-    ; the junctions where the rule meets the two horizontal borders
-    mov     dl, SU_SPLIT
-    mov     dh, SU_TOP
-    mov     al, G_TJ
-    call    suCell
-    mov     dl, SU_SPLIT
-    mov     dh, SU_BOT
-    mov     al, G_BJ
-    call    suCell
     pop     si
     pop     dx
     pop     cx
@@ -1258,10 +1323,29 @@ suFrame:
     pop     ax
     ret
 
-; suCell: dl/dh = column/row, al = the character, bl = the attribute
+; frameRule: dh = the row, a full-width double rule
+frameRule:
+    push    ax
+    push    bx
+    push    cx
+    push    dx
+    xor     dl, dl
+    mov     cx, 80
+    mov     al, G_HBAR
+    mov     bl, SU_HEAD
+    call    suBar
+    pop     dx
+    pop     cx
+    pop     bx
+    pop     ax
+    ret
+
+; suCell: dl/dh = column/row, al = the character. The frame is always drawn in
+; the header ink, so this sets it rather than trusting whatever bl held.
 suCell:
     push    ax
     push    cx
+    mov     bl, SU_HEAD
     call    suGoto
     mov     cx, 1
     call    suFill
@@ -1283,7 +1367,7 @@ suClearBody:
     mov     bl, SU_PAPER
     call    suBar
     inc     dh
-    cmp     dh, 22
+    cmp     dh, SU_BOT
     jb      .row
     pop     dx
     pop     cx
@@ -1291,33 +1375,34 @@ suClearBody:
     pop     ax
     ret
 
-; the status line under the frame, and the key legend below it
+; suStatus: the key hints on the last line inside the frame, and the battery
+; and boot count on a lit strip at the very bottom
 suStatus:
     push    ax
     push    bx
     push    cx
     push    dx
     push    si
-    ; the two lines under the frame are a band, not a bare row. The bottom one
-    ; stops a cell short: eighty cells wrap the cursor onto row 25, and the
-    ; console answers that with a scroll -- the whole screen moves up one line
+    mov     dl, 2
+    mov     dh, SU_BOT - 1
+    call    suGoto
+    mov     si, msg_su_keys
+    mov     bl, SU_HEAD
+    call    suPrint
+    ; a lit strip, seventy-nine cells wide: eighty wrap the cursor onto the row
+    ; after the last one, and this console answers that by scrolling the whole
+    ; screen up a line
     xor     dl, dl
-    mov     dh, 23
-    mov     cx, 80
-    mov     al, ' '
-    mov     bl, SU_PAPER
-    call    suBar
-    xor     dl, dl
-    mov     dh, 24
+    mov     dh, SU_BOT + 1
     mov     cx, 79
     mov     al, ' '
-    mov     bl, SU_PAPER
+    mov     bl, SU_SEL
     call    suBar
     mov     dl, 2
-    mov     dh, 23
+    mov     dh, SU_BOT + 1
     call    suGoto
     mov     si, msg_su_battery
-    mov     bl, SU_PAPER
+    mov     bl, SU_SEL
     call    suPrint
     mov     al, 0x0D
     call    cmos_read
@@ -1328,24 +1413,21 @@ suStatus:
 .dead:
     mov     si, msg_su_dead
 .batt:
-    mov     bl, SU_PAPER
+    mov     bl, SU_SEL
     call    suPrint
     mov     dl, 42
-    mov     dh, 23
+    mov     dh, SU_BOT + 1
     call    suGoto
     mov     si, msg_su_boots
-    mov     bl, SU_PAPER
+    mov     bl, SU_SEL
     call    suPrint
+    ; the digits go through putc, which reads the console attribute, so it has
+    ; to be the strip's ink for as long as they print
+    mov     byte [es:CON_ATTR], SU_SEL
     mov     al, 0x30
     call    cmos_read
     call    put2
-    ; the keys, under the status line
-    mov     dl, 2
-    mov     dh, 24
-    call    suGoto
-    mov     si, msg_su_keys
-    mov     bl, SU_PAPER
-    call    suPrint
+    mov     byte [es:CON_ATTR], SU_PAPER
     pop     si
     pop     dx
     pop     cx
@@ -1392,7 +1474,7 @@ suPanelTop:
     push    dx
     push    si
     push    di
-    mov     dh, SU_TOP + 1
+    mov     dh, SU_ROW0 - 1
 .blank:
     mov     dl, SU_RX
     mov     cx, 32
@@ -1400,7 +1482,7 @@ suPanelTop:
     mov     bl, SU_PAPER
     call    suBar
     inc     dh
-    cmp     dh, SU_TOP + 6
+    cmp     dh, SU_ROW0 + 3
     jb      .blank
     ; the item's name
     mov     al, [es:SU_ITEM]
@@ -1408,27 +1490,27 @@ suPanelTop:
     add     ax, ax
     mov     di, ax
     mov     dl, SU_RX
-    mov     dh, SU_TOP + 1
+    mov     dh, SU_ROW0 - 1
     call    suGoto
     mov     si, [di + su_labels]
     mov     bl, SU_HEAD
     call    suPrint
     ; its two lines of help
     mov     dl, SU_RX
-    mov     dh, SU_TOP + 2
+    mov     dh, SU_ROW0
     call    suGoto
     mov     si, [di + su_d1]
     mov     bl, SU_PAPER
     call    suPrint
     mov     dl, SU_RX
-    mov     dh, SU_TOP + 3
+    mov     dh, SU_ROW0 + 1
     call    suGoto
     mov     si, [di + su_d2]
     mov     bl, SU_PAPER
     call    suPrint
     ; how to change it
     mov     dl, SU_RX
-    mov     dh, SU_TOP + 5
+    mov     dh, SU_ROW0 + 3
     call    suGoto
     mov     si, msg_su_hint
     mov     bl, SU_HEAD
@@ -1450,20 +1532,20 @@ suPanelFacts:
     push    dx
     push    si
     mov     dl, SU_RX
-    mov     dh, SU_TOP + 8
+    mov     dh, SU_ROW0 + 5
     call    suGoto
     mov     si, msg_su_system
     mov     bl, SU_HEAD
     call    suPrint
     mov     dl, SU_RX
-    mov     dh, SU_TOP + 9
+    mov     dh, SU_ROW0 + 6
     call    suGoto
     mov     si, msg_su_cpu
     mov     bl, SU_PAPER
     call    suPrint
     ; memory, in KiB out of the CMOS
     mov     dl, SU_RX
-    mov     dh, SU_TOP + 10
+    mov     dh, SU_ROW0 + 7
     call    suGoto
     mov     si, msg_su_mem
     mov     bl, SU_PAPER
@@ -1481,7 +1563,7 @@ suPanelFacts:
     call    suPrint
     ; cores, from the chipset
     mov     dl, SU_RX
-    mov     dh, SU_TOP + 11
+    mov     dh, SU_ROW0 + 8
     call    suGoto
     mov     si, msg_su_cores
     mov     bl, SU_PAPER
@@ -1493,7 +1575,7 @@ suPanelFacts:
     call    put2
     ; the clock, straight out of the RTC
     mov     dl, SU_RX
-    mov     dh, SU_TOP + 12
+    mov     dh, SU_ROW0 + 9
     call    suGoto
     mov     si, msg_su_clock
     mov     bl, SU_PAPER
@@ -1770,7 +1852,7 @@ keyScan:
 ; ---------------------------------------------------------------------------
 msg_press_del:  db "Press DEL or F2 to enter setup", 13, 10, 0
 msg_su_title:   db "JSW BIOS Setup Utility", 0
-msg_su_version: db "v0.3", 0
+msg_su_version: db "v0.4", 0
 msg_su_settings: db "Settings", 0
 msg_su_system:  db "System", 0
 msg_su_hint:    db "Enter edits it", 0
@@ -1778,16 +1860,16 @@ msg_su_cpu:     db "CPU: 80386 real mode", 0
 msg_su_mem:     db "Memory: ", 0
 msg_su_cores:   db "Cores: ", 0
 msg_su_clock:   db "Clock: ", 0
-msg_su_keys:    db "^/v select  </> page  Enter edit  F10 save  Esc exit", 0
+msg_su_keys:    db "^/v select   </> page   Enter edit   Esc exit", 0
 
 ; the pages, on the top border
-msg_tab_main:   db " Main ", 0
-msg_tab_info:   db " Info ", 0
-msg_tab_exit:   db " Exit ", 0
+msg_tab_main:   db "Main", 0
+msg_tab_info:   db "Info", 0
+msg_tab_exit:   db "Exit", 0
 
 ; the information page: what the machine is, never editable
 msg_su_info:    db "System information", 0
-msg_su_biosline: db "BIOS: JSW BIOS v0.3", 0
+msg_su_biosline: db "BIOS: JSW BIOS v0.4", 0
 msg_su_cpuline: db "CPU: Intel 80386, real mode", 0
 msg_su_diskline: db "Disk: int 13h, one boot sector", 0
 msg_su_ramline: db "RAM: 640 KB below 1 MB", 0

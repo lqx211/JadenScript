@@ -31,7 +31,7 @@ from __future__ import annotations
 RAM_SIZE = 1 << 20
 TEXT_BASE = 0x000B_8000
 TEXT_COLS = 80
-TEXT_ROWS = 25
+TEXT_ROWS = 30
 BIOS_BASE = 0x000F_0000
 RESET_CS = 0xF000
 RESET_IP = 0xFFF0

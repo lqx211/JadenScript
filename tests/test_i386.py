@@ -53,7 +53,7 @@ class I386BootTests(unittest.TestCase):
         mach = boot(limit=300_000)
         screen = mach.text()
         for line in ("JSW 80386 BIOS v0.02", "CMOS boot #", "CPU: 80386",
-                     "Memory: 640K", "Video: 80x25 text", "Booting from disk 0x80"):
+                     "Memory: 640K", "Video: 80x30 text", "Booting from disk 0x80"):
             self.assertIn(line, screen)
 
     def test_the_boot_counter_comes_back_from_the_cmos(self) -> None:
@@ -208,7 +208,7 @@ class I386SetupTests(unittest.TestCase):
         mach = self._setup([0x53])                     # Delete
         screen = mach.text()
         self.assertIn("JSW BIOS Setup Utility", screen)
-        tabs = screen.split("\n")[1]          # the tabs sit in the top border
+        tabs = screen.split("\n")[2]          # the menu bar, under the border
         for name in ("Main", "Info", "Exit"):
             self.assertIn(name, tabs)
         self.assertIn("Base memory", screen)
@@ -233,9 +233,10 @@ class I386SetupTests(unittest.TestCase):
         mach = self._setup(keys)
         self.assertIn("2025", mach.text(), "the edit was thrown away")
 
-    def test_f10_saves_and_the_next_post_reads_it_back(self) -> None:
-        keys = [0x53] + [0x50] * 9 + [0x1C, 0x4B, 0x1C, 0x44]
-        mach = self._setup(keys)                       # to memory, edit, -1, keep, F10
+    def test_saving_from_the_exit_page_and_the_next_post_reads_it_back(self) -> None:
+        keys = [0x53] + [0x50] * 9 + [0x1C, 0x4B, 0x1C]   # memory, edit, -1, keep
+        keys += [0x4D, 0x4D, 0x1C]                        # Exit page, "Save and exit"
+        mach = self._setup(keys)
         self.assertEqual(mach.cmos[0x16] * 256 + mach.cmos[0x15], 576)
         # and a fresh POST believes it
         mach.sreg[rv.SEG_CS] = rv.RESET_CS
@@ -249,6 +250,16 @@ class I386SetupTests(unittest.TestCase):
         keys = [0x53, 0x4D, 0x4D, 0x1C]                # Del, Right, Right, Enter
         mach = self._setup(keys)
         self.assertEqual(mach.cmos[0x31], 0xA5, "the setup checksum was written")
+
+    def test_every_cell_of_the_setup_screen_is_painted(self) -> None:
+        """A clear loop that stops early leaves the POST paper showing."""
+        mach = self._setup([0x53])
+        for row in range(30):
+            for col in range(80):
+                if col in (0, 45, 79) or (row, col) == (29, 79):
+                    continue        # the frame, and the cell kept back to avoid a scroll
+                cell = mach.read(0xB8000 + (row * 80 + col) * 2, 2)
+                self.assertNotEqual(cell, 0x0720, f"cell {row},{col} kept the POST paper")
 
     def test_the_exit_page_keeps_its_own_rows(self) -> None:
         mach = self._setup([0x53, 0x4D, 0x4D, 0x50])   # Del, Right x2, Down
@@ -317,7 +328,7 @@ class I386SmpTests(unittest.TestCase):
                 off = rv.TEXT_BASE + (row * 80 + col) * 2
                 if mach.ram[off] not in (0x00, 0x20):
                     used.add(mach.ram[off + 1])
-        self.assertEqual(used, {0x17, 0x1E, 0x70}, "paper, header and selection")
+        self.assertEqual(used, {0x1F, 0x1E, 0x70}, "paper, header and selection")
 
     def test_the_trampoline_lands_where_the_aps_are_sent(self) -> None:
         mach = boot(limit=60_000, cores=2)

@@ -38,7 +38,7 @@ public X.memWords = 32768;               // 128 KiB
 public X.diskBase = 196608;              // 0x3_0000: the disk window
 public X.diskWords = 16384;              // 64 KiB = 128 sectors
 public X.textBase = 753664;              // 0xB_8000
-public X.textWords = 1000;               // 4000 bytes
+public X.textWords = 1200;               // 4800 bytes, 2400 cells
 public X.romBase = 983040;               // 0xF_0000
 public X.romWords = 16384;               // 64 KiB
 
@@ -78,13 +78,18 @@ public X.portLog = [];
 public X.dispReq = 0;
 public X.dispAck = 0;
 public X.dispBooted = 0;
+/* The stage is 640 x 480 and the screen fills it exactly: eighty columns of
+ * eight pixels and thirty rows of sixteen. A stage taller than the screen is a
+ * black band under the picture, and the picture is the machine -- 80 x 25
+ * would leave eighty pixels of nothing along the bottom. */
 public X.stageW = 640;
 public X.stageH = 480;
 public X.dispCols = 80;
-public X.dispRows = 25;
+public X.dispRows = 30;
 public X.dispCellW = 8;
 public X.dispCellH = 16;
 public X.dispGlyphH = 15;
+public X.dispGlyphW = 8;
 public X.dispPainted = 0;
 public X.stopAt = 0;                      // park the core at this instruction (debugging)
 public X.dispDots = 0;

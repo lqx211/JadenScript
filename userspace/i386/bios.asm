@@ -36,7 +36,7 @@ org 0
 TEXT_SEG        equ 0xB800
 DISK_SEG        equ 0x3000          ; the staged disk image, 128 sectors
 COLS            equ 80
-ROWS            equ 25
+ROWS            equ 30
 
 BDA_CURSOR_COL  equ 0x450
 BDA_CURSOR_ROW  equ 0x451
@@ -66,7 +66,7 @@ start:
     cld
     sti
 
-    ; the text plane: 80 x 25 cells of (char, attribute)
+    ; the text plane: 80 x 30 cells of (char, attribute)
     mov     ax, TEXT_SEG
     mov     es, ax
     xor     di, di
@@ -793,7 +793,7 @@ msg_crlf:   db 13, 10, 0
 msg_cpu:    db "CPU: 80386, real mode, 16-bit bus", 13, 10, 0
 msg_mem:    db "Memory: ", 0
 msg_memk:   db "K conventional", 13, 10, 0
-msg_video:  db "Video: 80x25 text, attribute 0x07", 13, 10, 0
+msg_video:  db "Video: 80x30 text, attribute 0x07", 13, 10, 0
 msg_boot:   db "Booting from disk 0x80...", 13, 10, 0
 msg_cores:  db "Cores: ", 0
 msg_smp:    db "SMP: ", 0

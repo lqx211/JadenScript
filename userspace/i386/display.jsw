@@ -198,7 +198,7 @@ class Display {
                 _runStart = -1;
                 while (_b < 8) {
                     // bit 7 is the leftmost pixel, so the shift counts down
-                    _on = Operators.math("floor", _bits / X.pow2.get(X.dispCellW - _b)) % 2;
+                    _on = Operators.math("floor", _bits / X.pow2.get(X.dispGlyphW - _b)) % 2;
                     if (_on == 1 && _runStart < 0) {
                         _runStart = _b;
                     }
@@ -209,7 +209,14 @@ class Display {
                     _b += 1;
                 }
                 if (_runStart >= 0) {
-                    pixelRun(_x0 + _runStart, _y, 8 - _runStart, _ink);
+                    /* VGA's ninth column: the box-drawing characters repeat
+                     * their last pixel so that lines join across cells. Without
+                     * it every horizontal rule would have a one-pixel gap. */
+                    _len = X.dispGlyphW - _runStart;
+                    if (_ch >= 0xC0 && _ch <= 0xDF) {
+                        _len += X.dispCellW - X.dispGlyphW;
+                    }
+                    pixelRun(_x0 + _runStart, _y, _len, _ink);
                 }
             }
             _g += 1;
