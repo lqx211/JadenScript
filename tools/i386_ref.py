@@ -398,6 +398,10 @@ class Machine:
         # timing.
         self.cores = 1
         self.core_id = 1
+        # what the display card can show: the whole 80 x 30 plane unless a test
+        # asks for a smaller stage, the way Scratch's own 480 x 360 is 60 x 22
+        self.view_cols = 80
+        self.view_rows = 30
         self.core_run = [0] * 16
         self.cmos = bytearray(128)
         self.cmos_index = 0
@@ -548,6 +552,10 @@ class Machine:
             return self.ports.get(0x61, 0)
         if port == 0x5A0:
             return self.cores
+        if port == 0x5A3:                 # the card: cells across the stage
+            return self.view_cols
+        if port == 0x5A4:                 # ... and cells down
+            return self.view_rows
         if port == 0x5A2:
             return self.core_id
         if port == 0x70:

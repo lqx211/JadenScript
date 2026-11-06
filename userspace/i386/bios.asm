@@ -59,6 +59,13 @@ PIT_CH0         equ 0x40
 PIT_CMD         equ 0x43
 PIT_RATE        equ 11932           ; 1.193182 MHz / 100 Hz, the divisor a PC uses
 CON_ATTR        equ 0x4F4          ; the attribute the console prints with
+BDA_BOOTDEV     equ 0x4FE          ; the device int 19h hands over to
+CON_T           equ 0x52E          ; the first row of the console's window
+CON_B           equ 0x52F          ; ... and the last
+CON_W           equ 0x530          ; how wide it is, from column 0
+BDA_VIDCOLS     equ 0x531          ; how many of those columns the card can show
+BDA_VIDROWS     equ 0x532          ; ... and how many rows
+BDA_SPLASH      equ 0x533          ; 1 while the power-on picture is on screen
 SU_ROWSAVE      equ 0x520
 
 ; ---------------------------------------------------------------------------
@@ -88,6 +95,15 @@ start:
     mov     byte [es:BDA_CURSOR_COL], 0
     mov     byte [es:BDA_CURSOR_ROW], 0
     mov     byte [es:CON_ATTR], 0x07
+    ; the console's window starts as the whole screen; the splash narrows it
+    mov     byte [es:CON_T], 0
+    mov     byte [es:CON_B], ROWS - 1
+    mov     byte [es:CON_W], COLS
+    mov     byte [es:BDA_VIDCOLS], COLS
+    mov     byte [es:BDA_VIDROWS], ROWS
+    mov     byte [es:BDA_SPLASH], 0
+    ; until the menu says otherwise the machine boots the disk
+    mov     byte [es:BDA_BOOTDEV], 0x80
     ; the keyboard ring the interrupt fills and int 16h drains starts empty
     mov     word [es:BDA_KB_HEAD], 0
     mov     word [es:BDA_KB_TAIL], 0
@@ -184,6 +200,21 @@ start:
     mov     ax, cs
     mov     ds, ax
 
+    ; how much of the plane the card can actually show. On a 640 x 480 stage
+    ; that is all of it; on Scratch's own 480 x 360 it is 60 x 22, and a BIOS
+    ; that keeps printing at column 70 would be printing into the void.
+    call    cardGeometry
+
+    ; the splash goes up first, unless the stage is too small to hold it
+    cmp     byte [es:BDA_VIDCOLS], COLS
+    jb      .nosplash
+    cmp     byte [es:BDA_VIDROWS], ROWS
+    jb      .nosplash
+    call    gxSplashShow
+.nosplash:
+    mov     si, msg_step_post
+    call    splashStep
+
     mov     si, msg_banner
     call    puts
 
@@ -227,7 +258,18 @@ start:
     call    put3
     mov     si, msg_memk
     call    puts
+    ; the card said how big it is, so the banner says so too
     mov     si, msg_video
+    call    puts
+    mov     al, [es:BDA_VIDCOLS]
+    xor     ah, ah
+    call    putn
+    mov     al, 'x'
+    call    putc
+    mov     al, [es:BDA_VIDROWS]
+    xor     ah, ah
+    call    putn
+    mov     si, msg_video_tail
     call    puts
     ; how many cores the board has, and the SMP bring-up: copy the AP
     ; trampoline into low RAM, wake every other core, wait for them to check in
@@ -239,18 +281,29 @@ start:
     call    puts
     mov     al, [es:BDA_CORES]
     xor     ah, ah
-    call    put3
+    call    putn
     mov     si, msg_crlf
     call    puts
 
     call    smpBoot
 
-    ; the window: a second to press DEL or F2, then the setup screen
-    call    suWindow
-    test    al, al
-    jz      .no_setup
-    call    suEnter
-.no_setup:
+    mov     si, msg_step_boot
+    call    splashStep
+    call    suWindow                ; five seconds to press DEL or M
+    cmp     al, 2
+    je      .setup
+    cmp     al, 1
+    je      .menu
+    call    gxSplashHide
+    jmp     .boot
+.setup:
+    call    gxSplashHide
+    call    gxEnter                 ; comes back when the setup is left
+    jmp     .boot
+.menu:
+    call    gxSplashHide
+    call    bootMenu                ; does not return: it boots, reboots or halts
+.boot:
     mov     si, msg_boot
     call    puts
 
@@ -262,6 +315,50 @@ start:
     cli
     hlt
     jmp     .halt
+
+; ---------------------------------------------------------------------------
+; cardGeometry -- ask the card how much of the plane it can actually show.
+;
+; Ports 0x5A3 and 0x5A4 are the card's own; a real VGA answers that pair with
+; CRTC timing, this one answers with the cells that fit on the stage. Scratch's
+; own stage is 480 x 360, which is 60 x 22 cells: printing at column 70 there
+; is printing into the void, so the console window is cut down to what fits.
+; ---------------------------------------------------------------------------
+cardGeometry:
+    push    ax
+    push    dx
+    push    es
+    xor     ax, ax
+    mov     es, ax
+    mov     dx, 0x5A3               ; columns
+    in      al, dx
+    or      al, al                  ; a card that says nothing has the lot
+    jnz     .havecols
+    mov     al, COLS
+.havecols:
+    cmp     al, COLS
+    jbe     .colok
+    mov     al, COLS
+.colok:
+    mov     [es:BDA_VIDCOLS], al
+    mov     [es:CON_W], al
+    mov     dx, 0x5A4               ; rows
+    in      al, dx
+    or      al, al
+    jnz     .haverows
+    mov     al, ROWS
+.haverows:
+    cmp     al, ROWS
+    jbe     .rowok
+    mov     al, ROWS
+.rowok:
+    mov     [es:BDA_VIDROWS], al
+    dec     al
+    mov     [es:CON_B], al
+    pop     es
+    pop     dx
+    pop     ax
+    ret
 
 ; set_vector: bx = the vector's address in the table, dx = the handler,
 ; ax = the segment it lives in
@@ -310,6 +407,32 @@ putc:
     mov     ah, 0x0E
     mov     bl, [es:CON_ATTR]
     int     0x10
+    pop     bx
+    pop     ax
+    ret
+
+; putn: ax = a number, printed in decimal with no leading zeros
+putn:
+    push    ax
+    push    bx
+    push    cx
+    push    dx
+    mov     bx, 10
+    xor     cx, cx
+.divide:
+    xor     dx, dx
+    div     bx
+    push    dx
+    inc     cx
+    test    ax, ax
+    jnz     .divide
+.digits:
+    pop     ax
+    add     al, '0'
+    call    putc
+    loop    .digits
+    pop     dx
+    pop     cx
     pop     bx
     pop     ax
     ret
@@ -413,7 +536,7 @@ smpBoot:
 .report:
     xor     ax, ax
     mov     al, dl
-    call    put3
+    call    putn
     mov     si, msg_cores_online
     call    puts
 .done:
@@ -558,6 +681,7 @@ tty:
     push    si
     push    di
     push    fs
+    push    bp
     mov     si, ax                  ; si = the character
     cmp     al, 13
     jne     .not_cr
@@ -592,38 +716,71 @@ tty:
     mov     ah, bl
     mov     [fs:di], ax
     inc     byte [es:BDA_CURSOR_COL]
-    cmp     byte [es:BDA_CURSOR_COL], COLS
+    mov     al, [es:CON_W]
+    cmp     [es:BDA_CURSOR_COL], al
     jb      .out
     mov     byte [es:BDA_CURSOR_COL], 0
     inc     byte [es:BDA_CURSOR_ROW]
 .scroll:
-    cmp     byte [es:BDA_CURSOR_ROW], ROWS
-    jb      .out
-    push    ax
-    push    cx
-    push    si
-    push    di
-    push    ds
+    mov     al, [es:BDA_CURSOR_ROW]
+    cmp     al, [es:CON_B]
+    jbe     .out
+    ; Only the window's own columns move. Copying whole rows would drag the
+    ; splash's artwork up with the log, because the two share their rows.
+    mov     cl, [es:CON_W]
+    xor     ch, ch
+    mov     al, [es:CON_B]
+    sub     al, [es:CON_T]
+    xor     ah, ah
+    mov     bx, ax                  ; how many rows move up
+    test    bx, bx                  ; a one-row window moves nothing
+    jz      .blank
+    mov     al, [es:CON_T]
+    xor     ah, ah
+    mov     bp, COLS * 2
+    mul     bp
+    mov     di, ax                  ; the window's top left, in the plane
+    mov     si, ax
+    add     si, bp                  ; one row further down
+    mov     bp, COLS * 2
+    sub     bp, cx
+    sub     bp, cx                  ; the gap at the end of each row
     push    es
+    push    ds
     mov     ax, TEXT_SEG
-    mov     ds, ax
     mov     es, ax
-    mov     si, COLS * 2
-    xor     di, di
-    mov     cx, (ROWS - 1) * COLS
-    rep     movsw                   ; every row moves up one
-    mov     di, (ROWS - 1) * COLS * 2
-    mov     cx, COLS
-    mov     ax, 0x0720
+    mov     ds, ax
+.row:
+    push    cx
+    rep     movsw
+    pop     cx
+    add     si, bp
+    add     di, bp
+    dec     bx
+    jnz     .row
+    pop     ds
+    pop     es
+.blank:
+    ; and the window's last row is blanked
+    mov     al, [es:CON_B]
+    xor     ah, ah
+    mov     bp, COLS * 2
+    mul     bp
+    mov     di, ax
+    mov     ah, [es:CON_ATTR]
+    mov     al, ' '
+    mov     cl, [es:CON_W]
+    xor     ch, ch
+    push    es
+    mov     bx, TEXT_SEG
+    mov     es, bx
     rep     stosw
     pop     es
-    pop     ds
-    pop     di
-    pop     si
-    pop     cx
-    pop     ax
-    mov     byte [es:BDA_CURSOR_ROW], ROWS - 1
+    mov     al, [es:CON_B]
+    mov     [es:BDA_CURSOR_ROW], al
+    jmp     .out
 .out:
+    pop     bp
     pop     fs
     pop     di
     pop     si
@@ -664,6 +821,10 @@ int13:
     push    si
     push    di
     push    ds
+    ; only the disk at 0x80 exists: everything else answers with "no such
+    ; drive" rather than silently reading the same sector again
+    cmp     dl, 0x80
+    jne     .fail
     cmp     ah, 0x02
     je      .read
     cmp     ah, 0x00                ; reset: nothing to reset yet
@@ -782,7 +943,7 @@ int19:
     xor     ch, ch
     mov     cl, 1
     xor     dh, dh
-    mov     dl, 0x80
+    mov     dl, [es:BDA_BOOTDEV]
     int     0x13
     jc      .fail
     cmp     word [es:0x7C00 + 510], 0xAA55
@@ -883,6 +1044,9 @@ int09:
     iret
 
 %include "setup.inc"
+%include "splash.inc"
+%include "gx620.inc"
+%include "boot.inc"
 
 ; ---------------------------------------------------------------------------
 ; data
@@ -893,8 +1057,9 @@ msg_crlf:   db 13, 10, 0
 msg_cpu:    db "CPU: 80386, real mode, 16-bit bus", 13, 10, 0
 msg_mem:    db "Memory: ", 0
 msg_memk:   db "K conventional", 13, 10, 0
-msg_video:  db "Video: 80x30 text, attribute 0x07", 13, 10, 0
-msg_boot:   db "Booting from disk 0x80...", 13, 10, 0
+msg_video:  db "Video: ", 0
+msg_video_tail: db " text, attribute 0x07", 13, 10, 0
+msg_boot:   db "Booting from device 0x80...", 13, 10, 0
 msg_cores:  db "Cores: ", 0
 msg_smp:    db "SMP: ", 0
 msg_cores_online: db " core(s) online", 13, 10, 0

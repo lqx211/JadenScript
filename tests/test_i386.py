@@ -20,6 +20,23 @@ import i386_ref as rv  # noqa: E402
 
 RVDIR = ROOT / "userspace" / "i386"
 
+#: DEL stops the countdown, Down moves the light to "Firmware Setup", and Enter
+#: opens it. Every setup test starts with these three.
+SETUP_KEYS = [0x32, 0x50, 0x1C]
+
+
+def post(limit: int = 60_000, cores: int = 1,
+         stage: tuple[int, int] = (80, 30)) -> rv.Machine:
+    """Power on and stop while the splash and POST's own log are still up."""
+    mach = rv.Machine()
+    mach.view_cols, mach.view_rows = stage
+    mach.ram[:] = i386_image.build()
+    mach.cores = cores
+    mach.sreg[rv.SEG_CS] = rv.RESET_CS
+    mach.eip = rv.RESET_IP
+    mach.run(limit=limit)
+    return mach
+
 
 def boot(limit: int = 300_000, cores: int = 1) -> rv.Machine:
     mach = rv.Machine()
@@ -37,24 +54,30 @@ def boot(limit: int = 300_000, cores: int = 1) -> rv.Machine:
 class I386BootTests(unittest.TestCase):
     """Power-on, POST, int 19h, and a boot sector that calls back into the ROM."""
 
-    def test_any_other_key_skips_the_setup_wait(self) -> None:
-        """POST waits half a second for Delete; a space gets on with the boot."""
+    def test_any_other_key_skips_the_countdown(self) -> None:
+        """The logo goes up with the POST text saved underneath it; a space gets
+        on with the boot and the text comes back, which is what Esc does on a
+        real board."""
         quick = boot()                                  # boot() presses space
-        self.assertIn("Booting from disk 0x80", quick.text())
+        self.assertIn("Booting from device 0x80", quick.text())
+        self.assertIn("MBR: hello from a boot sector", quick.text())
         slow = rv.Machine()
         slow.ram[:] = i386_image.build()
         slow.sreg[rv.SEG_CS] = rv.RESET_CS
         slow.eip = rv.RESET_IP
-        slow.run(limit=120_000)                         # still inside the wait
-        self.assertIn("Press DEL or F2", slow.text())
-        self.assertNotIn("Booting from disk", slow.text())
+        slow.run(limit=120_000)                         # still on the splash
+        self.assertIn("DEL = Setup    M = Options", slow.text())
+        self.assertNotIn("Booting from device", slow.text())
 
     def test_post_prints_what_it_found(self) -> None:
-        mach = boot(limit=300_000)
-        screen = mach.text()
+        """The log scrolls in the splash's black panel, and the step in the
+        corner says what the ROM is doing."""
+        screen = post().text()
         for line in ("JSW 80386 BIOS v0.02", "CMOS boot #", "CPU: 80386",
-                     "Memory: 640K", "Video: 80x30 text", "Booting from disk 0x80"):
+                     "Memory: 640K", "Video: 80x30 text", "Cores: 1",
+                     "DEL = Setup    M = Options", "Booting"):
             self.assertIn(line, screen)
+        self.assertIn("Booting from device 0x80", boot().text())
 
     def test_the_boot_counter_comes_back_from_the_cmos(self) -> None:
         """The battery, stated as a fact: the same machine boots twice and the
@@ -88,16 +111,36 @@ class I386BootTests(unittest.TestCase):
 
     def test_every_cell_carries_the_same_attribute(self) -> None:
         """The teletype takes its attribute from bl, so a routine that calls
-        int 10h directly paints the text in whatever bl happens to hold."""
-        mach = boot(limit=45_000)
-        for row in range(25):
-            for col in range(80):
+        int 10h directly paints the text in whatever bl happens to hold. POST's
+        log is the left-hand column, printed straight over the artwork; the
+        artwork keeps its own colours, which is the whole point of it."""
+        mach = post()
+        for row in range(5):
+            for col in range(30):
                 off = rv.TEXT_BASE + (row * 80 + col) * 2
                 char, attr = mach.ram[off], mach.ram[off + 1]
                 if char not in (0x00, 0x20):
                     self.assertEqual(
                         attr, 0x07, f"cell {row}:{col} {chr(char)!r} is {attr:#04x}"
                     )
+
+    def test_a_small_stage_gets_no_logo_and_a_narrower_console(self) -> None:
+        """Scratch's own stage is 480 x 360: sixty cells across and twenty-two
+        down. The artwork does not fit, so it is not drawn, and every line POST
+        prints has to fit -- including the one in the top right corner."""
+        mach = post(stage=(60, 22))
+        screen = mach.text()
+        self.assertIn("Video: 60x22 text", screen)
+        self.assertTrue(screen.startswith("JSW 80386 BIOS"), screen)
+        # the picture would have put blue on the screen; a bare console is black
+        blue = sum(1 for i in range(rv.TEXT_BASE, rv.TEXT_BASE + 80 * 30 * 2, 2)
+                   if mach.ram[i] == 0x1F)
+        self.assertEqual(blue, 0, "the splash went up on a stage that cannot hold it")
+        # the step lives in the top right *of the forty cells that are visible*
+        head = screen.splitlines()[0]
+        self.assertIn("Booting", head, screen)
+        self.assertLessEqual(head.index("Booting") + len("Booting"), 60,
+                             f"the step is off the right edge: {head!r}")
 
     def test_the_segment_wrap_is_twenty_bits(self) -> None:
         """0xFFFF:0x0010 is the bottom of memory on a machine with no A20 gate."""
@@ -192,16 +235,18 @@ class I386UnitTests(unittest.TestCase):
 
 
 class I386SetupTests(unittest.TestCase):
-    """The setup screen: a key press, a changed byte, and a POST that reads it."""
+    """The GX620-shaped setup: a tree on the left, a page of facts on the
+    right, and the editable values buried in the tree where Dell buries them."""
 
-    def _setup(self, keys: list[int], limit: int = 8_000_000,
+    F2, DOWN, UP = 0x3C, 0x50, 0x48
+    RIGHT, LEFT, ENTER, ESC = 0x4D, 0x4B, 0x1C, 0x01
+
+    #: System, System Info, Processor Info, Memory Info, Date/Time and Month
+    TO_MONTH = [0x50] * 5
+
+    def _setup(self, keys: list[int], limit: int = 40_000_000,
                settle: int = 900_000):
-        """Boot to setup, feed the keys, and let one redraw finish.
-
-        The model is a Python interpreter, so a key costs what the machine
-        spends on a repaint: the budget has to be generous, but it stops as
-        soon as the last key is taken and the screen settles.
-        """
+        """Power on, press F2 and whatever else, and let the screen settle."""
         mach = rv.Machine()
         mach.ram[:] = i386_image.build()
         mach.keys.extend(keys)
@@ -212,109 +257,221 @@ class I386SetupTests(unittest.TestCase):
         mach.run(limit=mach.steps + settle)
         return mach
 
-    def test_delete_opens_it_on_the_main_page(self) -> None:
-        mach = self._setup([0x53])                     # Delete
-        screen = mach.text()
-        self.assertIn("JSW BIOS Setup Utility", screen)
-        tabs = screen.split("\n")[2]          # the menu bar, under the border
-        for name in ("Main", "Info", "Exit"):
-            self.assertIn(name, tabs)
-        self.assertIn("Base memory", screen)
-        self.assertIn("Battery: OK", screen)
+    def test_f2_opens_the_setup_on_the_system_page(self) -> None:
+        screen = self._setup([self.F2]).text()
+        self.assertIn("Dell System GX620", screen)
+        self.assertIn("System Info", screen)
+        self.assertIn("Date/Time", screen)
+        self.assertIn("Drives", screen)
+        self.assertIn("OptiPlex GX620", screen)
 
-    def test_the_right_arrow_walks_to_the_information_page(self) -> None:
-        mach = self._setup([0x53, 0x4D])               # Del, Right
-        screen = mach.text()
-        self.assertIn("System information", screen)
-        self.assertIn("Video: VGA text, 80x30", screen)
-        self.assertIn("Chipset: 8254 timer, 8259 PIC", screen)
-        self.assertIn("Ticks: ", screen, "the timer is running while setup is open")
-        self.assertNotIn("Base memory", screen)
+    def test_the_system_info_page_is_behind_it(self) -> None:
+        screen = self._setup([self.F2, self.DOWN]).text()
+        self.assertIn("BIOS Version          = A07 (03/31/06)", screen)
+        self.assertIn("Service Tag           = J1Q24BX", screen)
+        self.assertIn("None of these fields are changeable.", screen)
 
-    def test_enter_edits_the_selected_value(self) -> None:
-        keys = [0x53, 0x50, 0x50, 0x1C, 0x4D, 0x1C]    # Del, Down x2, Enter, Right, Enter
+    def test_the_hints_are_the_ones_a_gx620_prints(self) -> None:
+        screen = self._setup([self.F2]).text()
+        self.assertIn("Press Up/Down arrows to select a different field", screen)
+        self.assertIn("Press Left/Right keys to expand or collapse a group",
+                      screen)
+        self.assertIn("Press Esc to exit Setup", screen)
+
+    def test_the_light_starts_on_the_first_row(self) -> None:
+        mach = self._setup([self.F2])
+        self.assertEqual(mach.ram[0x521], 0, "GX_SEL")
+
+    def test_the_down_arrow_walks_the_tree(self) -> None:
+        mach = self._setup([self.F2] + self.TO_MONTH)
+        self.assertEqual(mach.ram[0x521], 5)
+        self.assertIn("The month, as a number from 1 to 12.", mach.text())
+
+    def test_the_green_bar_is_on_the_selected_row_only(self) -> None:
+        mach = self._setup([self.F2] + self.TO_MONTH)
+        green = [row for row in range(rv.TEXT_ROWS)
+                 if mach.ram[rv.TEXT_BASE + (row * rv.TEXT_COLS + 3) * 2 + 1] == 0x20]
+        self.assertEqual(len(green), 1, "one row carries the light")
+
+    def test_a_group_folds_and_opens_again(self) -> None:
+        folded = self._setup([self.F2, self.RIGHT])
+        self.assertEqual(folded.ram[0x5A0], 0, "GX_EXP for System")
+        self.assertNotIn("Processor Info", folded.text(), "the children went")
+        opened = self._setup([self.F2, self.RIGHT, self.RIGHT])
+        self.assertEqual(opened.ram[0x5A0], 1)
+        self.assertIn("Processor Info", opened.text())
+
+    def test_enter_edits_the_value(self) -> None:
+        keys = [self.F2] + self.TO_MONTH + [self.ENTER, self.RIGHT, self.ENTER]
         mach = self._setup(keys)
-        self.assertIn("Year", mach.text())
-        self.assertIn("2026", mach.text(), "the year row went from 25 to 26")
-        self.assertEqual(mach.cmos[0x09], 0x25, "nothing is written until it is saved")
+        self.assertEqual(mach.ram[0x500], 2, "SU_BUF[0] is the month")
 
     def test_escape_in_the_dialog_puts_the_old_value_back(self) -> None:
-        keys = [0x53, 0x50, 0x50, 0x1C, 0x4D, 0x01]    # ... then Esc
+        keys = [self.F2] + self.TO_MONTH + [self.ENTER, self.RIGHT, self.ESC]
         mach = self._setup(keys)
-        self.assertIn("2025", mach.text(), "the edit was thrown away")
+        self.assertEqual(mach.ram[0x500], 1, "the month is still January")
 
-    def test_saving_from_the_exit_page_and_the_next_post_reads_it_back(self) -> None:
-        keys = [0x53] + [0x50] * 9 + [0x1C, 0x4B, 0x1C]   # memory, edit, -1, keep
-        keys += [0x4D, 0x4D, 0x1C]                        # Exit page, "Save and exit"
+    def test_saving_writes_the_cmos(self) -> None:
+        keys = ([self.F2] + self.TO_MONTH
+                + [self.ENTER, self.RIGHT, self.ENTER, self.ESC, self.ENTER])
         mach = self._setup(keys)
-        self.assertEqual(mach.cmos[0x16] * 256 + mach.cmos[0x15], 576)
-        # and a fresh POST believes it
-        mach.sreg[rv.SEG_CS] = rv.RESET_CS
-        mach.eip = rv.RESET_IP
-        mach.halted = False
-        mach.steps = 0
-        mach.run(limit=300_000)
-        self.assertIn("Memory: 576K conventional", mach.text())
+        self.assertEqual(mach.cmos[0x08], 0x02, "February, in BCD")
 
-    def test_the_exit_page_saves(self) -> None:
-        keys = [0x53, 0x4D, 0x4D, 0x1C]                # Del, Right, Right, Enter
+    def test_discarding_leaves_the_cmos_alone(self) -> None:
+        keys = ([self.F2] + self.TO_MONTH
+                + [self.ENTER, self.RIGHT, self.ENTER, self.ESC,
+                   self.RIGHT, self.ENTER])
         mach = self._setup(keys)
-        self.assertEqual(mach.cmos[0x31], 0xA5, "the setup checksum was written")
+        self.assertEqual(mach.cmos[0x08], 0x01, "January was never touched")
 
     def test_every_cell_of_the_setup_screen_is_painted(self) -> None:
-        """A clear loop that stops early leaves the POST paper showing."""
-        mach = self._setup([0x53])
-        for row in range(30):
-            for col in range(80):
-                if col in (0, 45, 79):
-                    continue        # the frame's own columns
-                cell = mach.read(0xB8000 + (row * 80 + col) * 2, 2)
-                self.assertNotEqual(cell, 0x0720, f"cell {row},{col} kept the POST paper")
-        # the strip along the bottom is eighty cells, the last one included
-        self.assertEqual(mach.read(0xB8000 + (29 * 80 + 79) * 2, 2), 0x7020)
+        """No holes: every cell is paper, header, frame or the green light."""
+        mach = self._setup([self.F2])
+        for row in range(rv.TEXT_ROWS):
+            for col in range(rv.TEXT_COLS):
+                attr = mach.ram[rv.TEXT_BASE + (row * rv.TEXT_COLS + col) * 2 + 1]
+                self.assertIn(attr, (0x1F, 0x1E, 0x70, 0x20),
+                              f"cell {row},{col} is 0x{attr:02x}")
 
-    def test_a_dialog_is_a_panel_with_a_shadow(self) -> None:
-        """The editing dialog: a grey panel with a blue title bar, and a black
-        drop shadow one row down and two columns right."""
-        mach = self._setup([0x53, 0x1C])               # Del, Enter: the dialog
-        attrs = {}
-        for row in range(10, 19):
-            for col in range(22, 60):
-                cell = 0xB8000 + (row * 80 + col) * 2
-                attrs.setdefault(mach.read(cell + 1, 1), []).append((row, col))
-        self.assertIn(0x00, attrs, "no shadow")
-        self.assertIn(0x1E, attrs, "no title bar")
-        self.assertIn(0x70, attrs, "no panel")
-        # the shadow is on the right of the panel and under it, never on the left
-        shadow = attrs[0x00]
-        self.assertTrue(all(col >= 56 for row, col in shadow if row < 18), shadow[:4])
-        self.assertTrue(any(row == 18 for row, col in shadow), "no shadow under the panel")
+    def test_the_dialog_is_a_panel_with_a_shadow(self) -> None:
+        mach = self._setup([self.F2] + self.TO_MONTH + [self.ENTER])
+        shadows = sum(1 for row in range(rv.TEXT_ROWS)
+                      for col in range(rv.TEXT_COLS)
+                      if mach.ram[rv.TEXT_BASE + (row * rv.TEXT_COLS + col) * 2 + 1] == 0x00)
+        self.assertGreater(shadows, 30, "the dialog casts a black shadow")
+        self.assertIn("Month", mach.text())
 
-    def test_the_exit_page_keeps_its_own_rows(self) -> None:
-        mach = self._setup([0x53, 0x4D, 0x4D, 0x50])   # Del, Right x2, Down
-        screen = mach.text()
-        self.assertIn("Save and exit", screen)
-        self.assertIn("Discard and exit", screen)
-        self.assertNotIn("Month", screen, "the exit page repainted itself")
 
-    def test_discard_and_exit_boots_and_writes_nothing(self) -> None:
-        keys = [0x53, 0x50, 0x50, 0x1C, 0x4D, 0x1C]   # Year -> 2026, kept
-        keys += [0x4D, 0x4D, 0x50, 0x1C]               # Exit, Discard, Enter
-        mach = self._setup(keys)
-        self.assertEqual(mach.cmos[0x09], 0x25, "the year was not written")
-        self.assertIn("Booting from disk 0x80", mach.text())
+class I386BootMenuTests(unittest.TestCase):
+    """The menu DEL earns you, and the four things behind it.
 
-    def test_escape_asks_before_it_leaves(self) -> None:
-        mach = self._setup([0x53, 0x01])               # Del, Esc
-        screen = mach.text()
-        self.assertIn("Save the changes?", screen)
-        self.assertIn("Cancel", screen)
+    Every one of these starts the same way: DEL stops the countdown and the
+    arrows move the light. What changes is which entry is chosen.
+    """
 
-    def test_discarding_keeps_the_old_values(self) -> None:
-        keys = [0x53, 0x50, 0x50, 0x1C, 0x4D, 0x1C, 0x01, 0x4D, 0x1C]
-        # Del, Down x2, Enter, Right, Enter, Esc, Right (Discard), Enter
-        mach = self._setup(keys)
-        self.assertEqual(mach.cmos[0x09], 0x25, "the year was not written")
+    #: DEL, then Down this many times, then Enter.
+    def _menu(self, downs: int = 0, extra: list[int] | None = None,
+              limit: int = 8_000_000):
+        mach = rv.Machine()
+        mach.ram[:] = i386_image.build()
+        mach.keys.extend([0x32] + [0x50] * downs + [0x1C] + (extra or []))
+        mach.sreg[rv.SEG_CS] = rv.RESET_CS
+        mach.eip = rv.RESET_IP
+        while mach.keys and mach.steps < limit:
+            mach.run(limit=min(limit, mach.steps + 250_000))
+        mach.run(limit=mach.steps + 900_000)
+        return mach
+
+    def _at_menu(self, keys: list[int] | None = None, limit: int = 8_000_000):
+        """Power on, press DEL and whatever else, and let the screen settle."""
+        mach = rv.Machine()
+        mach.ram[:] = i386_image.build()
+        mach.keys.extend([0x32] + (keys or []))
+        mach.sreg[rv.SEG_CS] = rv.RESET_CS
+        mach.eip = rv.RESET_IP
+        while mach.keys and mach.steps < limit:
+            mach.run(limit=min(limit, mach.steps + 250_000))
+        mach.run(limit=mach.steps + 900_000)
+        return mach
+
+    def test_delete_brings_up_the_five_entries(self) -> None:
+        screen = self._at_menu().text()
+        self.assertIn("Boot Menu", screen)
+        for entry in ("Boot Options", "Firmware Setup", "Reboot", "Halt",
+                      "Debug Shell"):
+            self.assertIn(entry, screen)
+        self.assertNotIn("^/v select", screen, "the menu carries no key hints")
+
+    def _attrs(self, mach, row: int, first: int, last: int) -> set[int]:
+        return {mach.ram[rv.TEXT_BASE + (row * rv.TEXT_COLS + col) * 2 + 1]
+                for col in range(first, last)}
+
+    def test_the_panel_is_blue_with_one_lit_row(self) -> None:
+        """Blue paper, a light bar on the entry the arrows are pointing at, and
+        nothing else -- this is the screen, not a mock-up of one."""
+        mach = self._at_menu()
+        top = 10                                    # BM_TOP
+        self.assertEqual(self._attrs(mach, top + 2, 21, 59), {0x1F}, "blank row")
+        self.assertEqual(self._attrs(mach, top + 3, 21, 59), {0x70}, "the light")
+        self.assertEqual(self._attrs(mach, top + 4, 21, 59), {0x1F}, "and not it")
+        self.assertEqual(self._attrs(mach, top + 1, 22, 58), {0x1E}, "title bar")
+        # the drop shadow: one row down, two columns right of the panel
+        self.assertEqual(self._attrs(mach, top + 10, 22, 61), {0x00}, "the shadow")
+        blue = sum(1 for row in range(rv.TEXT_ROWS) for col in range(rv.TEXT_COLS)
+                   if mach.ram[rv.TEXT_BASE + (row * rv.TEXT_COLS + col) * 2 + 1] == 0x1F)
+        self.assertGreater(blue, 1500, "the screen behind the panel is blue")
+
+    def test_the_down_arrow_moves_the_light_to_the_next_row(self) -> None:
+        down = self._at_menu([0x50])
+        self.assertEqual(self._attrs(down, 13, 21, 59), {0x1F}, "the first row")
+        self.assertEqual(self._attrs(down, 14, 21, 59), {0x70}, "the second row")
+
+    def test_the_down_arrow_moves_the_light(self) -> None:
+        first = self._at_menu()
+        second = self._at_menu([0x50])
+        self.assertEqual(first.ram[0x515], 0, "BM_SEL starts at the top")
+        self.assertEqual(second.ram[0x515], 1, "and follows the arrow")
+
+    def test_escape_boots_the_disk(self) -> None:
+        mach = self._at_menu([0x01])
+        self.assertIn("Booting from device 0x80", mach.text())
+        self.assertIn("MBR: hello from a boot sector", mach.text())
+
+    def test_reboot_starts_the_machine_again(self) -> None:
+        """The CMOS boot counter is the proof: the same machine, powered on a
+        second time by its own menu."""
+        mach = self._menu(downs=2)
+        self.assertEqual(mach.cmos[0x30], 2, "POST counted itself twice")
+
+    def test_halt_stops_the_cpu(self) -> None:
+        mach = self._menu(downs=3)
+        self.assertTrue(mach.halted, "hlt with interrupts off stays halted")
+        self.assertIn("System halted.", mach.text())
+
+    def test_halt_ignores_the_clock(self) -> None:
+        """cli before hlt: the timer cannot wake a core that told it not to."""
+        mach = self._menu(downs=3)
+        before = mach.steps
+        mach.run(limit=before + 200_000)
+        self.assertEqual(mach.steps, before, "a halted core retires nothing")
+
+    def test_boot_options_offers_four_devices(self) -> None:
+        screen = self._at_menu([0x1C]).text()      # Enter on Boot Options
+        self.assertIn("Boot Options", screen)
+        for device in ("Hard Disk (0x80)", "Floppy (0x00)", "CD-ROM (0x9F)",
+                       "Network (PXE)"):
+            self.assertIn(device, screen)
+
+    def test_the_floppy_is_not_there(self) -> None:
+        """Picking a device this board does not have is refused by int 13h, the
+        way a real machine refuses it: nothing boots, and the menu comes back
+        rather than the machine dying. The boot sector never runs, which is the
+        part that says the refusal was real."""
+        mach = self._at_menu([0x1C, 0x50, 0x1C])   # Boot Options, Floppy, Enter
+        self.assertEqual(mach.ram[0x4FE], 0x00, "the device that was tried")
+        self.assertNotIn("MBR: hello", mach.text(), "nothing booted")
+        self.assertIn("Boot Menu", mach.text(), "and back to the list")
+
+    def test_the_debug_shell_dumps_memory(self) -> None:
+        keys = [0x32, 0x39, 0x05, 0x0B, 0x0B, 0x1C]      # "m 0400" and Enter
+        screen = self._menu(downs=4, extra=keys).text()
+        self.assertIn("JSW 80386 debug shell", screen)
+        self.assertIn("jsw> m 400", screen)
+        self.assertIn("0400 00 00", screen, "the interrupt table, all zeroes")
+        self.assertIn("0410 02 21", screen, "the equipment word POST wrote")
+
+    def test_the_debug_shell_shows_the_interrupt_table(self) -> None:
+        keys = [0x17, 0x1C]                              # "i" and Enter
+        screen = self._menu(downs=4, extra=keys).text()
+        self.assertRegex(screen, r"\b10:[0-9a-f]{4}:f000",
+                         "int 10h points into the ROM")
+        self.assertIn(":f000", screen)
+
+    def test_the_shell_quits_back_to_the_menu(self) -> None:
+        keys = [0x10, 0x1C]                              # "q" and Enter
+        mach = self._menu(downs=4, extra=keys)
+        self.assertIn("Boot Menu", mach.text())
+        self.assertNotIn("jsw>", mach.text())
 
 
 class I386OpcodeTests(unittest.TestCase):
@@ -545,43 +702,44 @@ class I386SmpTests(unittest.TestCase):
     """Cores 2..N are woken through the chipset and check in through memory."""
 
     def test_one_core_says_so_and_stays_quiet(self) -> None:
-        screen = boot(limit=60_000).text()
-        self.assertIn("Cores: 001", screen)
+        screen = post().text()
+        self.assertIn("Cores: 1", screen)
         self.assertNotIn("SMP:", screen)
 
     def test_two_cores_check_in(self) -> None:
-        mach = boot(limit=60_000, cores=2)
+        mach = post(cores=2)
         screen = mach.text()
-        self.assertIn("Cores: 002", screen)
-        self.assertIn("SMP: 002 core(s) online", screen)
+        self.assertIn("Cores: 2", screen)
+        self.assertIn("SMP: 2 core(s) online", screen)
         self.assertEqual(mach.ram[0x8402], 2, "core 2 wrote its id to the roster")
         self.assertEqual(mach.ram[0x8502], 1, "core 2 checked in")
 
     def test_four_cores_check_in(self) -> None:
-        mach = boot(limit=60_000, cores=4)
-        self.assertIn("SMP: 004 core(s) online", mach.text())
+        mach = post(cores=4)
+        self.assertIn("SMP: 4 core(s) online", mach.text())
         for core in (2, 3, 4):
             self.assertEqual(mach.ram[0x8400 + core], core)
             self.assertEqual(mach.ram[0x8500 + core], 1)
 
-    def test_the_setup_screen_keeps_to_its_three_colours(self) -> None:
+    def test_the_setup_screen_keeps_to_its_four_colours(self) -> None:
         """The teletype takes its attribute from bl, so any routine that prints
         without setting it paints in whatever bl was left holding."""
         mach = boot(limit=600_000)
-        mach.keys.append(0x53)                      # Delete, at the prompt
+        mach.keys.append(0x3C)                      # F2, at the prompt
         mach.sreg[rv.SEG_CS] = rv.RESET_CS
         mach.eip = rv.RESET_IP
         mach.halted = False
         mach.steps = 0
-        mach.run(limit=600_000)
-        self.assertIn("JSW BIOS Setup Utility", mach.text())
+        mach.run(limit=900_000)
+        self.assertIn("Dell System GX620", mach.text())
         used = set()
         for row in range(25):
             for col in range(80):
                 off = rv.TEXT_BASE + (row * 80 + col) * 2
                 if mach.ram[off] not in (0x00, 0x20):
                     used.add(mach.ram[off + 1])
-        self.assertEqual(used, {0x1F, 0x1E, 0x70}, "paper, header and selection")
+        self.assertEqual(used, {0x1F, 0x1E, 0x70, 0x20},
+                         "paper, header, frame and the green bar")
 
     def test_the_trampoline_lands_where_the_aps_are_sent(self) -> None:
         mach = boot(limit=60_000, cores=2)

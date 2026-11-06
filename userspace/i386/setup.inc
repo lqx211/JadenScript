@@ -39,13 +39,18 @@ SU_N     equ 11                     ; how many rows (the last is read-only)
 SU_PAPER equ 0x1F                   ; blue paper, white ink
 SU_HEAD  equ 0x1E                   ; blue paper, yellow ink
 SU_SEL   equ 0x70                   ; light grey paper, black ink
+SU_GREEN equ 0x20                   ; green paper, black ink: the Dell light
 SU_SHADOW equ 0x00                  ; black on black: the drop shadow
 SU_INK   equ 0x4F5                  ; the ink of the row being drawn
 SU_DLG_L equ 0x4F6                  ; a dialog's left column, while it draws
 SU_DLG_T equ 0x4F7                  ; its top row
 SU_DLG_W equ 0x4F8                  ; its width
 SU_DLG_R equ 0x4F9                  ; which of its rows is being drawn
-SU_DLG_H equ 8                      ; every dialog on this screen is eight rows
+SU_DLG_H equ 8                      ; the editing dialogs are eight rows tall
+SU_DLG_N equ 0x4FA                  ; a dialog's height, while it draws
+SU_DLG_P equ 0x4FD                  ; ... and the paper its body is painted in
+SU_DLG_E equ 0x4FB                  ; ... and that plus one, for the shadow
+SU_DLG_B equ 0x4FC                  ; ... and that minus one, its last row
 
 ; the frame, drawn with CP437's double-line set, the way the rv64 setup does
 G_HBAR   equ 0xCD
@@ -82,37 +87,120 @@ suWindow:
     push    bx
     push    cx
     push    dx
+    push    si
+    ; the countdown is a line of its own, outside POST's little window: give it
+    ; a one-row window, or printing it here would scroll the log instead
+    mov     ax, [es:CON_T]          ; CON_T in al, CON_B in ah
+    push    ax
+    mov     al, [es:CON_W]
+    push    ax
+    mov     al, [es:CON_ATTR]
+    push    ax
+    mov     al, [es:BDA_VIDROWS]    ; three rows up from the bottom of the card
+    sub     al, 3
+    mov     byte [es:CON_T], al
+    mov     byte [es:CON_B], al
+    mov     byte [es:CON_W], COLS
+    mov     byte [es:CON_ATTR], 0x07   ; a plain black line, if there is no splash
+    cmp     byte [es:BDA_SPLASH], 0
+    je      .attr
+    mov     byte [es:CON_ATTR], 0x1E   ; yellow on the splash's blue
+.attr:
+    mov     dh, al                  ; under the artwork, above its labels
+    mov     dl, 3
+    call    suGoto
     mov     si, msg_press_del
     call    puts
-    ; Long enough to hold DEL through. `loop` counts in cx, and cx is sixteen
-    ; bits -- 500,000 does not fit, it truncates to 41,088 and the window comes
-    ; back to a blink. An outer counter of eight makes it 400,000 polls, about
-    ; half a second on this machine.
-    mov     bx, 8
+    mov     bx, 5                   ; the seconds on the counter
+.tick:
+    mov     al, bl
+    add     al, '0'
+    call    putc
+    mov     si, msg_tick            ; "... "
+    cmp     bx, 1
+    jne     .dots
+    mov     si, msg_tick_last       ; the last one is a dot short: the paren
+.dots:                              ; comes straight after it
+    call    puts
+    call    suWait                  ; about a second, or less if a key arrives
+    test    al, al
+    jnz     .key
+    dec     bx
+    jz      .counted_out
+    mov     al, ' '
+    call    putc
+    jmp     .tick
+.counted_out:
+    mov     si, msg_tick_end
+    call    puts
+    xor     al, al
+    jmp     .out
+.key:
+    mov     si, msg_tick_end        ; close the line whatever was pressed
+    push    ax
+    call    puts
+    pop     ax
+    cmp     al, 0x53                ; Delete: the setup
+    je      .setup
+    cmp     al, 0x3C                ; F2: the same
+    je      .setup
+    cmp     al, 0x32                ; M: the boot menu
+    je      .menu
+    cmp     al, 0x58                ; F12: the same
+    je      .menu
+    ; any other key means "get on with it", the way a real board does
+    xor     al, al
+    jmp     .out
+.setup:
+    mov     al, 2
+    jmp     .out
+.menu:
+    mov     al, 1
+.out:
+    mov     dl, al                  ; keep the answer across the restore
+    pop     ax
+    mov     [es:CON_ATTR], al
+    pop     ax
+    mov     [es:CON_W], al
+    pop     ax
+    mov     [es:CON_T], al
+    mov     [es:CON_B], ah
+    mov     al, dl
+    pop     si
+    pop     dx
+    pop     cx
+    pop     bx
+    ret
+
+; ---------------------------------------------------------------------------
+; suWait -- about a second of wall clock, cut short by a keypress.
+;
+; The delay is counted, not timed: this firmware has no clock it trusts at POST
+; and a counted loop is the honest description of "about a second on the
+; machine it runs on". `loop` counts in cx, and cx is sixteen bits -- 500,000
+; does not fit, it truncates to 41,088 and the countdown would come back to a
+; blink. Twelve rounds of 50,000 polls is the second.
+;
+; Returns al = the scan code of the key that interrupted it, or 0.
+; ---------------------------------------------------------------------------
+suWait:
+    push    bx
+    push    cx
+    mov     bx, 12
 .round:
     mov     cx, 50000
-.wait:
+.poll:
     in      al, 0x64
     test    al, 1
     jz      .next
     in      al, 0x60                ; a scan code arrived
-    cmp     al, 0x53                ; Delete
-    je      .yes
-    cmp     al, 0x3C                ; F2
-    je      .yes
-    ; any other key means "get on with it", the way a real board does
-    xor     al, al
     jmp     .out
 .next:
-    loop    .wait
+    loop    .poll
     dec     bx
     jnz     .round
     xor     al, al
-    jmp     .out
-.yes:
-    mov     al, 1
 .out:
-    pop     dx
     pop     cx
     pop     bx
     ret
@@ -643,19 +731,39 @@ suEnter:
 ;   dl = left column, dh = top row, cx = width, si = the title
 ; ---------------------------------------------------------------------------
 suDialog:
+    mov     byte [es:SU_DLG_N], SU_DLG_H
+    mov     bh, SU_SEL              ; the editing dialogs sit on a grey panel
+    jmp     suDialogGo
+
+; suDialogN: the same panel, any number of rows, on paper of your choosing.
+;   bl = the height, bh = the paper
+suDialogN:
+    mov     [es:SU_DLG_N], bl
+suDialogGo:
     push    ax
     push    bx
     push    cx
     push    dx
     push    si
+    push    bx
     mov     [es:SU_DLG_L], dl
     mov     [es:SU_DLG_T], dh
     mov     [es:SU_DLG_W], cl
+    mov     [es:SU_DLG_P], bh       ; the paper the body is painted in
+    pop     bx
+    ; the two derived rows are worked out once, because every loop in here
+    ; compares against one of them
+    mov     al, [es:SU_DLG_N]
+    inc     al
+    mov     [es:SU_DLG_E], al
+    dec     al
+    dec     al
+    mov     [es:SU_DLG_B], al
     ; --- the shadow, one row down and two columns right
     mov     byte [es:SU_DLG_R], 1
 .shadow:
     mov     al, [es:SU_DLG_R]
-    cmp     al, SU_DLG_H + 1
+    cmp     al, [es:SU_DLG_E]
     jae     .body
     mov     dh, [es:SU_DLG_T]
     add     dh, al
@@ -672,14 +780,14 @@ suDialog:
     mov     byte [es:SU_DLG_R], 0
 .row:
     mov     al, [es:SU_DLG_R]
-    cmp     al, SU_DLG_H
+    cmp     al, [es:SU_DLG_N]
     jae     .title
     mov     dh, [es:SU_DLG_T]
     add     dh, al
     mov     dl, [es:SU_DLG_L]
     mov     cl, [es:SU_DLG_W]
     mov     al, ' '
-    mov     bl, SU_SEL
+    mov     bl, [es:SU_DLG_P]
     call    suBar
     inc     byte [es:SU_DLG_R]
     jmp     .row
@@ -705,12 +813,12 @@ suDialog:
     mov     dh, [es:SU_DLG_T]
     call    dlgRuleTop
     mov     dh, [es:SU_DLG_T]
-    add     dh, SU_DLG_H - 1
+    add     dh, [es:SU_DLG_B]
     call    dlgRuleBottom
     mov     byte [es:SU_DLG_R], 1
 .side:
     mov     al, [es:SU_DLG_R]
-    cmp     al, SU_DLG_H - 1
+    cmp     al, [es:SU_DLG_B]
     jae     .done
     mov     dh, [es:SU_DLG_T]
     add     dh, al
@@ -2057,7 +2165,12 @@ keyScan:
 ; ---------------------------------------------------------------------------
 ; the strings
 ; ---------------------------------------------------------------------------
-msg_press_del:  db "Press DEL or F2 to enter setup", 13, 10, 0
+msg_press_del:  db "Press DEL for setup, M for options (", 0
+msg_tick:       db "...", 0
+msg_tick_last:  db "..", 0
+; no CRLF on the close: the window is one row, so a newline would scroll the
+; line away at the exact moment the user has to read it
+msg_tick_end:   db ")", 0
 msg_su_title:   db "JSW BIOS Setup Utility", 0
 msg_su_version: db "v0.4", 0
 msg_su_settings: db "Settings", 0

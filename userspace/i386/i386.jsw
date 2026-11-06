@@ -123,6 +123,15 @@ public X.stageW = 640;
 public X.stageH = 480;
 public X.dispCols = 80;
 public X.dispRows = 30;
+/* How many of those cells the stage can show. The stage is measured at boot
+ * (Runtime.stageWidth/Height); on Scratch's own 480 x 360 it is 60 x 22, and
+ * the firmware cuts its console down to that. */
+public X.dispViewCols = 80;
+public X.dispViewRows = 30;
+public X.dispOffX = 0;                   // where the screen starts on the stage
+public X.dispOffY = 0;
+public X.dispViewPort = 1443;            // 0x5A3, read: cells across
+public X.dispRowsPort = 1444;            // 0x5A4, read: cells down
 public X.dispCellW = 8;
 public X.dispCellH = 16;
 public X.dispGlyphH = 15;
@@ -981,6 +990,8 @@ class Cpu {
         if (p == 161) { v = X.pic2Imr; return; }
         if (p == 1016) { v = 96; return; }
         if (p == 1021) { v = 96; return; }
+        if (p == X.dispViewPort) { v = X.dispViewCols; return; }
+        if (p == X.dispRowsPort) { v = X.dispViewRows; return; }
         if (p == X.coreCountPort) { v = X.cores; return; }
         if (p == X.coreIdPort) { v = coreId; return; }
     }

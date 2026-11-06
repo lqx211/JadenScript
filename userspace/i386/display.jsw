@@ -30,6 +30,7 @@ import "assets/lists/font.jsa" as font;
 class Display {
     public void displayStart() { // hook: green flag
         Looks.hide();
+        dispMeasure();
         while (1) {
             if (X.dispReq == 1) {
                 X.dispBooted = 0;
@@ -40,6 +41,29 @@ class Display {
             paintSome();
             Control.wait(0);
         }
+    }
+
+    /* How big is the stage? TurboWarp answers through Runtime.stageWidth and
+     * Runtime.stageHeight; plain Scratch has no such block, the call comes back
+     * empty, and the project falls back to the 640 x 480 the picture was drawn
+     * for. Either way the answer decides how many cells fit and where the
+     * screen sits: a bigger stage gets the screen in the middle of it, a
+     * smaller one gets it in the corner with the firmware printing less. */
+    private void dispMeasure() { // warp
+        _w = Runtime.stageWidth();
+        _h = Runtime.stageHeight();
+        if (_w < 320) { _w = X.stageW; }
+        if (_h < 240) { _h = X.stageH; }
+        X.stageW = _w;
+        X.stageH = _h;
+        X.dispViewCols = _w / X.dispCellW;
+        X.dispViewRows = _h / X.dispCellH;
+        if (X.dispViewCols > X.dispCols) { X.dispViewCols = X.dispCols; }
+        if (X.dispViewRows > X.dispRows) { X.dispViewRows = X.dispRows; }
+        X.dispOffX = (_w - X.dispCols * X.dispCellW) / 2;
+        X.dispOffY = (_h - X.dispRows * X.dispCellH) / 2;
+        if (X.dispOffX < 0) { X.dispOffX = 0; }
+        if (X.dispOffY < 0) { X.dispOffY = 0; }
     }
 
     /* One frame of painting, under warp so a full screen is one frame's work
@@ -93,8 +117,8 @@ class Display {
             Pen.setPenColor(hex);
             X.dispPen = hex;
         }
-        _px = ix - X.stageW / 2;
-        _py = X.stageH / 2 - 1 - iy;
+        _px = ix + X.dispOffX - X.stageW / 2;
+        _py = X.stageH / 2 - 1 - iy - X.dispOffY;
         Motion.setXY(_px, _py);
         Pen.penDown();
         Motion.setXY(_px + 0.01, _py);
@@ -107,8 +131,8 @@ class Display {
             Pen.setPenColor(hex);
             X.dispPen = hex;
         }
-        _px = ix - X.stageW / 2;
-        _py = X.stageH / 2 - 1 - iy;
+        _px = ix + X.dispOffX - X.stageW / 2;
+        _py = X.stageH / 2 - 1 - iy - X.dispOffY;
         Motion.setXY(_px, _py);
         Pen.penDown();
         Motion.setXY(_px + len - 1, _py);
@@ -192,11 +216,20 @@ class Display {
         }
         // The font table is stored bottom row first: item 1 of a glyph is its
         // *last* row. So row `_g` belongs at `y0 + height - _g`, which puts the
-        // glyph in rows 1..15 and leaves row 0 as the blank line above it.
-        _g = 1;
-        while (_g <= X.dispGlyphH) {
-            _bits = font.get(_ch * X.dispGlyphH + _g) + 0;
-            _y = _y0 + X.dispCellH - _g;
+        // The table is stored bottom row first, so the pixel row at height
+        // `r` above the bottom is its entry `r`. A sixteen-pixel cell holds
+        // fifteen rows of glyph, and the missing one is covered by repeating
+        // the top row -- otherwise every vertical rule would have a one-pixel
+        // gap where one cell meets the next, which is what made the borders
+        // look broken.
+        _g = 0;
+        while (_g < X.dispCellH) {
+            _e = X.dispCellH - 1 - _g;
+            if (_e > X.dispGlyphH - 1) {
+                _e = X.dispGlyphH - 1;
+            }
+            _bits = font.get(_ch * X.dispGlyphH + _e) + 0;
+            _y = _y0 + _g;
             pixelRun(_x0, _y, X.dispCellW, _pap);
             if (_bits > 0) {
                 _b = 0;
@@ -226,7 +259,6 @@ class Display {
             }
             _g += 1;
         }
-        pixelRun(_x0, _y0, X.dispCellW, _pap);
         /* Only now, with the pixels on the canvas: warp yields inside a long
          * batch, and a cell marked drawn before its last stroke would be a
          * hole that never fills. */

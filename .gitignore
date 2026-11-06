@@ -14,6 +14,10 @@ build/
 
 # generated next to the sources
 userspace/*/*.bin
+userspace/*/*.bin.id0
+userspace/*/*.bin.id1
+userspace/*/*.bin.nam
+userspace/*/*.bin.til
 userspace/*/*.lst
 userspace/*/*.elf
 userspace/*/*.img

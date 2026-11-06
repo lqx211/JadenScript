@@ -268,8 +268,10 @@ def build() -> list[str]:
     for code in range(ASCII_FIRST, ASCII_LAST + 1):
         base = (code - ASCII_FIRST) * ROWS
         table[code * ROWS : (code + 1) * ROWS] = ascii_rows[base : base + ROWS]
+    # Everything above is drawn top row first, but the table (like the ASCII
+    # rows it was seeded from) is stored bottom row first, so flip on the way in.
     for code, rows in build_extras().items():
-        table[code * ROWS : (code + 1) * ROWS] = rows
+        table[code * ROWS : (code + 1) * ROWS] = rows[::-1]
     return [str(v) for v in table]
 
 

@@ -125,10 +125,14 @@ i386:
 i386-check:
 	$(PY) tools/i386_jsw_check.py --steps 30000
 
-# the same comparison through the setup utility: press Delete and follow the
-# machine into the CMOS editor, all 460,000 instructions of it
+# the same comparison into the setup utility: Delete stops the countdown and
+# opens the setup straight away
 i386-setup-check:
-	$(PY) tools/i386_jsw_check.py --keys 0x53 --steps 460000 --no-build
+	$(PY) tools/i386_jsw_check.py --keys 0x53 --steps 900000 --no-build
+
+# and through the boot menu: M stops the countdown, Down twice reaches "Reboot"
+i386-menu-check:
+	$(PY) tools/i386_jsw_check.py --keys 0x32,0x50,0x50 --steps 900000 --no-build
 
 # paging, end to end: M-mode builds a table and turns satp on, S-mode reads the
 # same word under two names and then faults on purpose into stvec

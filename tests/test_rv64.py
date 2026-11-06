@@ -2108,13 +2108,38 @@ class Rv64FontTests(unittest.TestCase):
         self.assertLessEqual(max(bin(v).count("1") for v in glyph), 2, "it is a double line")
 
     def test_the_arrows_point_the_way_they_say(self) -> None:
+        """The table is stored bottom row first, so a high index is high up."""
         def width(code, row):
             return bin(self.rows[code * ROWS_PER_GLYPH + row]).count("1")
 
-        # 0x1E is up: narrow at the top, wide at the bottom
-        self.assertLess(width(0x1E, 3), width(0x1E, 9))
-        # 0x1F is down: wide at the top
-        self.assertGreater(width(0x1F, 4), width(0x1F, 10))
+        # 0x1E is up: one pixel at the apex, the full row at the base
+        self.assertEqual(width(0x1E, 11), 1)
+        self.assertEqual(width(0x1E, 5), 8)
+        # 0x1F is down: the other way round
+        self.assertEqual(width(0x1F, 10), 8)
+        self.assertEqual(width(0x1F, 4), 1)
+        # 0x18/0x19 are the thin arrows, head first
+        self.assertGreater(width(0x18, 11), width(0x18, 13))
+        self.assertGreater(width(0x19, 3), width(0x19, 1))
+
+    def test_a_box_corner_turns_the_right_way(self) -> None:
+        """0xDA is the top left corner: the rule is at the junction row and the
+        post hangs below it. Flipped, and every frame on the screen has a stub
+        of line above its own top edge -- which is what it looked like."""
+        def row(code, i):
+            return self.rows[code * ROWS_PER_GLYPH + i]
+
+        top_left = [row(0xDA, i) for i in range(ROWS_PER_GLYPH)]
+        # the horizontal sits in the middle, with nothing above it
+        self.assertTrue(any(v == 0x1F for v in top_left), "0xDA has no rule")
+        middle = next(i for i, v in enumerate(top_left) if v == 0x1F)
+        self.assertFalse(any(top_left[middle + 1:]), "0xDA has a stub above its rule")
+        self.assertTrue(all(v for v in top_left[:middle]), "0xDA has no post below")
+        # and 0xC0, the bottom left, is the other way round
+        bottom_left = [row(0xC0, i) for i in range(ROWS_PER_GLYPH)]
+        middle = next(i for i, v in enumerate(bottom_left) if v == 0x1F)
+        self.assertFalse(any(bottom_left[:middle]), "0xC0 has a stub below its rule")
+        self.assertTrue(all(v for v in bottom_left[middle + 1:]), "0xC0 has no post above")
 
     def test_the_painter_indexes_by_character_code(self) -> None:
         text = (RVDIR / "display.jsw").read_text(encoding="utf-8")
