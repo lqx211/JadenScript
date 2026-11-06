@@ -1,4 +1,5 @@
 # python / node
+.venv/
 __pycache__/
 *.pyc
 *.egg-info/

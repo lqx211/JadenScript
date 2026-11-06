@@ -102,8 +102,8 @@ class I386BootTests(unittest.TestCase):
     def test_the_segment_wrap_is_twenty_bits(self) -> None:
         """0xFFFF:0x0010 is the bottom of memory on a machine with no A20 gate."""
         mach = rv.Machine()
-        self.assertEqual(mach.phys(0xFFFF, 0x0010), 0x00000)
-        self.assertEqual(mach.phys(0xF000, 0xFFF0), 0xFFFF0)
+        self.assertEqual(mach.linear(0xFFFF, 0x0010), 0x00000)
+        self.assertEqual(mach.linear(0xF000, 0xFFF0), 0xFFFF0)
 
     def test_the_reset_vector_jumps_to_the_rom(self) -> None:
         image = i386_image.build()
@@ -731,6 +731,50 @@ class I386JswTests(unittest.TestCase):
         before = env.lists["X.bios"][1]
         run("wrb", [0xF0000, 0x5A])
         self.assertEqual(env.lists["X.bios"][1], before)
+
+
+class I386RealRomTests(unittest.TestCase):
+    """The other BIOS: the one somebody else wrote.
+
+    Our own firmware is proof that the machine works when every instruction is
+    one we chose.  This runs Debian's SeaBIOS image -- the firmware QEMU uses
+    for real virtual machines -- which is proof of something stronger: the
+    machine can run code that was compiled for a 386 by a C compiler and never
+    saw our source.  The image is not in the repository; without it these tests
+    skip and the rest of the suite is unaffected.
+    """
+
+    IMAGE = ROOT / "build/seabios/root/usr/share/seabios/bios.bin"
+
+    def setUp(self) -> None:
+        if not self.IMAGE.exists():
+            self.skipTest("SeaBIOS image not present (see tools/seabios_probe.py)")
+
+    def boot_rom(self, limit: int) -> rv.Machine:
+        mach = rv.Machine()
+        image = self.IMAGE.read_bytes()
+        mach.ram[0x10_0000 - len(image):] = image
+        mach.sreg[rv.SEG_CS] = 0xF000
+        mach.eip = 0xFFF0
+        for _ in range(limit):
+            mach.step()
+        return mach
+
+    def test_real_seabios_switches_to_protected_mode(self) -> None:
+        """The third thing SeaBIOS does is `lgdt`, `mov cr0`, `ljmp` -- and
+        before this step the machine stopped dead on the first of them."""
+        mach = self.boot_rom(40)
+        self.assertTrue(mach.pe, "CR0.PE after the far jump")
+        self.assertEqual(mach.sreg[rv.SEG_CS], 0x08, "the 32-bit code selector")
+        self.assertEqual(mach.dsz, 4, "and the code segment is 32-bit")
+
+    def test_real_seabios_runs_a_hundred_thousand_instructions(self) -> None:
+        """No unknown instruction for a long way in: this is a compiler's
+        output, not ours, so it wanders through the whole instruction set."""
+        mach = self.boot_rom(100_000)
+        self.assertTrue(mach.pe)
+        self.assertEqual(mach.sreg[rv.SEG_CS], 0x08)
+        self.assertGreater(mach.eip, 0x000E_0000, "still inside the ROM")
 
 
 if __name__ == "__main__":

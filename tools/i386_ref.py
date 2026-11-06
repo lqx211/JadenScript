@@ -295,6 +295,19 @@ class Machine:
         self.ram_size = ram_size
         self.reg = [0] * 8
         self.sreg = [0] * 6
+        # the segment registers' hidden halves: what each selector last meant
+        self.base = [0] * 6
+        self.limit = [0xFFFF] * 6
+        # the control registers and the two table registers
+        self.cr = [0] * 5
+        self.gdtr = [0, 0]
+        self.idtr = [0, 0]
+        self.ldtr = 0
+        self.tr = 0
+        self.pe = False
+        self.dsz = 2                 # default operand size of the code we run
+        self.ipmask = 0xFFFF
+        self.spmask = 0xFFFF
         self.eip = 0
         self.eflags = FLAG_ALWAYS | FLAG_IF
         self.halted = False
@@ -328,20 +341,92 @@ class Machine:
     # ---- memory ------------------------------------------------------
 
     def phys(self, seg, off):
-        return ((seg << 4) + off) & 0xFFFFF
+        """seg is an index into the six segment registers, not a selector."""
+        return (self.sbase(seg) + off) & 0xFFFFF
+
+    def linear(self, selector, off):
+        """The 20-bit address a real-mode selector:offset pair names."""
+        return ((selector << 4) + off) & 0xFFFFF
 
     def read(self, addr, size):
         addr &= 0xFFFFF
+        if addr + size > self.ram_size:
+            return MASK[size]      # nothing there: an open bus reads all ones
         return int.from_bytes(self.ram[addr:addr + size], "little")
 
     def write(self, addr, value, size):
         addr &= 0xFFFFF
+        if addr + size > self.ram_size:
+            return                 # and a write to nothing goes nowhere
         self.ram[addr:addr + size] = (value & MASK[size]).to_bytes(size, "little")
 
     # ---- registers ---------------------------------------------------
 
     def sbase(self, index):
+        """Where a segment starts.  Real mode computes it from the selector
+        every time; protected mode uses the descriptor the selector was loaded
+        with, which is why the cached copy has to exist at all."""
+        if self.pe:
+            return self.base[index]
         return self.sreg[index] << 4
+
+    # ---- protected mode ----------------------------------------------
+
+    def descriptor(self, selector):
+        """The hidden half of a segment register: base, limit and flags, read
+        out of the descriptor table the selector points into."""
+        if selector & 4:
+            table = self.ldtr if self.ldtr else 0
+        else:
+            table = self.gdtr[0]
+        at = table + (selector & ~7)
+        raw = self.read(at, 4) | (self.read(at + 4, 4) << 32)
+        base = ((raw >> 16) & 0xFFFF) | (((raw >> 32) & 0xFF) << 16) | ((raw >> 56) << 24)
+        limit = (raw & 0xFFFF) | (((raw >> 48) & 0x0F) << 16)
+        # the two attribute bytes are not adjacent: the access byte is next to
+        # the base, the flags nibble (which holds D, the 32-bit switch) sits
+        # above the limit. Reading D out of the access byte is a quiet way to
+        # stay in 16-bit mode for ever.
+        return base, limit, (raw >> 40) & 0xFF, (raw >> 52) & 0x0F
+
+    def write_cr0(self, value):
+        """CR0's low bit is the whole 8086-to-386 switch. Entering protected
+        mode changes nothing until a segment is reloaded, which is what makes
+        the far jump after it meaningful; leaving reloads the six registers
+        back to plain real-mode bases, because the selectors they hold no
+        longer index anything."""
+        was = self.pe
+        self.cr[0] = value & 0xFFFF_FFFF
+        self.pe = bool(value & 1)
+        if not was and self.pe:
+            for i in range(6):          # the cached halves keep their values
+                self.base[i] = self.sreg[i] << 4
+                self.limit[i] = 0xFFFF
+        if was and not self.pe:
+            for i in range(6):
+                self.base[i] = self.sreg[i] << 4
+                self.limit[i] = 0xFFFF
+            self.dsz = 2
+            self.ipmask = 0xFFFF
+            self.spmask = 0xFFFF
+
+    def loadseg(self, index, selector):
+        """Point a segment register at a selector, and cache what it means."""
+        selector &= 0xFFFF
+        self.sreg[index] = selector
+        flags = 0
+        if not self.pe:
+            self.base[index] = selector << 4
+            self.limit[index] = 0xFFFF
+        else:
+            self.base[index], self.limit[index], _attr, flags = self.descriptor(selector)
+        if index == SEG_CS:
+            # the D bit decides what an unprefixed instruction means: a 32-bit
+            # code segment reads `push eax` as four bytes, a 16-bit one as two
+            wide = self.pe and bool(flags & 0x4)
+            self.dsz = 4 if wide else 2
+            self.ipmask = 0xFFFF_FFFF if wide else 0xFFFF
+            self.spmask = 0xFFFF_FFFF if wide else 0xFFFF
 
     def get8(self, index):
         reg = self.reg[index & 3]
@@ -444,7 +529,9 @@ class Machine:
         if port == 0x71:
             self.cmos[self.cmos_index & 0x7F] = value & 0xFF
             return
-        if port == 0x3F8:
+        if port in (0x3F8, 0x402):
+            # 0x3F8 is the first serial port; 0x402 is the port QEMU and
+            # SeaBIOS agree to use for debug output. Both end up in `out`.
             self.out.append(value & 0xFF)
         self.ports[port] = value & 0xFF
 
@@ -452,7 +539,7 @@ class Machine:
 
     def fetch8(self):
         value = self.read(self.sbase(SEG_CS) + self.eip, 1)
-        self.eip = (self.eip + 1) & 0xFFFF
+        self.eip = (self.eip + 1) & self.ipmask
         return value
 
     def fetch16(self):
@@ -465,16 +552,25 @@ class Machine:
             value |= self.fetch8() << (8 * i)
         return value
 
-    def modrm(self, seg=SEG_DS):
+    def modrm(self, seg=SEG_DS, addr_size=2):
         """ModR/M -> (mod, reg, rm, address). Register operands share the
         number: on x86 `rm` is a register when mod is 3 and a memory operand
-        otherwise, which is why the two live in one field."""
+        otherwise, which is why the two live in one field.
+
+        32-bit addressing adds one indirection: `[base + index*scale + disp]`
+        is spelled with a second byte (the SIB) when rm is 4, and the offsets
+        are 32 bits wide.  The 16-bit form is a fixed table of base and index
+        registers instead, so the two are written out separately rather than
+        forced through one formula.
+        """
         byte = self.fetch8()
         mod = byte >> 6
         reg = (byte >> 3) & 7
         rm = byte & 7
         if mod == 3:
             return mod, reg, rm, None
+        if addr_size == 4:
+            return mod, reg, rm, self.phys_32(seg, mod, rm)
         base = {0: 3, 1: 3, 2: 5, 3: 5, 4: 6, 5: 7, 6: 5, 7: 3}[rm]
         index = {0: 6, 1: 7, 2: 6, 3: 7}.get(rm)
         if rm == 6 and mod == 0:
@@ -491,7 +587,35 @@ class Machine:
                 off += sext(self.fetch8(), 8)
             elif mod == 2:
                 off += self.fetch16()
-        return mod, reg, rm, self.phys(self.sreg[seg], off & 0xFFFF)
+        return mod, reg, rm, self.phys(seg, off & 0xFFFF)
+
+    def phys_32(self, seg, mod, rm):
+        """The 32-bit ModR/M addressing forms, SIB included."""
+        off = 0
+        if rm == 4:                                # a SIB byte follows
+            sib = self.fetch8()
+            scale = 1 << (sib >> 6)
+            index = (sib >> 3) & 7
+            base = sib & 7
+            if index != 4:                         # index 4 is "no index"
+                off = (self.reg[index] & 0xFFFF_FFFF) * scale
+            if base == 5 and mod == 0:
+                off += self.fetch32()
+            else:
+                off += self.reg[base] & 0xFFFF_FFFF
+                if base in (4, 5):                 # [esp] and [ebp] read the stack
+                    seg = SEG_SS
+        elif rm == 5 and mod == 0:                 # a bare disp32
+            off = self.fetch32()
+        else:
+            off += self.reg[rm] & 0xFFFF_FFFF
+            if rm == 5:
+                seg = SEG_SS
+        if mod == 1:
+            off += sext(self.fetch8(), 8)
+        elif mod == 2:
+            off += self.fetch32()
+        return self.phys(seg, off & 0xFFFF_FFFF)
 
     def rm_read(self, mod, rm, addr, size):
         if mod == 3:
@@ -573,13 +697,13 @@ class Machine:
 
     # ---- stack -------------------------------------------------------
 
-    def push(self, value):
-        self.reg[4] = (self.reg[4] - 2) & 0xFFFF
-        self.write(self.phys(self.sreg[SEG_SS], self.reg[4]), value, 2)
+    def push(self, value, size=2):
+        self.reg[4] = (self.reg[4] - size) & self.spmask
+        self.write(self.phys(SEG_SS, self.reg[4]), value, size)
 
-    def pop(self):
-        value = self.read(self.phys(self.sreg[SEG_SS], self.reg[4]), 2)
-        self.reg[4] = (self.reg[4] + 2) & 0xFFFF
+    def pop(self, size=2):
+        value = self.read(self.phys(SEG_SS, self.reg[4]), size)
+        self.reg[4] = (self.reg[4] + size) & self.spmask
         return value
 
     def raise_irq(self, irq: int) -> None:
@@ -650,18 +774,28 @@ class Machine:
         self.halted = False
 
     def interrupt(self, number):
-        self.push(self.eflags & 0xFFFF)
-        self.push(self.sreg[SEG_CS])
-        self.push(self.eip)
+        size = self.dsz
+        self.push(self.eflags & MASK[size], size)
+        self.push(self.sreg[SEG_CS], size)
+        self.push(self.eip & MASK[size], size)
         self.set_flag(FLAG_IF, False)
         self.set_flag(FLAG_TF, False)
-        self.sreg[SEG_CS] = self.read(number * 4 + 2, 2)
-        self.eip = self.read(number * 4, 2)
+        if self.pe:
+            # an interrupt gate is eight bytes: offset, selector, attributes,
+            # and the top half of the offset on a 386
+            at = self.idtr[0] + number * 8
+            off = self.read(at, 2) | (self.read(at + 6, 2) << 16)
+            self.loadseg(SEG_CS, self.read(at + 2, 2))
+            self.eip = off & self.ipmask
+        else:
+            self.loadseg(SEG_CS, self.read(number * 4 + 2, 2))
+            self.eip = self.read(number * 4, 2)
 
     def iret(self):
-        self.eip = self.pop()
-        self.sreg[SEG_CS] = self.pop()
-        self.eflags = (self.eflags & 0xFFFF_0000) | self.pop() | FLAG_ALWAYS
+        size = self.dsz
+        self.eip = self.pop(size) & self.ipmask
+        self.loadseg(SEG_CS, self.pop(size))
+        self.eflags = (self.eflags & ~MASK[size]) | self.pop(size) | FLAG_ALWAYS
 
     # ---- output ------------------------------------------------------
 
@@ -709,16 +843,18 @@ def execute(m):
     ALU family and the ModR/M groups handled as families rather than as sixty
     separate cases, because that is what they are.
     """
-    size = 2
-    addr_size = 2
+    size = None                       # None means "whatever the code segment says"
+    addr_size = None
     seg = SEG_DS
     rep = 0
     while True:
         op = m.fetch8()
         if op == 0x66:
-            size = 4 if size == 2 else 2
+            base = m.dsz if size is None else size
+            size = 4 if base == 2 else 2
         elif op == 0x67:
-            addr_size = 4 if addr_size == 2 else 2
+            base = m.dsz if addr_size is None else addr_size
+            addr_size = 4 if base == 2 else 2
         elif op in (0x26, 0x2E, 0x36, 0x3E, 0x64, 0x65):
             seg = {0x26: SEG_ES, 0x2E: SEG_CS, 0x36: SEG_SS,
                    0x3E: SEG_DS, 0x64: SEG_FS, 0x65: SEG_GS}[op]
@@ -728,33 +864,36 @@ def execute(m):
             pass                                    # LOCK: single-threaded anyway
         else:
             break
-    if addr_size != 2:
-        raise NotImplementedError("32-bit addressing is the next step")
+    if size is None:
+        size = m.dsz
+    if addr_size is None:
+        addr_size = m.dsz
+    amask = MASK[addr_size]
 
     # ---- the eight-op ALU family, 0x00 .. 0x3D ----
     if op < 0x40 and (op & 7) < 6:
         alu_op = op >> 3
         form = op & 7
         if form == 0:                                # r/m8, r8
-            mod, reg, rm, addr = m.modrm(seg)
+            mod, reg, rm, addr = m.modrm(seg, addr_size)
             res = m.alu(alu_op, m.rm_read(mod, rm, addr, 1), m.get8(reg), 1)
             if alu_op != 7:
                 m.rm_write(mod, rm, addr, res, 1)
             return
         if form == 1:                                # r/m16|32, r16|32
-            mod, reg, rm, addr = m.modrm(seg)
+            mod, reg, rm, addr = m.modrm(seg, addr_size)
             res = m.alu(alu_op, m.rm_read(mod, rm, addr, size), m.getreg(reg, size), size)
             if alu_op != 7:
                 m.rm_write(mod, rm, addr, res, size)
             return
         if form == 2:                                # r8, r/m8
-            mod, reg, rm, addr = m.modrm(seg)
+            mod, reg, rm, addr = m.modrm(seg, addr_size)
             res = m.alu(alu_op, m.get8(reg), m.rm_read(mod, rm, addr, 1), 1)
             if alu_op != 7:
                 m.set8(reg, res)
             return
         if form == 3:                                # r16|32, r/m16|32
-            mod, reg, rm, addr = m.modrm(seg)
+            mod, reg, rm, addr = m.modrm(seg, addr_size)
             res = m.alu(alu_op, m.getreg(reg, size), m.rm_read(mod, rm, addr, size), size)
             if alu_op != 7:
                 m.setreg(reg, res, size)
@@ -780,51 +919,48 @@ def execute(m):
         m.setreg(i, m.alu(5, m.getreg(i, size), 1, size), size)
         return
     if 0x50 <= op <= 0x57:
-        if size == 4:
-            m.push(m.reg[op & 7] & 0xFFFF)           # 16-bit stack in real mode
-        else:
-            m.push(m.reg[op & 7] & 0xFFFF)
+        m.push(m.reg[op & 7], size)
         return
     if 0x58 <= op <= 0x5F:
-        m.setreg(op & 7, m.pop(), 2)
+        m.setreg(op & 7, m.pop(size), size)
         return
     if op == 0x06:
-        m.push(m.sreg[SEG_ES]); return
+        m.push(m.sreg[SEG_ES], size); return
     if op == 0x0E:
-        m.push(m.sreg[SEG_CS]); return
+        m.push(m.sreg[SEG_CS], size); return
     if op == 0x16:
-        m.push(m.sreg[SEG_SS]); return
+        m.push(m.sreg[SEG_SS], size); return
     if op == 0x1E:
-        m.push(m.sreg[SEG_DS]); return
+        m.push(m.sreg[SEG_DS], size); return
     if op == 0x07:
-        m.sreg[SEG_ES] = m.pop(); return
+        m.loadseg(SEG_ES, m.pop(size)); return
     if op == 0x17:
-        m.sreg[SEG_SS] = m.pop(); return
+        m.loadseg(SEG_SS, m.pop(size)); return
     if op == 0x1F:
-        m.sreg[SEG_DS] = m.pop(); return
+        m.loadseg(SEG_DS, m.pop(size)); return
     if op == 0x60:
         sp = m.reg[4]
         for i in (0, 1, 2, 3):
-            m.push(m.reg[i] & 0xFFFF)
-        m.push(sp)
+            m.push(m.reg[i], size)
+        m.push(sp, size)
         return
     if op == 0x61:
         for i in (7, 6, 5, 4, 3, 2, 1, 0):
-            value = m.pop()
+            value = m.pop(size)
             if i != 4:
-                m.setreg(i, value, 2)
+                m.setreg(i, value, size)
             elif i == 4:
-                m.pop()                              # sp itself is discarded
+                pass                                 # sp itself is discarded
         return
     if op == 0x68:
         imm = m.fetch32() if size == 4 else m.fetch16()
-        m.push(imm & 0xFFFF)
+        m.push(imm, size)
         return
     if op == 0x6A:
-        m.push(sext(m.fetch8(), 8) & 0xFFFF)
+        m.push(sext(m.fetch8(), 8), size)
         return
     if op in (0x69, 0x6B):
-        mod, reg, rm, addr = m.modrm(seg)
+        mod, reg, rm, addr = m.modrm(seg, addr_size)
         a = m.rm_read(mod, rm, addr, size)
         imm = (m.fetch32() if size == 4 else m.fetch16()) if op == 0x69 else sext(m.fetch8(), 8)
         m.setreg(reg, a * imm, size)
@@ -835,10 +971,10 @@ def execute(m):
         cond = branch_condition(m, op & 0x0F)
         rel = sext(m.fetch8(), 8)
         if cond:
-            m.eip = (m.eip + rel) & 0xFFFF
+            m.eip = (m.eip + rel) & m.ipmask
         return
     if op in (0x80, 0x81, 0x82, 0x83):
-        mod, reg, rm, addr = m.modrm(seg)
+        mod, reg, rm, addr = m.modrm(seg, addr_size)
         wide = op in (0x81, 0x83)
         osize = size if wide else 1
         if op == 0x81:
@@ -854,12 +990,12 @@ def execute(m):
         return
     if op in (0x84, 0x85):
         osize = 1 if op == 0x84 else size
-        mod, reg, rm, addr = m.modrm(seg)
+        mod, reg, rm, addr = m.modrm(seg, addr_size)
         m.alu(4, m.rm_read(mod, rm, addr, osize), m.getreg(reg, osize), osize)
         return
     if op in (0x86, 0x87):
         osize = 1 if op == 0x86 else size
-        mod, reg, rm, addr = m.modrm(seg)
+        mod, reg, rm, addr = m.modrm(seg, addr_size)
         a = m.rm_read(mod, rm, addr, osize)
         b = m.getreg(reg, osize)
         m.rm_write(mod, rm, addr, b, osize)
@@ -867,30 +1003,30 @@ def execute(m):
         return
     if 0x88 <= op <= 0x8B:
         osize = 1 if op in (0x88, 0x8A) else size
-        mod, reg, rm, addr = m.modrm(seg)
+        mod, reg, rm, addr = m.modrm(seg, addr_size)
         if op in (0x88, 0x89):
             m.rm_write(mod, rm, addr, m.getreg(reg, osize), osize)
         else:
             m.setreg(reg, m.rm_read(mod, rm, addr, osize), osize)
         return
     if op == 0x8C:
-        mod, reg, rm, addr = m.modrm(seg)
+        mod, reg, rm, addr = m.modrm(seg, addr_size)
         if reg < 6:
             m.rm_write(mod, rm, addr, m.sreg[reg], 2)
         return
     if op == 0x8E:
-        mod, reg, rm, addr = m.modrm(seg)
+        mod, reg, rm, addr = m.modrm(seg, addr_size)
         value = m.rm_read(mod, rm, addr, 2)
         if reg < 6:
-            m.sreg[reg] = value
+            m.loadseg(reg, value)
         return
     if op == 0x8D:
-        mod, reg, rm, addr = m.modrm(seg)
+        mod, reg, rm, addr = m.modrm(seg, addr_size)
         m.setreg(reg, addr if addr is not None else 0, size)
         return
     if op == 0x8F:
-        mod, reg, rm, addr = m.modrm(seg)
-        m.rm_write(mod, rm, addr, m.pop(), 2)
+        mod, reg, rm, addr = m.modrm(seg, addr_size)
+        m.rm_write(mod, rm, addr, m.pop(size), size)
         return
     if 0x90 <= op <= 0x97:
         i = op & 7
@@ -908,16 +1044,16 @@ def execute(m):
     if op == 0x9A:
         off = m.fetch16()
         segv = m.fetch16()
-        m.push(m.sreg[SEG_CS])
-        m.push(m.eip)
-        m.sreg[SEG_CS] = segv
-        m.eip = off
+        m.push(m.sreg[SEG_CS], size)
+        m.push(m.eip, size)
+        m.loadseg(SEG_CS, segv)
+        m.eip = off & m.ipmask
         return
     if op == 0x9C:
-        m.push(m.eflags & 0xFFFF)
+        m.push(m.eflags & MASK[size], size)
         return
     if op == 0x9D:
-        m.eflags = (m.eflags & 0xFFFF_0000) | m.pop() | FLAG_ALWAYS
+        m.eflags = (m.eflags & ~MASK[size]) | m.pop(size) | FLAG_ALWAYS
         return
     if op == 0x9E:
         m.eflags = (m.eflags & ~0xFF) | (m.get8(4) & 0xD5) | FLAG_ALWAYS
@@ -926,7 +1062,9 @@ def execute(m):
         m.set8(4, m.eflags & 0xD7)
         return
     if 0xA0 <= op <= 0xA3:
-        addr = m.phys(m.sreg[seg], m.fetch16())
+        # moffs: the displacement is as wide as an address, not as wide as the
+        # data it moves
+        addr = m.phys(seg, m.fetch32() if addr_size == 4 else m.fetch16())
         if op in (0xA0, 0xA1):
             osize = 1 if op == 0xA0 else size
             m.setreg(0, m.read(addr, osize), osize)
@@ -935,7 +1073,7 @@ def execute(m):
             m.write(addr, m.getreg(0, osize), osize)
         return
     if 0xA4 <= op <= 0xA7 or 0xAA <= op <= 0xAF:
-        string_op(m, op, size, seg, rep)
+        string_op(m, op, size, seg, rep, addr_size)
         return
     if op in (0xA8, 0xA9):
         osize = 1 if op == 0xA8 else size
@@ -950,7 +1088,7 @@ def execute(m):
         return
     if op in (0xC0, 0xC1, 0xD0, 0xD1, 0xD2, 0xD3):
         osize = 1 if op in (0xC0, 0xD0, 0xD2) else size
-        mod, reg, rm, addr = m.modrm(seg)
+        mod, reg, rm, addr = m.modrm(seg, addr_size)
         if op in (0xD0, 0xD1):
             count = 1
         elif op in (0xD2, 0xD3):
@@ -961,20 +1099,20 @@ def execute(m):
         return
     if op == 0xC2:
         off = m.fetch16()
-        m.eip = m.pop()
+        m.eip = m.pop(size) & m.ipmask
         m.reg[4] = (m.reg[4] + off) & 0xFFFF
         return
     if op == 0xC3:
-        m.eip = m.pop()
+        m.eip = m.pop(size) & m.ipmask
         return
     if op in (0xC4, 0xC5):
-        mod, reg, rm, addr = m.modrm(seg)
+        mod, reg, rm, addr = m.modrm(seg, addr_size)
         m.setreg(reg, m.read(addr, 4) & 0xFFFF, 2)
-        m.sreg[SEG_ES if op == 0xC4 else SEG_DS] = m.read(addr + 2, 2)
+        m.loadseg(SEG_ES if op == 0xC4 else SEG_DS, m.read(addr + 2, 2))
         return
     if op in (0xC6, 0xC7):
         osize = 1 if op == 0xC6 else size
-        mod, reg, rm, addr = m.modrm(seg)
+        mod, reg, rm, addr = m.modrm(seg, addr_size)
         imm = m.fetch8() if op == 0xC6 else (m.fetch32() if size == 4 else m.fetch16())
         m.rm_write(mod, rm, addr, imm, osize)
         return
@@ -985,7 +1123,7 @@ def execute(m):
         frame = m.reg[4]
         for _ in range(depth):
             m.reg[5] = (m.reg[5] - 2) & 0xFFFF
-            m.push(m.read(m.phys(m.sreg[SEG_SS], m.reg[5]), 2))
+            m.push(m.read(m.phys(SEG_SS, m.reg[5]), 2))
         if depth:
             m.push(frame)
         m.reg[5] = frame
@@ -993,17 +1131,17 @@ def execute(m):
         return
     if op == 0xC9:
         m.reg[4] = m.reg[5]
-        m.reg[5] = m.pop()
+        m.reg[5] = m.pop(size)
         return
     if op == 0xCA:
         off = m.fetch16()
-        m.eip = m.pop()
-        m.sreg[SEG_CS] = m.pop()
+        m.eip = m.pop(size) & m.ipmask
+        m.loadseg(SEG_CS, m.pop(size))
         m.reg[4] = (m.reg[4] + off) & 0xFFFF
         return
     if op == 0xCB:
-        m.eip = m.pop()
-        m.sreg[SEG_CS] = m.pop()
+        m.eip = m.pop(size) & m.ipmask
+        m.loadseg(SEG_CS, m.pop(size))
         return
     if op == 0xCC:
         m.interrupt(3)
@@ -1032,7 +1170,7 @@ def execute(m):
         else:
             taken = m.reg[1] == 0
         if taken:
-            m.eip = (m.eip + rel) & 0xFFFF
+            m.eip = (m.eip + rel) & m.ipmask
         return
     if 0xE4 <= op <= 0xE7:
         port = m.fetch8()
@@ -1047,18 +1185,18 @@ def execute(m):
         rel = m.fetch32() if size == 4 else m.fetch16()   # 66 E8 is call rel32
         rel = sext(rel, 16) if size == 2 else sext(rel, 32)
         if op == 0xE8:
-            m.push(m.eip)
-        m.eip = (m.eip + rel) & 0xFFFF
+            m.push(m.eip, size)
+        m.eip = (m.eip + rel) & m.ipmask
         return
     if op == 0xEA:
-        off = m.fetch16()
+        off = m.fetch32() if size == 4 else m.fetch16()
         segv = m.fetch16()
-        m.sreg[SEG_CS] = segv
+        m.loadseg(SEG_CS, segv)
         m.eip = off
         return
     if op == 0xEB:
         rel = sext(m.fetch8(), 8)          # fetch first: m.eip must be the next
-        m.eip = (m.eip + rel) & 0xFFFF     # instruction, not the displacement
+        m.eip = (m.eip + rel) & m.ipmask   # instruction, not the displacement
         return
     if 0xEC <= op <= 0xEF:
         port = m.reg[2] & 0xFFFF
@@ -1074,7 +1212,7 @@ def execute(m):
         return
     if op in (0xF6, 0xF7):
         osize = 1 if op == 0xF6 else size
-        mod, reg, rm, addr = m.modrm(seg)
+        mod, reg, rm, addr = m.modrm(seg, addr_size)
         value = m.rm_read(mod, rm, addr, osize)
         if reg == 0:
             imm = m.fetch8() if osize == 1 else (m.fetch32() if size == 4 else m.fetch16())
@@ -1152,7 +1290,7 @@ def execute(m):
         m.set8(0, 0xFF if m.flag(FLAG_CF) else 0x00)
         return
     if op == 0xD7:                           # xlat: al = [seg:bx + al]
-        addr = m.phys(m.sreg[seg], (m.reg[3] + m.get8(0)) & 0xFFFF)
+        addr = m.phys(seg, (m.reg[3] + m.get8(0)) & amask)
         m.set8(0, m.read(addr, 1))
         return
     if op == 0x9B:                           # wait: there is no coprocessor
@@ -1161,7 +1299,7 @@ def execute(m):
         m.interrupt(1)
         return
     if op == 0x63:                           # arpl
-        mod, reg, rm, addr = m.modrm(seg)
+        mod, reg, rm, addr = m.modrm(seg, addr_size)
         dest = m.rm_read(mod, rm, addr, 2)
         src = m.getreg(reg, 2)
         take = (dest & 3) < (src & 3)
@@ -1170,7 +1308,7 @@ def execute(m):
             m.rm_write(mod, rm, addr, (dest & 0xFFFC) | (src & 3), 2)
         return
     if op == 0x62:                           # bound: #BR when out of range
-        mod, reg, rm, addr = m.modrm(seg)
+        mod, reg, rm, addr = m.modrm(seg, addr_size)
         index = m.getreg(reg, 2)
         low = m.read(addr, 2)
         high = m.read(addr + 2, 2)
@@ -1191,12 +1329,12 @@ def execute(m):
         for _ in range(count):
             if op in (0x6C, 0x6D):           # ins: port -> es:di
                 value = m.port_in(m.reg[2] & 0xFFFF, osize)
-                m.write(m.phys(m.sreg[SEG_ES], m.reg[7] & 0xFFFF), value, osize)
-                m.reg[7] = (m.reg[7] + delta) & 0xFFFF
+                m.write(m.phys(SEG_ES, m.reg[7] & amask), value, osize)
+                m.reg[7] = (m.reg[7] + delta) & amask
             else:                            # outs: ds:si -> port
-                value = m.read(m.phys(m.sreg[seg], m.reg[6] & 0xFFFF), osize)
+                value = m.read(m.phys(seg, m.reg[6] & amask), osize)
                 m.port_out(m.reg[2] & 0xFFFF, value, osize)
-                m.reg[6] = (m.reg[6] + delta) & 0xFFFF
+                m.reg[6] = (m.reg[6] + delta) & amask
         if rep == 0xF3:
             m.reg[1] = 0
         return
@@ -1219,7 +1357,7 @@ def execute(m):
         return
     if op in (0xFE, 0xFF):
         osize = 1 if op == 0xFE else size
-        mod, reg, rm, addr = m.modrm(seg)
+        mod, reg, rm, addr = m.modrm(seg, addr_size)
         if op == 0xFE:
             value = m.rm_read(mod, rm, addr, 1)
             res = m.alu(0 if reg == 0 else 5, value, 1, 1)
@@ -1230,22 +1368,22 @@ def execute(m):
         elif reg == 1:
             m.rm_write(mod, rm, addr, m.alu(5, m.rm_read(mod, rm, addr, osize), 1, osize), osize)
         elif reg == 2:
-            target = m.rm_read(mod, rm, addr, 2)
-            m.push(m.eip)
-            m.eip = target
+            target = m.rm_read(mod, rm, addr, size)
+            m.push(m.eip, size)
+            m.eip = target & m.ipmask
         elif reg == 3:
-            target = m.rm_read(mod, rm, addr, 2)
-            m.push(m.sreg[SEG_CS])
-            m.push(m.eip)
-            m.sreg[SEG_CS] = m.read(addr + 2, 2)
-            m.eip = target
+            target = m.rm_read(mod, rm, addr, size)
+            m.push(m.sreg[SEG_CS], size)
+            m.push(m.eip, size)
+            m.loadseg(SEG_CS, m.read(addr + size, 2))
+            m.eip = target & m.ipmask
         elif reg == 4:
-            m.eip = m.rm_read(mod, rm, addr, 2)
+            m.eip = m.rm_read(mod, rm, addr, size) & m.ipmask
         elif reg == 5:
-            m.sreg[SEG_CS] = m.read(addr + 2, 2)
-            m.eip = m.rm_read(mod, rm, addr, 2)
+            m.loadseg(SEG_CS, m.read(addr + size, 2))
+            m.eip = m.rm_read(mod, rm, addr, size) & m.ipmask
         elif reg == 6:
-            m.push(m.rm_read(mod, rm, addr, 2))
+            m.push(m.rm_read(mod, rm, addr, size), size)
         return
     if op in (0x27, 0x2F, 0x37, 0x3F):
         # daa / das / aaa / aas: the decimal adjusts. They are here because the
@@ -1283,7 +1421,7 @@ def execute(m):
         m.set8(0, m.get8(0) & 0x0F)
         return
     if op == 0x0F:
-        two_byte(m, size, seg)
+        two_byte(m, size, seg, addr_size)
         return
     raise NotImplementedError(f"opcode {op:#04x} at {m.eip - 1:04x}")
 
@@ -1309,7 +1447,7 @@ def branch_condition(m, cond):
     }[cond]
 
 
-def string_op(m, op, size, seg, rep):
+def string_op(m, op, size, seg, rep, addr_size=2):
     """movs / cmps / stos / lods / scas: one element per pass, REP repeats.
 
     A repeat prefix is not a special instruction, it is a prefix on this one:
@@ -1317,33 +1455,34 @@ def string_op(m, op, size, seg, rep):
     ZF state that REPE/REPNE asked for.
     """
     delta = -1 if m.flag(FLAG_DF) else 1
+    amask = MASK[addr_size]
     kind = {0xA4: 0, 0xA5: 0, 0xA6: 1, 0xA7: 1, 0xAA: 2, 0xAB: 2,
             0xAC: 3, 0xAD: 3, 0xAE: 4, 0xAF: 4}[op]
     osize = 1 if op in (0xA4, 0xA6, 0xAA, 0xAC, 0xAE) else size
     while True:
-        si = m.phys(m.sreg[seg], m.reg[6] & 0xFFFF)
+        si = m.phys(seg, m.reg[6] & amask)
         if kind == 0:
-            m.write(m.phys(m.sreg[SEG_ES], m.reg[7] & 0xFFFF), m.read(si, osize), osize)
-            m.reg[6] = (m.reg[6] + delta * osize) & 0xFFFF
-            m.reg[7] = (m.reg[7] + delta * osize) & 0xFFFF
+            m.write(m.phys(SEG_ES, m.reg[7] & amask), m.read(si, osize), osize)
+            m.reg[6] = (m.reg[6] + delta * osize) & amask
+            m.reg[7] = (m.reg[7] + delta * osize) & amask
         elif kind == 1:
-            di = m.phys(m.sreg[SEG_ES], m.reg[7] & 0xFFFF)
+            di = m.phys(SEG_ES, m.reg[7] & amask)
             m.alu(7, m.read(si, osize), m.read(di, osize), osize)
-            m.reg[6] = (m.reg[6] + delta * osize) & 0xFFFF
-            m.reg[7] = (m.reg[7] + delta * osize) & 0xFFFF
+            m.reg[6] = (m.reg[6] + delta * osize) & amask
+            m.reg[7] = (m.reg[7] + delta * osize) & amask
         elif kind == 2:
-            m.write(m.phys(m.sreg[SEG_ES], m.reg[7] & 0xFFFF), m.getreg(0, osize), osize)
-            m.reg[7] = (m.reg[7] + delta * osize) & 0xFFFF
+            m.write(m.phys(SEG_ES, m.reg[7] & amask), m.getreg(0, osize), osize)
+            m.reg[7] = (m.reg[7] + delta * osize) & amask
         elif kind == 3:
             m.setreg(0, m.read(si, osize), osize)
-            m.reg[6] = (m.reg[6] + delta * osize) & 0xFFFF
+            m.reg[6] = (m.reg[6] + delta * osize) & amask
         else:
-            di = m.phys(m.sreg[SEG_ES], m.reg[7] & 0xFFFF)
+            di = m.phys(SEG_ES, m.reg[7] & amask)
             m.alu(7, m.getreg(0, osize), m.read(di, osize), osize)
-            m.reg[7] = (m.reg[7] + delta * osize) & 0xFFFF
+            m.reg[7] = (m.reg[7] + delta * osize) & amask
         if not rep:
             return
-        m.reg[1] = (m.reg[1] - 1) & 0xFFFF
+        m.reg[1] = (m.reg[1] - 1) & amask
         if m.reg[1] == 0:
             return
         if kind in (1, 4):
@@ -1353,19 +1492,66 @@ def string_op(m, op, size, seg, rep):
                 return
 
 
-def two_byte(m, size, seg):
+def two_byte(m, size, seg, addr_size=2):
     op = m.fetch8()
+    if op == 0x01:
+        mod, reg, rm, addr = m.modrm(seg, addr_size)
+        if mod == 3:
+            return
+        if reg in (0, 1):                        # sgdt / sidt
+            table = m.gdtr if reg == 0 else m.idtr
+            limit, base = table
+            m.write(addr, limit, 2)
+            m.write(addr + 2, base, 4 if size == 4 else 3)
+        elif reg in (2, 3):                      # lgdt / lidt
+            limit = m.read(addr, 2)
+            base = m.read(addr + 2, 4 if size == 4 else 3)
+            if reg == 2:
+                m.gdtr = [base, limit]
+            else:
+                m.idtr = [base, limit]
+        elif reg == 4:                           # smsw
+            m.rm_write(mod, rm, addr, m.cr[0], 2)
+        elif reg == 6:                           # lmsw
+            m.write_cr0((m.cr[0] & ~0x0F) | (m.rm_read(mod, rm, addr, 2) & 0x0F))
+        return
+    if op == 0x00:                               # sldt / str / lldt / ltr / verr / verw
+        mod, reg, rm, addr = m.modrm(seg, addr_size)
+        if reg == 0:
+            m.rm_write(mod, rm, addr, m.ldtr, 2)
+        elif reg == 1:
+            m.rm_write(mod, rm, addr, m.tr, 2)
+        elif reg == 2:
+            m.ldtr = m.rm_read(mod, rm, addr, 2) & ~7
+        elif reg == 3:
+            m.tr = m.rm_read(mod, rm, addr, 2) & ~7
+        else:                                    # verr / verw: can this
+            selector = m.rm_read(mod, rm, addr, 2)   # selector be used?
+            m.set_flag(FLAG_ZF, selector & ~3 != 0)
+        return
+    if op in (0x20, 0x22):                       # mov r32, cr / mov cr, r32
+        mod = m.fetch8()
+        reg = (mod >> 3) & 7
+        rm = mod & 7
+        if op == 0x20:
+            m.setreg(rm, m.cr[reg] if reg < 5 else 0, 4)
+        else:
+            if reg == 0:
+                m.write_cr0(m.getreg(rm, 4))
+            elif reg < 5:
+                m.cr[reg] = m.getreg(rm, 4)
+        return
     if 0x80 <= op <= 0x8F:
         rel = m.fetch32() if size == 4 else m.fetch16()
         if branch_condition(m, op & 0x0F):
-            m.eip = (m.eip + sext(rel, size * 8)) & 0xFFFF
+            m.eip = (m.eip + sext(rel, size * 8)) & m.ipmask
         return
     if 0x90 <= op <= 0x9F:
-        mod, reg, rm, addr = m.modrm(seg)
+        mod, reg, rm, addr = m.modrm(seg, addr_size)
         m.rm_write(mod, rm, addr, 1 if branch_condition(m, op & 0x0F) else 0, 1)
         return
     if op in (0xB6, 0xB7, 0xBE, 0xBF):
-        mod, reg, rm, addr = m.modrm(seg)
+        mod, reg, rm, addr = m.modrm(seg, addr_size)
         from_size = 1 if op in (0xB6, 0xBE) else 2
         value = m.rm_read(mod, rm, addr, from_size)
         if op in (0xBE, 0xBF):
@@ -1373,7 +1559,7 @@ def two_byte(m, size, seg):
         m.setreg(reg, value, size)
         return
     if op == 0xAF:
-        mod, reg, rm, addr = m.modrm(seg)
+        mod, reg, rm, addr = m.modrm(seg, addr_size)
         a = m.getreg(reg, size)
         b = m.rm_read(mod, rm, addr, size)
         m.setreg(reg, a * b, size)
@@ -1385,12 +1571,12 @@ def two_byte(m, size, seg):
         if op in (0xA0, 0xA8):
             m.push(m.sreg[which])
         else:
-            m.sreg[which] = m.pop()
+            m.loadseg(which, m.pop())
         return
     if op in (0xA3, 0xAB, 0xB3, 0xBB):
         # bt / bts / btr / btc, register form: the bit number comes from a
         # register, and everything but bt writes the bit back
-        mod, reg, rm, addr = m.modrm(seg)
+        mod, reg, rm, addr = m.modrm(seg, addr_size)
         value = m.rm_read(mod, rm, addr, size)
         index = m.getreg(reg, size) % (size * 8)
         m.set_flag(FLAG_CF, bool(value >> index & 1))
@@ -1403,9 +1589,26 @@ def two_byte(m, size, seg):
                 value ^= 1 << index
             m.rm_write(mod, rm, addr, value & MASK[size], size)
         return
+    if op == 0xBA:
+        # the same four bit instructions with the bit number spelled out: the
+        # register field chooses which one, and /4 .. /7 are the only legal
+        # values, which is why this is a group rather than a family
+        mod, reg, rm, addr = m.modrm(seg, addr_size)
+        value = m.rm_read(mod, rm, addr, size)
+        index = m.fetch8() % (size * 8)
+        m.set_flag(FLAG_CF, bool(value >> index & 1))
+        if reg in (5, 6, 7):
+            if reg == 5:
+                value |= 1 << index
+            elif reg == 6:
+                value &= ~(1 << index)
+            else:
+                value ^= 1 << index
+            m.rm_write(mod, rm, addr, value & MASK[size], size)
+        return
     if op in (0xA4, 0xA5, 0xAC, 0xAD):
         # shld / shrd: a double shift, the second half coming from a register
-        mod, reg, rm, addr = m.modrm(seg)
+        mod, reg, rm, addr = m.modrm(seg, addr_size)
         value = m.rm_read(mod, rm, addr, size)
         source = m.getreg(reg, size)
         count = (m.fetch8() if op in (0xA4, 0xAC) else m.reg[1]) & 0x1F
@@ -1434,7 +1637,7 @@ def two_byte(m, size, seg):
         # bsf / bsr: where the first one bit is. With no bits at all the
         # register is left alone and ZF says so -- which is the one thing a
         # caller is allowed to know.
-        mod, reg, rm, addr = m.modrm(seg)
+        mod, reg, rm, addr = m.modrm(seg, addr_size)
         value = m.rm_read(mod, rm, addr, size)
         bits = size * 8
         if value == 0:
@@ -1456,7 +1659,7 @@ def two_byte(m, size, seg):
         # store the source or load the accumulator. The compare-and-swap an
         # operating system builds a lock out of.
         osize = 1 if op == 0xB0 else size
-        mod, reg, rm, addr = m.modrm(seg)
+        mod, reg, rm, addr = m.modrm(seg, addr_size)
         dest = m.rm_read(mod, rm, addr, osize)
         acc = m.getreg(0, osize)
         if acc == dest:
@@ -1469,7 +1672,7 @@ def two_byte(m, size, seg):
     if op in (0xC0, 0xC1):
         # xadd: swap, then add. `lock xadd` is how a reference count is taken.
         osize = 1 if op == 0xC0 else size
-        mod, reg, rm, addr = m.modrm(seg)
+        mod, reg, rm, addr = m.modrm(seg, addr_size)
         dest = m.rm_read(mod, rm, addr, osize)
         source = m.getreg(reg, osize)
         m.rm_write(mod, rm, addr, m.alu(0, dest, source, osize), osize)
