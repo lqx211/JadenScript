@@ -795,11 +795,81 @@ gxMonitor:
     inc     byte [es:GX_NODE]
     jmp     .core
 .out:
-    ; and what the emulation switch is set to, under the list
+    ; ---- the sensors ------------------------------------------------------
+    ; Everything below comes out of the thermal model the sensor core runs:
+    ; the die's temperature is integrated from the power the core is burning
+    ; and the resistance the fan is leaving it with, and the fan's own curve
+    ; is closed around that. The drive has a spindle that takes seconds to
+    ; come up to speed, which is why its RPM is worth a line of its own.
     mov     dl, GX_TX
     mov     dh, [es:GX_ROW]
     inc     dh
     call    suGoto
+    mov     byte [es:CON_ATTR], SU_PAPER
+    mov     si, msg_hw_cputherm
+    mov     bl, SU_PAPER
+    call    suPrint
+    mov     dx, 0x5B0                   ; the die, in whole degrees
+    in      al, dx
+    xor     ah, ah
+    call    hwNum
+    mov     si, msg_hw_deg
+    mov     bl, SU_PAPER
+    call    suPrint
+    call    hwFanRpm                    ; ax = the tachometer
+    call    hwNum
+    mov     si, msg_hw_rpm
+    mov     bl, SU_PAPER
+    call    suPrint
+    inc     byte [es:GX_ROW]
+    mov     dl, GX_TX
+    mov     dh, [es:GX_ROW]
+    inc     dh
+    call    suGoto
+    mov     byte [es:CON_ATTR], SU_PAPER
+    mov     si, msg_hw_drvtherm
+    mov     bl, SU_PAPER
+    call    suPrint
+    mov     dx, 0x5B3                   ; the drive's own thermistor
+    in      al, dx
+    xor     ah, ah
+    call    hwNum
+    mov     si, msg_hw_drvdeg
+    mov     bl, SU_PAPER
+    call    suPrint
+    call    hwHddRpm                    ; ax = the spindle
+    call    hwNum
+    mov     dx, 0x5B7                   ; SMART attribute 4 is the temperature
+    mov     al, 4
+    out     dx, al
+    mov     dx, 0x5B8
+    in      al, dx
+    xor     ah, ah
+    push    ax                          ; the current value
+    mov     dx, 0x5B9
+    in      al, dx
+    xor     ah, ah
+    push    ax                          ; ... and the worst ever
+    mov     si, msg_hw_smart
+    mov     bl, SU_PAPER
+    call    suPrint
+    ; The two numbers go on the stack, not in BX: setting the print colour
+    ; writes BL, BL is half of BX, and 0x1F -- SU_PAPER -- printed a drive's
+    ; worst-ever value as "31". A register that has to survive a call whose
+    ; documented job is to change it is not a place to keep a number.
+    pop     ax
+    call    hwNum
+    mov     al, '/'
+    call    hwChar
+    pop     ax
+    call    hwNum
+    ; and what the emulation switch is set to, under the list
+    inc     byte [es:GX_ROW]
+    mov     dl, GX_TX
+    mov     dh, [es:GX_ROW]
+    inc     dh
+    call    suGoto
+    mov     byte [es:CON_ATTR], SU_PAPER
     mov     si, msg_hw_all
     call    suPrint
     ; the nominal, which is what the setup utility says, beside the measured
@@ -830,6 +900,49 @@ gxMonitor:
     pop     cx
     pop     bx
     pop     ax
+    ret
+
+; ---------------------------------------------------------------------------
+; hwNum / hwChar -- print a sensor reading in the page's own colour.
+; suPrint colours a string from BL, and BL is whatever the last call left
+; there, so a number printed after a highlighted bar came out in the bar's
+; colour. These two set the attribute themselves and then print.
+; ---------------------------------------------------------------------------
+hwNum:
+    mov     byte [es:CON_ATTR], SU_PAPER
+    call    putn
+    mov     byte [es:CON_ATTR], SU_PAPER
+    ret
+
+hwChar:
+    mov     byte [es:CON_ATTR], SU_PAPER
+    call    putc
+    mov     byte [es:CON_ATTR], SU_PAPER
+    ret
+
+; ---------------------------------------------------------------------------
+; hwFanRpm / hwHddRpm -- one 16-bit number out of two ports.
+; A byte is all a port carries, so a tachometer reading of 2189 arrives as
+; 0x8D and 0x08 and has to be put back together here.
+; ---------------------------------------------------------------------------
+hwFanRpm:
+    mov     dx, 0x5B1
+    in      al, dx
+    mov     bl, al
+    mov     dx, 0x5B2
+    in      al, dx
+    mov     bh, al
+    mov     ax, bx
+    ret
+
+hwHddRpm:
+    mov     dx, 0x5B4
+    in      al, dx
+    mov     bl, al
+    mov     dx, 0x5B5
+    in      al, dx
+    mov     bh, al
+    mov     ax, bx
     ret
 
 ; ---------------------------------------------------------------------------
@@ -1048,6 +1161,14 @@ msg_gx_hint1:      db "Press Up/Down arrows to select a different field", 0
 msg_gx_hint2:      db "Press Left/Right keys to expand or collapse a group", 0
 msg_gx_hint3:      db "Press Esc to exit Setup", 0
 
+msg_hw_cputherm:   db "CPU ", 0
+msg_hw_drvtherm:   db "Drive 0 ", 0
+msg_hw_deg:        db " C, fan ", 0
+msg_hw_drvdeg:     db " C, ", 0
+msg_hw_fan:        db "", 0
+msg_hw_spin:       db " rpm, spindle ", 0
+msg_hw_smart:      db " rpm  SMART ", 0
+msg_hw_rpm:        db " rpm", 0
 msg_hw_core:       db "Core ", 0
 msg_hw_usage:      db "     usage ", 0
 msg_hw_pct:        db " %     ", 0

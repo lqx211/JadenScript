@@ -34,7 +34,7 @@
 org 0
 
 TEXT_SEG        equ 0xB800
-DISK_SEG        equ 0x3000          ; the staged disk image, 128 sectors
+DISK_SEG        equ 0xC000          ; the staged disk image, 128 sectors
 COLS            equ 80
 ROWS            equ 30
 

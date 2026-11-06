@@ -28,6 +28,8 @@ clean (0x66 switches operand size) because the step after this one turns them on
 
 from __future__ import annotations
 
+import math
+
 RAM_SIZE = 1 << 20
 TEXT_BASE = 0x000B_8000
 TEXT_COLS = 80
@@ -386,6 +388,32 @@ class Machine:
         self.eflags = FLAG_ALWAYS | FLAG_IF
         self.halted = False
         self.steps = 0
+        # ---- the thermal system ------------------------------------------
+        # The same equations the sensor core runs in the Scratch machine, so
+        # the two boards report the same temperatures. See hwStep in
+        # userspace/i386/sensor.jsw for why each constant is what it is.
+        self.cpu_temp = 27.0
+        self.fan_rpm = 800.0
+        self.fan_target = 800.0
+        self.hdd_temp = 27.0
+        self.hdd_rpm = 0.0
+        self.t_ambient = 25.0
+        self.p_idle = 4.0
+        self.p_max = 25.0
+        self.c_th = 8.0
+        self.r_th = 1.6
+        self.fan_min = 800.0
+        self.fan_max = 3000.0
+        self.fan_knee = 32.0
+        self.fan_slope = 45.0
+        self.spin_up_secs = 4.5
+        self.emu_on = 1
+        self.cpu_base = 33
+        self.thermal_done = 0.0      # emulated seconds already integrated
+        self.hw_ticks = 0
+        self.smart_sel = 1
+        self.smart = [100] * 10
+        self.smart_worst = [100] * 10
         self.error = ""
         self.out = []
         self.keys = []
@@ -554,6 +582,58 @@ class Machine:
         """
         return (self.steps // 997 + index * 13) % 61 + 20
 
+    # ---- the thermal system -----------------------------------------
+
+    def thermal(self, seconds: float, util: float) -> None:
+        """Integrate the die's temperature for `seconds` at `util` load.
+
+        Explicit Euler in quarter-second steps, exactly as the sensor core does
+        it, so the two machines cannot drift apart: watts in from the clock and
+        the load, watts out through a resistance the fan sets, and the fan's own
+        curve closing the loop.
+        """
+        if not self.emu_on:
+            return                 # hardware emulation off: the board has no sensors
+        end = self.thermal_done + seconds
+        while self.thermal_done < end:
+            dt = 0.25
+            self.thermal_done += dt
+            util = max(0.0, min(1.0, util))
+            want = self.fan_min + (self.cpu_temp - self.fan_knee) * self.fan_slope
+            self.fan_target = max(self.fan_min, min(self.fan_max, want))
+            self.fan_rpm += (self.fan_target - self.fan_rpm) * 0.10
+            if self.fan_rpm < 1:
+                self.fan_rpm = 0.0
+            # a board whose fan curve has been pinned to zero still has to
+            # answer: no divider is worth a divide by zero
+            flow = self.fan_rpm / self.fan_max if self.fan_max else 0.0
+            r = self.r_th / (0.40 + 0.90 * flow)
+            p = self.p_idle + (self.p_max - self.p_idle) * util * (self.cpu_base / 33)
+            t = self.cpu_temp + (p - (self.cpu_temp - self.t_ambient) / r) / self.c_th * dt
+            self.cpu_temp = max(self.t_ambient, min(110.0, t))
+            # the drive: a spindle on its way up, and a body with more mass
+            frac = min(1.0, self.thermal_done / self.spin_up_secs)
+            rpm = 7200 * math.sqrt(frac)
+            self.hw_ticks += 1
+            if rpm > 60:
+                rpm += self.hw_ticks % 7 - 3
+            self.hdd_rpm = round(rpm)
+            want_t = self.t_ambient + 6 + 14 * (rpm / 7200)
+            self.hdd_temp += (want_t - self.hdd_temp) * dt / 40
+            self.hdd_temp = min(65.0, self.hdd_temp)
+            self._smart_update()
+
+    def _smart_update(self) -> None:
+        hours = int(self.thermal_done // 3600)
+        self.smart[1] = max(1, 100 - int(self.thermal_done // 3600 // 20))
+        self.smart[2] = min(255, hours)          # 9: power-on hours, raw
+        value = 100 - (round(self.hdd_temp) - 25) * 2
+        self.smart[4] = max(1, min(100, value))  # 194: temperature
+        self.smart[3] = 100                      # 12: power cycles
+        self.smart[5] = 100                      # 197: pending sectors
+        for i in range(1, 6):
+            self.smart_worst[i] = min(self.smart_worst[i], self.smart[i])
+
     def port_in(self, port, size):
         if 0x40 <= port <= 0x42:
             return self.pit.read(port - 0x40)
@@ -585,6 +665,33 @@ class Machine:
             return self.view_rows
         if port == 0x5A2:
             return self.core_id
+        # ---- the sensors, behind the addresses the sensor core publishes.
+        # The model has no frames, so it advances the thermal system by the
+        # emulated time the instruction counter represents: a machine that has
+        # retired a second's worth of instructions has also been hot for a
+        # second.
+        if 0x5B0 <= port <= 0x5B9:
+            self.thermal(self.steps / 1_700_000 - self.thermal_done,
+                         self.core_usage(1) / 100)
+            if port == 0x5B0:
+                return int(round(self.cpu_temp))
+            if port == 0x5B1:
+                return int(self.fan_rpm) & 0xFF
+            if port == 0x5B2:
+                return (int(self.fan_rpm) >> 8) & 0xFF
+            if port == 0x5B3:
+                return int(round(self.hdd_temp))
+            if port == 0x5B4:
+                return int(self.hdd_rpm) & 0xFF
+            if port == 0x5B5:
+                return (int(self.hdd_rpm) >> 8) & 0xFF
+            if port == 0x5B6:
+                return int(self.thermal_done // 3600) & 0xFF
+            if port == 0x5B8:
+                return self.smart[self.smart_sel]
+            if port == 0x5B9:
+                return self.smart_worst[self.smart_sel]
+            return 0
         if port == 0x70:
             return self.cmos_index
         if port == 0x71:
@@ -645,6 +752,10 @@ class Machine:
             return
         if port == 0x5AA:                 # key repeat, in units of 10 ms
             self.key_repeat = (value & 0xFF) * 10
+            return
+        if port == 0x5B7:                 # which SMART attribute to read next
+            if 1 <= (value & 0xFF) <= 5:
+                self.smart_sel = value & 0xFF
             return
         if port == 0xCF9:                 # the reset control register
             if value & 0x04:              # SYS_RST: start again from the ROM

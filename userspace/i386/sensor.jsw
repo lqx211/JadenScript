@@ -1,0 +1,134 @@
+/*
+ * sensor — the hardware monitor chip, on its own core.
+ *
+ * A real board has a Super I/O chip with a couple of thermistors, a fan
+ * tachometer and a window into the drive's SMART registers. It does not run
+ * inside the CPU, and neither does this: the temperature is integrated here, on
+ * a thread of its own, so a machine whose CPU is pinned at 100% still gets its
+ * fan curve updated every frame. That is the one place a clone buys something
+ * real -- Scratch clones share a JavaScript thread, so adding cores never makes
+ * the guest faster, but it does stop the sensors from stealing the CPU's frame.
+ *
+ * The numbers are not a table. A CPU in a case is a thermal system:
+ *
+ *     P    = P_idle + (P_max - P_idle) * util * (f / f_nom)     watts in
+ *     dT   = (P - (T - T_amb) / R_th(fan)) / C_th * dt          degrees
+ *
+ * and the fan's curve closes the loop -- hot die, faster fan, less thermal
+ * resistance, cooler die. The time base is the machine's own RTC (`X.rtcRate`
+ * frames to the emulated second), so a throttled browser reports the same
+ * temperature as a fast one: the guest did the same work either way.
+ */
+
+class Sensor {
+    public void sensorStart() { // hook: green flag
+        Looks.hide();
+        X.cpuTemp = X.tAmbient + 2;
+        X.fanRpm = X.fanMin;
+        X.fanTarget = X.fanMin;
+        X.hddTemp = X.tAmbient + 2;
+        X.hddRpm = 0;
+        X.hddSpunAt = X.rtcSeconds;
+        while (1) {
+            hwStep();
+            Control.wait(0);
+        }
+    }
+
+    private void hwStep() { // warp
+        if (X.emuOn < 1) {
+            return;                   // hardware emulation off: no sensors
+        }
+        _dt = 1 / X.rtcRate;
+        X.powerOnSecs = X.rtcSeconds;
+        /* What the core is doing right now, averaged over what it can do. The
+         * boot core's utilisation, because a monitor that averaged the idle
+         * cores in would report a cool CPU that is in fact pinned. */
+        _util = (X.coreUsage.get(1) + 0) / 100;
+        if (_util < 0) { _util = 0; }
+        if (_util > 1) { _util = 1; }
+        _f = X.cpuBase + 0;
+        if (_f < 1) { _f = 33; }
+        _p = X.pIdle + (X.pMax - X.pIdle) * _util * (_f / 33);
+        /* The fan curve: it idles below 35 C and is at full speed by 68 C,
+         * linearly between -- which is what a board's fan controller does, and
+         * what makes the loop settle instead of running away. */
+        _want = X.fanMin + (X.cpuTemp - X.fanKnee) * X.fanSlope;
+        if (_want < X.fanMin) { _want = X.fanMin; }
+        if (_want > X.fanMax) { _want = X.fanMax; }
+        X.fanTarget = _want;
+        /* A fan is a motor with blades: it cannot reach a new speed in one
+         * frame. First-order lag, and the tachometer is read back with the
+         * sway a real one has. */
+        X.fanRpm = X.fanRpm + (X.fanTarget - X.fanRpm) * 0.10;
+        if (X.fanRpm < 1) { X.fanRpm = 0; }
+        /* Resistance falls with airflow, roughly with the speed once the fan
+         * is turning at all. A stopped fan leaves only the heatsink, and that
+         * is a very different machine -- which is why a fan that fails shows
+         * up in the temperature within seconds. */
+        _flow = X.fanRpm / X.fanMax;
+        _r = X.rTh / (0.40 + 0.90 * _flow);
+        _out = (X.cpuTemp - X.tAmbient) / _r;
+        _t = X.cpuTemp + (_p - _out) / X.cTh * _dt;
+        if (_t < X.tAmbient) { _t = X.tAmbient; }
+        if (_t > 110) { _t = 110; }          // the die would have shut down
+        X.cpuTemp = _t;
+        hwDrive(_dt);
+    }
+
+    /* The drive: a spindle that takes seconds to come up to speed, and a body
+     * that heats slower than a die because there is more of it. The rotation
+     * rate is the one number on a monitor that moves on its own, which is why
+     * it is worth modelling -- a drive spinning up looks like a machine doing
+     * something. */
+    private void hwDrive(dt) { // warp
+        if (X.hddSpunAt < 0) {
+            X.hddSpunAt = X.powerOnSecs;
+        }
+        _age = X.powerOnSecs - X.hddSpunAt;
+        _frac = _age / X.spinUpSecs;
+        if (_frac > 1) { _frac = 1; }
+        if (_frac < 0) { _frac = 0; }
+        /* A spindle accelerates hard and then coasts into its regulated speed,
+         * so the curve is a square root, not a ramp. */
+        _rpm = 7200 * Operators.math("sqrt", _frac);
+        if (_rpm > 7200) { _rpm = 7200; }
+        if (_rpm > 60) {
+            _rpm = _rpm + X.hwTicks % 7 - 3;      // the servo is never still
+        }
+        X.hddRpm = Operators.math("round", _rpm);
+        X.hwTicks += 1;
+        /* Its own first-order model: warm from running, cooled by the case. A
+         * 3.5" drive sits about ten degrees over the room when idle. */
+        _want = X.tAmbient + 6 + 14 * (_rpm / 7200);
+        X.hddTemp = X.hddTemp + (_want - X.hddTemp) * dt / 40;
+        if (X.hddTemp > 65) { X.hddTemp = 65; }
+        hwSmartUpdate();
+    }
+
+    /* SMART, five attributes: the ones a real report is judged by. A value of
+     * 100 is "as new" and only ever falls; the raw count is what the drive
+     * actually saw. Temperature is the one that tracks the room. */
+    private void hwSmartUpdate() { // warp
+        _h = Operators.math("floor", X.powerOnSecs / 3600);
+        if (_h > 255) { _h = 255; }
+        X.hwSmart.set(2, _h);                       // 9: power-on hours, raw
+        _v = 100 - Operators.math("floor", X.powerOnSecs / 3600 / 20);
+        if (_v < 1) { _v = 1; }
+        X.hwSmart.set(1, _v);                       // 5: reallocated sectors
+        _t = Operators.math("round", X.hddTemp);
+        _v = 100 - (_t - 25) * 2;
+        if (_v < 1) { _v = 1; }
+        if (_v > 100) { _v = 100; }
+        X.hwSmart.set(4, _v);                       // 194: temperature
+        X.hwSmart.set(3, 100);                      // 12: power cycles
+        X.hwSmart.set(5, 100);                      // 197: pending sectors
+        _i = 1;
+        while (_i <= 5) {
+            _cur = X.hwSmart.get(_i) + 0;
+            _worst = X.hwSmartWorst.get(_i) + 0;
+            if (_cur < _worst) { X.hwSmartWorst.set(_i, _cur); }
+            _i += 1;
+        }
+    }
+}

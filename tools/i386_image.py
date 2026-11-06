@@ -45,7 +45,7 @@ ROM_TOP = 0x0010_0000
 SECTOR = 512
 
 #: the staged disk: sector 0 is the boot sector, sector 1 is the payload it reads
-DISK_AT = 0x0003_0000
+DISK_AT = 0x000C_0000
 DISK_SECTORS = 128
 
 STAGE2 = b"STAGE2: this sector came through int 13h\r\n"

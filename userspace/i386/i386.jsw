@@ -14,20 +14,32 @@
  * memory map. The map is not flat, and that is deliberate -- a real machine
  * decodes addresses, and so does this one:
  *
- *   0x00000 - 0x1FFFF   RAM: 128 KiB in a Scratch list, 128 MiB through `Ram`
- *   0x30000 - 0x3FFFF   the disk window: the ATA device, read-only for now
+ *   0x00000 - 0x9FFFF   base memory, 640 KiB, in a Scratch list
+ *   0xA0000 - 0xB7FFF   the video aperture: nothing answers yet
  *   0xB8000 - 0xB8F9F   the text plane, 80 x 25 cells of (char, attribute)
+ *   0xC0000 - 0xCFFFF   the disk window: the ATA device, read-only for now
  *   0xF0000 - 0xFFFFF   the BIOS ROM
+ *   0x100000 - ...      extended memory, up to 128 MiB through `Ram`
  *
- * Everything else answers 0xFF, the way an open bus does. The windows are
- * checked before the RAM, because the TurboWarp build's RAM is big enough to
- * cover all of them.
+ * Everything else answers 0xFF, the way an open bus does.
+ *
+ * Base memory is tested first because it is almost every access: one
+ * comparison, then a list read. Measured both ways in plain V8, the RAM-first
+ * order is about 9% cheaper in the decode itself and the same once the JIT has
+ * had its way with it -- so the order is a small win, not a big one, and it is
+ * written this way because the hot path should have the shortest path to the
+ * answer, not because it bought a large number.
+ *
+ * The disk window used to sit at 0x30000, which is *inside* base memory now --
+ * it moved to 0xC0000, where a PC actually has option ROM space.
  *
  * In a Scratch build memory is a list of 32-bit words, not of bytes: four times
  * fewer nodes in Scratch's list tree, and a byte costs a divide and a modulo.
- * The TurboWarp build skips the arithmetic entirely and asks its extension for
- * the byte index. Both count `X.memWords` in words, so nothing below the
- * decoder can tell which build it is running in.
+ * The TurboWarp build can ask its extension for a byte index, but base memory
+ * stays in a list in *both* builds, and that is the point: the 128 MiB the
+ * extension exists for is the memory above 1 MiB, where nothing is hot, and
+ * the path a BIOS and a boot sector hammer is exactly the path they had before
+ * any extension existed.
  */
 
 /* ---- the CPU ---------------------------------------------------------- */
@@ -48,8 +60,11 @@ public X.maxFrames = 0;                  // 0 = run forever; >0 = a test budget
  * either way; what the TurboWarp build adds is everything above it.
  */
 public X.memBase = 0;                    // the RAM window
-public X.memWords = 32768;               // 128 KiB, or 128 MiB with Ram
-public X.diskBase = 196608;              // 0x3_0000: the disk window
+public X.memWords = 163840;              // 640 KiB of base memory
+public X.extBase = 1048576;              // 0x10_0000: extended memory
+public X.extWords = 0;                   // ... as many words as `Ram` gave
+public X.holeEnd = 655360;               // 0xA_0000: RAM stops at the video hole
+public X.diskBase = 786432;              // 0xC_0000: the disk window
 public X.diskWords = 16384;              // 64 KiB = 128 sectors
 public X.textBase = 753664;              // 0xB_8000
 public X.textWords = 1200;               // 4800 bytes, 2400 cells
@@ -202,6 +217,61 @@ public X.core3Usage = 0;
 public X.core3MHz = 0;
 public X.core4Usage = 0;
 public X.core4MHz = 0;
+/* ---- the box it is all screwed into ------------------------------------ *
+ * A CPU in a case is a thermal system, and the numbers on a hardware monitor
+ * are the answer to one question: how much heat goes in, and how fast it
+ * leaves. Heat in is the power the die is burning, which depends on what it is
+ * doing and how fast it is clocked. Heat out is the difference between the die
+ * and the room, divided by the thermal resistance of the path -- and that
+ * resistance is what the fan changes.
+ *
+ * So the temperature is not picked from a table, it is integrated:
+ *
+ *     P    = P_idle + (P_max - P_idle) * util * (f / f_nom)      watts in
+ *     dT   = (P - (T - T_amb) / R_th(fan)) / C_th * dt           degrees in
+ *
+ * with the fan's own curve closing the loop: hot die -> faster fan -> less
+ * resistance -> cooler die. A monitor showing a number that does not come out
+ * of something is a decoration, which is why this one is a differential
+ * equation with numbers chosen so the answers land where a real 386 does.
+ */
+public X.cpuTemp = 27;           // degrees Celsius, fractional
+public X.fanRpm = 0;             // the CPU fan, measured at the tachometer
+public X.fanTarget = 0;          // what the curve is asking for this frame
+public X.tAmbient = 25;
+public X.pIdle = 4;              // watts with the core halted
+public X.pMax = 25;              // watts at 100% on the nominal clock
+public X.cTh = 8;                // joules per kelvin: die and heatsink
+public X.rTh = 1.6;              // kelvin per watt through the heatsink
+public X.fanMin = 800;           // the slowest the controller will ask for
+public X.fanMax = 3000;          // ... and the fastest
+/* The fan curve's knee: below this the fan idles, above it the speed climbs
+ * 45 rpm a degree. The slope is the loop gain, and the loop gain is why these
+ * numbers are what they are -- steeper and the fan chases the die in circles,
+ * and the temperature visibly pulses instead of settling. At 45 the machine
+ * lands at 34 C idle, 51 C at half load and 63 C pinned, with no swing. */
+public X.fanKnee = 32;
+public X.fanSlope = 45;
+public X.hddTemp = 26;           // the drive has its own, slower, thermal mass
+public X.hddRpm = 0;             // spindle speed: ramps, it does not snap
+public X.hddSpunAt = -1;         // when the motor was told to spin up
+public X.spinUpSecs = 4.5;       // a 7200 rpm drive takes about this long
+public X.powerOnSecs = 0;        // SMART's power-on hours come from here
+public X.hwTempPort = 1456;      // 0x5B0, read: CPU temperature, whole degrees
+public X.hwFanLoPort = 1457;     // 0x5B1, read: fan RPM, low byte
+public X.hwFanHiPort = 1458;     // 0x5B2, read: fan RPM, high byte
+public X.hwHddTempPort = 1459;   // 0x5B3, read: drive temperature
+public X.hwHddLoPort = 1460;     // 0x5B4, read: spindle RPM, low byte
+public X.hwHddHiPort = 1461;     // 0x5B5, read: spindle RPM, high byte
+public X.hwHoursPort = 1462;     // 0x5B6, read: power-on hours, low byte
+public X.hwSmartPort = 1463;     // 0x5B7, write: which SMART attribute to read
+public X.hwSmartValPort = 1464;  // 0x5B8, read: that attribute's current value
+public X.hwSmartWorstPort = 1465; // 0x5B9, read: ... and its worst ever
+public X.hwSmartSel = 1;
+public X.hwSmart = [100, 100, 100, 100, 100, 100, 100, 100, 100, 100];
+public X.hwSmartWorst = [100, 100, 100, 100, 100, 100, 100, 100, 100, 100];
+public X.hwTicks = 0;
+
 /* what the monitor shows: core 1 copies its own state here once a frame */
 public X.monSteps = 0;
 public X.monIp = 0;
@@ -235,6 +305,7 @@ import "assets/lists/disk.jsa" as disk;
 
 // include "input.jsw"
 // include "display.jsw"
+// include "sensor.jsw"
 
 /*
  * Everything the CPU touches is one class, because a Scratch custom block
@@ -381,13 +452,16 @@ class Cpu {
 #ifdef TURBOWARP
         /* Ask for 128 MiB and take what the browser gives back: a loaded
          * machine may refuse, and a board that lies about its memory is worse
-         * than one that reports less. `X.memWords` counts 32-bit words, the
-         * same unit the list build uses, so nothing downstream has to know
-         * which build it is running in. */
+         * than one that reports less. The extension is only the memory *above*
+         * 1 MiB -- base memory stays in the list, because that is the hot path
+         * and an extension call, however cheap, is still a call. */
         _i = Ram.alloc(134217728);
-        X.memWords = Operators.math("floor", Ram.size / 4);
-        X.mem.clear();
+        X.extWords = Operators.math("floor", Ram.size / 4);
 #else
+        X.extWords = 0;                  // a Scratch list is base memory only
+#endif
+        /* Base memory is one flat list of 32-bit words. Growing it from empty
+         * costs one `add` a word and happens once, at POST. */
         if (X.mem.length() < X.memWords) {
             X.mem.clear();
             _i = 1;
@@ -402,7 +476,6 @@ class Cpu {
                 _i += 1;
             }
         }
-#endif
         if (X.text.length() < X.textWords) {
             X.text.clear();
             _i = 1;
@@ -720,9 +793,9 @@ class Cpu {
      * the wrong thing -- the failure looks like a screen that never changes. */
     private void rdb(a) { // warp
         v = 0xFF;                      // an open bus reads as all ones
-        if (a >= X.diskBase && a < X.diskBase + X.diskWords * 4) {
-            _w = X.disk.get(Operators.math("floor", (a - X.diskBase) / 4) + 1) + 0;
-            v = Operators.math("floor", _w / X.bw.get((a - X.diskBase) % 4 + 1)) % 256;
+        if (a < X.holeEnd) {           // hot path: one comparison for base memory
+            _w = X.mem.get(Operators.math("floor", a / 4) + 1) + 0;
+            v = Operators.math("floor", _w / X.bw.get(a % 4 + 1)) % 256;
             return;
         }
         if (a >= X.textBase && a < X.textBase + X.textWords * 4) {
@@ -730,25 +803,36 @@ class Cpu {
             v = Operators.math("floor", _w / X.bw.get((a - X.textBase) % 4 + 1)) % 256;
             return;
         }
+        if (a >= X.diskBase && a < X.diskBase + X.diskWords * 4) {
+            _w = X.disk.get(Operators.math("floor", (a - X.diskBase) / 4) + 1) + 0;
+            v = Operators.math("floor", _w / X.bw.get((a - X.diskBase) % 4 + 1)) % 256;
+            return;
+        }
         if (a >= X.romBase && a < X.romBase + X.romWords * 4) {
             _w = X.bios.get(Operators.math("floor", (a - X.romBase) / 4) + 1) + 0;
             v = Operators.math("floor", _w / X.bw.get((a - X.romBase) % 4 + 1)) % 256;
             return;
         }
-        if (a < X.memBase + X.memWords * 4) {
 #ifdef TURBOWARP
-            v = Ram.read8(a - X.memBase);
-#else
-            _w = X.mem.get(Operators.math("floor", a / 4) + 1) + 0;
-            v = Operators.math("floor", _w / X.bw.get(a % 4 + 1)) % 256;
-#endif
-            return;
+        /* Extended memory is the only thing the extension holds: above 1 MiB,
+         * where there is no list to be fast with and no card to shadow it. */
+        if (a >= X.extBase && a < X.extBase + X.extWords * 4) {
+            v = Ram.read8(a - X.extBase);
         }
+#endif
     }
 
     private void wrb(a, val) { // warp
 
         _wv = val % 256;
+        if (a < X.holeEnd) {           // hot path, and the same one comparison
+            _i = Operators.math("floor", a / 4) + 1;
+            _sh = X.bw.get(a % 4 + 1);
+            _old = X.mem.get(_i) + 0;
+            _b = Operators.math("floor", _old / _sh) % 256;
+            X.mem.set(_i, _old - _b * _sh + _wv * _sh);
+            return;
+        }
         if (a >= X.textBase && a < X.textBase + X.textWords * 4) {
             _o = a - X.textBase;
             _i = Operators.math("floor", _o / 4) + 1;
@@ -765,17 +849,11 @@ class Cpu {
         if (a >= X.romBase && a < X.romBase + X.romWords * 4) {
             return;             // so is the ROM
         }
-        if (a < X.memBase + X.memWords * 4) {
 #ifdef TURBOWARP
-            Ram.write8(a - X.memBase, _wv);
-#else
-            _i = Operators.math("floor", a / 4) + 1;
-            _sh = X.bw.get(a % 4 + 1);
-            _old = X.mem.get(_i) + 0;
-            _b = Operators.math("floor", _old / _sh) % 256;
-            X.mem.set(_i, _old - _b * _sh + _wv * _sh);
-#endif
+        if (a >= X.extBase && a < X.extBase + X.extWords * 4) {
+            Ram.write8(a - X.extBase, _wv);
         }
+#endif
     }
 
     private void rdw(a) { // warp
@@ -1277,6 +1355,19 @@ class Cpu {
         if (p == X.dispRowsPort) { v = X.dispViewRows; return; }
         if (p == X.coreCountPort) { v = X.cores; return; }
         if (p == X.coreIdPort) { v = coreId; return; }
+        /* ---- the sensors ------------------------------------------------ *
+         * A real board puts these behind a Super I/O chip's index/data pair.
+         * Here they are one port each, because the guest that reads them is
+         * our own firmware and a byte is all a setup screen needs. */
+        if (p == X.hwTempPort) { v = Operators.math("round", X.cpuTemp); return; }
+        if (p == X.hwFanLoPort) { v = X.fanRpm % 256; return; }
+        if (p == X.hwFanHiPort) { v = Operators.math("floor", X.fanRpm / 256) % 256; return; }
+        if (p == X.hwHddTempPort) { v = Operators.math("round", X.hddTemp); return; }
+        if (p == X.hwHddLoPort) { v = X.hddRpm % 256; return; }
+        if (p == X.hwHddHiPort) { v = Operators.math("floor", X.hddRpm / 256) % 256; return; }
+        if (p == X.hwHoursPort) { v = Operators.math("floor", X.powerOnSecs / 3600) % 256; return; }
+        if (p == X.hwSmartValPort) { v = X.hwSmart.get(X.hwSmartSel) + 0; return; }
+        if (p == X.hwSmartWorstPort) { v = X.hwSmartWorst.get(X.hwSmartSel) + 0; return; }
     }
 
     private void portOut(p, val) { // warp
@@ -1313,6 +1404,10 @@ class Cpu {
         }
         if (p == X.keyRepeatPort) {
             X.keyRepeat = _oV * 10;
+            return;
+        }
+        if (p == X.hwSmartPort) {
+            if (_oV >= 1 && _oV <= 5) { X.hwSmartSel = _oV; }
             return;
         }
         if (p == X.coreReleasePort) {

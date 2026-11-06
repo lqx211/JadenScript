@@ -7,9 +7,11 @@ a real 512-byte sector read through a real int 13h.
 
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 import unittest
+import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -1139,6 +1141,345 @@ class I386RealRomTests(unittest.TestCase):
         self.assertGreater(mach.eip, 0x000E_0000, "still inside the ROM")
 
 
+class I386MemoryMapTests(unittest.TestCase):
+    """Where things live, and why the order of the tests matters.
+
+    The decoder is the hottest code in the machine: every instruction fetch and
+    every operand goes through it. Base memory is checked first because it is
+    almost every access, and a decoder that tested the windows first cost about
+    a third of the machine's speed.
+    """
+
+    def jsw(self):
+        """The machine the simulator can step: RAM in a list."""
+        import subprocess
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "m.sb3"
+            back = Path(tmp) / "m.jsw"
+            subprocess.run([sys.executable, "-m", "jswc", "build",
+                            str(RVDIR / "i386.jsw"), "-o", str(out)],
+                           cwd=ROOT, check=True, capture_output=True)
+            subprocess.run([sys.executable, "-m", "jswc", "decompile", str(out),
+                            "-o", str(back), "--skip-assets"],
+                           cwd=ROOT, check=True, capture_output=True)
+            source = back.read_text()
+        env = jsw_sim.Env()
+        classes = jsw_sim.parse_program(source, env)
+        env.lists["rom"] = json.loads((RVDIR / "assets" / "lists" / "bios.jsa").read_text())
+        env.lists["disk"] = json.loads((RVDIR / "assets" / "lists" / "disk.jsa").read_text())
+        env.procs = classes["Cpu"].procs
+        env.threads.append({})
+        env.current = 0
+        env.vars["X.cores"] = 1
+        gen = jsw_sim.call(env, classes["Cpu"].procs["powerOn"], [])
+        try:
+            while True:
+                next(gen)
+        except StopIteration:
+            pass
+        return env, classes["Cpu"].procs
+
+    def read(self, procs, env, addr):
+        gen = jsw_sim.call(env, procs["rdb"], [addr])
+        try:
+            while True:
+                next(gen)
+        except StopIteration:
+            pass
+        return int(jsw_sim.Env.num(env.vars["v"])) & 0xFF
+
+    def test_base_memory_stops_at_the_video_hole(self) -> None:
+        env, procs = self.jsw()
+        self.assertEqual(int(env.vars["X.memWords"]), 163840, "640 KiB, in words")
+        self.assertEqual(int(env.vars["X.holeEnd"]), 0xA0000)
+        env.lists["X.mem"][0] = 0x11223344
+        self.assertEqual(self.read(procs, env, 0), 0x44)
+        self.assertEqual(self.read(procs, env, 3), 0x11)
+
+    def test_the_aperture_is_open_bus_and_the_text_plane_is_not(self) -> None:
+        env, procs = self.jsw()
+        self.assertEqual(self.read(procs, env, 0xA0000), 0xFF,
+                         "there is no card in the graphics aperture yet")
+        self.assertEqual(self.read(procs, env, 0xB8000), 0x20,
+                         "the text plane starts full of spaces")
+
+    def test_the_windows_sit_outside_base_memory(self) -> None:
+        """The disk window used to be at 0x30000, which is *inside* the 640 KiB
+        a PC has as base memory -- a bug that could only show up once RAM grew
+        past it. It lives in option ROM space now."""
+        env, procs = self.jsw()
+        disk_base = int(env.vars["X.diskBase"])
+        self.assertEqual(disk_base, 0xC0000)
+        self.assertGreaterEqual(disk_base, int(env.vars["X.holeEnd"]),
+                                "the disk window must not sit inside RAM")
+        self.assertLess(disk_base + 0x10000, int(env.vars["X.romBase"]),
+                        "and it must not overlap the ROM")
+        # the boot sector is in the window and reads back through the decoder
+        self.assertEqual(self.read(procs, env, disk_base + 510), 0x55)
+        self.assertEqual(self.read(procs, env, disk_base + 511), 0xAA)
+
+    def test_a_store_to_base_memory_reads_back(self) -> None:
+        env, procs = self.jsw()
+        gen = jsw_sim.call(env, procs["wrb"], [0x7C00, 0x5A])
+        try:
+            while True:
+                next(gen)
+        except StopIteration:
+            pass
+        self.assertEqual(self.read(procs, env, 0x7C00), 0x5A)
+
+    def test_the_rom_and_the_disk_window_do_not_take_writes(self) -> None:
+        env, procs = self.jsw()
+        before = self.read(procs, env, 0xF0000)
+        for addr in (0xF0000, 0xC0000):
+            gen = jsw_sim.call(env, procs["wrb"], [addr, 0x00])
+            try:
+                while True:
+                    next(gen)
+            except StopIteration:
+                pass
+        self.assertEqual(self.read(procs, env, 0xF0000), before)
+        self.assertEqual(self.read(procs, env, 0xC0000), 0xFA,
+                         "the boot sector's first byte, untouched")
+
+    def test_the_reference_model_agrees_about_the_map(self) -> None:
+        mach = rv.Machine()
+        mach.ram[:] = i386_image.build()
+        self.assertEqual(mach.read(0xC0000 + 510, 1), 0x55,
+                         "the model stages the disk in the same window")
+
+
+class I386MulticoreTests(unittest.TestCase):
+    """What the extra cores are for.
+
+    Scratch clones share one JavaScript thread, so a core never makes the guest
+    faster. What a core can do is keep a device out of the CPU's frame: the
+    video card and the keyboard already had sprites, and the sensors have one
+    now, which is why a pinned CPU still gets its fan curve updated.
+    """
+
+    def test_the_sensors_are_a_sprite_of_their_own(self) -> None:
+        import json
+        import subprocess
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "m.sb3"
+            subprocess.run([sys.executable, "-m", "jswc", "build",
+                            str(RVDIR / "i386.jsw"), "-o", str(out)],
+                           cwd=ROOT, check=True, capture_output=True)
+            with zipfile.ZipFile(out) as z:
+                data = json.loads(z.read("project.json"))
+        names = {t["name"] for t in data["targets"]}
+        self.assertIn("Sensor", names, "the hardware monitor runs on its own core")
+        self.assertIn("Display", names)
+        self.assertIn("Input", names)
+        self.assertIn("Cpu", names)
+
+    def test_the_sensor_loop_does_not_live_in_the_cpu(self) -> None:
+        """A pinned core must not be the thing that reports its own temperature:
+        the reading would stop exactly when it matters most."""
+        source = (RVDIR / "i386.jsw").read_text()
+        cpu_part = source[:source.index("// include \"sensor.jsw\"")]
+        self.assertNotIn("hwStep", cpu_part,
+                         "the thermal step belongs to the Sensor sprite")
+
+    def test_an_idle_ap_reports_nothing_not_a_full_frame(self) -> None:
+        """The AP trampoline checks in and halts: 99% on one core and 2% on the
+        rest is what a real BIOS looks like, not a distribution bug."""
+        mach = rv.Machine()
+        self.assertIn("cli", (RVDIR / "bios.asm").read_text())
+        trampoline = (RVDIR / "bios.asm").read_text()
+        start = trampoline.index("apHalt:")
+        self.assertIn("hlt", trampoline[start:start + 40],
+                      "a parked AP is parked, not spinning")
+
+
+class I386ThermalTests(unittest.TestCase):
+    """The hardware monitor's numbers are integrated, not decorated.
+
+    A CPU in a case is a thermal system: watts in from the clock and the load,
+    watts out through a resistance the fan sets, and the fan's own curve closing
+    the loop. These tests check the two properties that make the numbers worth
+    showing -- it settles where a real machine settles, and it follows the work.
+    """
+
+    def ref(self):
+        return rv.Machine()
+
+    def settle(self, mach, util: float, seconds: float) -> None:
+        mach.thermal(seconds, util)
+
+    def test_it_idles_where_a_386_idles_and_loads_where_one_loads(self) -> None:
+        mach = self.ref()
+        self.settle(mach, 0.0, 300)
+        idle = mach.cpu_temp
+        self.assertGreater(idle, 28, "a die in a case is warmer than the room")
+        self.assertLess(idle, 45, "and an idle 386 is not hot")
+        self.settle(mach, 1.0, 300)
+        load = mach.cpu_temp
+        self.assertGreater(load, idle + 15, "work heats it")
+        self.assertLess(load, 75, "and the fan keeps it out of trouble")
+        self.assertGreater(mach.fan_rpm, 1500, "the fan answered the load")
+        self.assertLessEqual(mach.fan_rpm, mach.fan_max)
+
+    def test_half_load_lands_between_the_two(self) -> None:
+        mach = self.ref()
+        self.settle(mach, 0.0, 300)
+        idle = mach.cpu_temp
+        self.settle(mach, 1.0, 300)
+        load = mach.cpu_temp
+        mach2 = self.ref()
+        self.settle(mach2, 0.5, 400)
+        self.assertGreater(mach2.cpu_temp, idle)
+        self.assertLess(mach2.cpu_temp, load)
+        self.assertLess(mach2.fan_rpm, mach.fan_rpm)
+
+    def test_it_cools_down_again(self) -> None:
+        """The interesting half of a thermal model: the fan is not a switch."""
+        mach = self.ref()
+        self.settle(mach, 1.0, 300)
+        hot = mach.cpu_temp
+        self.settle(mach, 0.0, 400)
+        self.assertLess(mach.cpu_temp, hot - 15)
+        self.assertLess(mach.fan_rpm, 1400, "and the fan spun back down")
+
+    def test_a_stopped_fan_cooks_the_die(self) -> None:
+        """The fan is load-bearing: with no airflow only the heatsink is left."""
+        mach = self.ref()
+        mach.fan_min = 0
+        mach.fan_max = 0
+        mach.fan_rpm = 0
+        self.settle(mach, 1.0, 600)
+        self.assertGreater(mach.cpu_temp, 90,
+                           "a 25 W die on a bare heatsink has nowhere to put it")
+
+    def test_the_curve_does_not_oscillate(self) -> None:
+        """A fan curve that is too steep chases the die in circles, and the
+        temperature visibly pulses. It has to settle."""
+        mach = self.ref()
+        self.settle(mach, 1.0, 300)
+        readings = []
+        for _ in range(40):
+            self.settle(mach, 1.0, 0.5)
+            readings.append(mach.cpu_temp)
+        self.assertLess(max(readings) - min(readings), 0.5,
+                        f"temperature should be steady, saw {readings[:5]}")
+
+    def test_the_spindle_comes_up_to_speed_and_stays_there(self) -> None:
+        mach = self.ref()
+        self.settle(mach, 0.2, 1)
+        early = mach.hdd_rpm
+        self.settle(mach, 0.2, 2)
+        middle = mach.hdd_rpm
+        self.settle(mach, 0.2, 60)
+        late = mach.hdd_rpm
+        self.assertLess(early, 4000, "a spindle does not reach speed at once")
+        self.assertGreater(middle, early, "but it is on its way")
+        self.assertGreater(late, 7100, "and a 7200 rpm drive gets to 7200")
+        self.assertLess(late, 7300, "without inventing revolutions")
+
+    def test_smart_reports_the_temperature_it_measured(self) -> None:
+        mach = self.ref()
+        self.settle(mach, 0.5, 200)
+        attribute = mach.smart[4]
+        expected = 100 - (round(mach.hdd_temp) - 25) * 2
+        self.assertEqual(attribute, max(1, min(100, expected)))
+        self.assertLessEqual(mach.smart_worst[4], attribute)
+
+    def test_the_ports_carry_the_readings(self) -> None:
+        """What the firmware actually reads: two bytes for a 16-bit value."""
+        mach = self.ref()
+        mach.steps = 1_700_000 * 200
+        temp = mach.port_in(0x5B0, 1)
+        lo = mach.port_in(0x5B1, 1)
+        hi = mach.port_in(0x5B2, 1)
+        self.assertEqual(temp, int(round(mach.cpu_temp)))
+        self.assertEqual(lo + hi * 256, int(mach.fan_rpm))
+        mach.port_out(0x5B7, 4, 1)
+        self.assertEqual(mach.port_in(0x5B8, 1), mach.smart[4])
+        self.assertEqual(mach.port_in(0x5B9, 1), mach.smart_worst[4])
+
+    def test_the_emulation_switch_stops_the_sensors(self) -> None:
+        mach = self.ref()
+        mach.emu_on = 0
+        before = mach.cpu_temp
+        mach.thermal(60, 1.0)
+        self.assertEqual(mach.cpu_temp, before,
+                         "with emulation off the board has no sensors at all")
+
+    def test_the_scratch_sensor_runs_the_same_equations(self) -> None:
+        """The sensor core and the model are one design, so they must agree.
+
+        The Scratch side integrates a 1/60 s step and the model a 1/4 s step;
+        both use explicit Euler and the same constants, so after the same
+        emulated time they land within a degree of each other.
+        """
+        import json
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            back = Path(tmp) / "m.back.jsw"
+            subprocess.run([sys.executable, "-m", "jswc", "decompile",
+                            str(ROOT / "build" / "i386" / "i386-test.sb3"),
+                            "-o", str(back), "--skip-assets"],
+                           cwd=ROOT, check=True, capture_output=True)
+            source = back.read_text()
+
+        env = jsw_sim.Env()
+        classes = jsw_sim.parse_program(source, env)
+        env.procs = classes["Sensor"].procs
+        env.threads.append({})
+        env.current = 0
+        ref = self.ref()
+        # the model's constants, copied into the Scratch machine's stage
+        for name in ("pIdle", "pMax", "cTh", "rTh", "fanMin", "fanMax",
+                     "fanKnee", "fanSlope", "tAmbient", "spinUpSecs"):
+            key = "X." + name
+            env.vars[key] = getattr(ref, _SNAKE[name])
+        env.vars["X.rtcRate"] = 60
+        env.vars["X.emuOn"] = 1
+        env.vars["X.cpuBase"] = 33
+        env.vars["X.rtcSeconds"] = 0
+        env.vars["X.powerOnSecs"] = 0
+        env.vars["X.hddSpunAt"] = 0
+        env.vars["X.cpuTemp"] = 27
+        env.vars["X.fanRpm"] = ref.fan_min
+        env.vars["X.hddTemp"] = 27
+        env.vars["X.hddRpm"] = 0
+        env.vars["X.hwTicks"] = 0
+        env.lists["X.coreUsage"] = [0] * 8
+        env.lists["X.hwSmart"] = [100] * 10
+        env.lists["X.hwSmartWorst"] = [100] * 10
+
+        seconds = 200
+        env.lists["X.coreUsage"] = [100, 0, 0, 0, 0, 0, 0, 0]
+        for i in range(seconds * 60):
+            env.vars["X.rtcSeconds"] = env.vars["X.rtcSeconds"] + 1 / 60
+            gen = jsw_sim.call(env, env.procs["hwStep"], [])
+            try:
+                while True:
+                    next(gen)
+            except StopIteration:
+                pass
+        ref.thermal(seconds, 1.0)
+        self.assertAlmostEqual(env.vars["X.cpuTemp"], ref.cpu_temp, delta=1.0,
+                               msg="the two thermal models have drifted apart")
+        self.assertAlmostEqual(env.vars["X.fanRpm"], ref.fan_rpm, delta=60)
+        self.assertAlmostEqual(env.vars["X.hddRpm"], ref.hdd_rpm, delta=40)
+
+
+#: the Scratch side's names for the same constants
+_SNAKE = {
+    "pIdle": "p_idle", "pMax": "p_max", "cTh": "c_th", "rTh": "r_th",
+    "fanMin": "fan_min", "fanMax": "fan_max", "fanKnee": "fan_knee",
+    "fanSlope": "fan_slope", "tAmbient": "t_ambient",
+    "spinUpSecs": "spin_up_secs",
+}
+
+
 class I386BuildTests(unittest.TestCase):
     """Two builds of one source: the published one and the fast one.
 
@@ -1328,8 +1669,13 @@ console.log(JSON.stringify(out));
 
         self.assertGreater(len(ram), 128 * 1024 * 1024 - 1,
                            "the board asked for 128 MiB and got it")
-        self.assertEqual(int(env.vars["X.memWords"]), 33554432,
-                         "128 MiB counted in 32-bit words, the list build's unit")
+        # Base memory is a list in both builds -- it is the hot path, and an
+        # extension call is still a call -- so the 128 MiB lives entirely above
+        # 1 MiB, where a PC has extended memory anyway.
+        self.assertEqual(int(env.vars["X.memWords"]), 640 * 1024 // 4,
+                         "640 KiB of base memory, in a list")
+        self.assertEqual(int(env.vars["X.extWords"]), 33554432,
+                         "128 MiB of extended memory, through Ram")
 
         mach = rv.Machine()
         mach.ram[:] = i386_image.build()
@@ -1346,8 +1692,8 @@ console.log(JSON.stringify(out));
                 self.fail(f"diverged at instruction {i}: "
                           f"jsw {int(env.lists['sr'][1]):04x}:{int(env.vars['ip']):04x} "
                           f"ref {mach.sreg[rv.SEG_CS]:04x}:{mach.eip:04x}")
-        self.assertTrue(any(ram[0:0x500]),
-                        "the guest wrote something into the extension's memory")
+        self.assertTrue(any(env.lists["X.mem"]),
+                        "the guest wrote something into base memory")
 
     def test_a_board_that_cannot_have_128_mib_reports_what_it_got(self) -> None:
         """`alloc` halves the ask instead of throwing: the project must survive."""
