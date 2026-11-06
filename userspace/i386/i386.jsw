@@ -451,6 +451,7 @@ class Cpu {
     private sbase = [0, 0, 0, 0, 0, 0, 0];
     private slimit = [65535, 65535, 65535, 65535, 65535, 65535, 65535];
     private dsz = 2;                    // what an unprefixed instruction means
+    private _pgFault = 0;               // already delivering a page fault
     private ldtr = 0;                   // the two descriptor-table registers
     private tr = 0;                     // a protected-mode kernel sets up
     /* the hardware monitor's stopwatch: instructions retired since `hwAt`
@@ -911,28 +912,34 @@ class Cpu {
      * the wrong thing -- the failure looks like a screen that never changes. */
     private void rdb(a) { // warp
         v = 0xFF;                      // an open bus reads as all ones
-        if (a < X.holeEnd) {           // hot path: one comparison for base memory
-            _w = X.mem.get(Operators.math("floor", a / 4) + 1) + 0;
-            v = Operators.math("floor", _w / X.bw.get(a % 4 + 1)) % 256;
+        /* The chipset forwards the last megabyte of the four-gigabyte space to
+         * the top megabyte of the real one, which is where a protected-mode
+         * BIOS looks for its own ROM. A twenty-bit address mask used to make
+         * that work by accident; this is what was actually happening. */
+        _pA = a;
+        if (_pA >= 4293918720) { _pA = _pA - 4293918720 + 983040; }
+        if (_pA < X.holeEnd) {         // hot path: one comparison for base memory
+            _w = X.mem.get(Operators.math("floor", _pA / 4) + 1) + 0;
+            v = Operators.math("floor", _w / X.bw.get(_pA % 4 + 1)) % 256;
             return;
         }
-        if (a >= X.textBase && a < X.textBase + X.textWords * 4) {
-            _w = X.text.get(Operators.math("floor", (a - X.textBase) / 4) + 1) + 0;
-            v = Operators.math("floor", _w / X.bw.get((a - X.textBase) % 4 + 1)) % 256;
+        if (_pA >= X.textBase && _pA < X.textBase + X.textWords * 4) {
+            _w = X.text.get(Operators.math("floor", (_pA - X.textBase) / 4) + 1) + 0;
+            v = Operators.math("floor", _w / X.bw.get((_pA - X.textBase) % 4 + 1)) % 256;
             return;
         }
-        if (a >= X.diskBase && a < X.diskBase + X.diskWords * 4) {
-            _w = X.disk.get(Operators.math("floor", (a - X.diskBase) / 4) + 1) + 0;
-            v = Operators.math("floor", _w / X.bw.get((a - X.diskBase) % 4 + 1)) % 256;
+        if (_pA >= X.diskBase && _pA < X.diskBase + X.diskWords * 4) {
+            _w = X.disk.get(Operators.math("floor", (_pA - X.diskBase) / 4) + 1) + 0;
+            v = Operators.math("floor", _w / X.bw.get((_pA - X.diskBase) % 4 + 1)) % 256;
             return;
         }
-        if (a >= X.romBase && a < X.romBase + X.romWords * 4) {
-            _w = X.bios.get(Operators.math("floor", (a - X.romBase) / 4) + 1) + 0;
-            v = Operators.math("floor", _w / X.bw.get((a - X.romBase) % 4 + 1)) % 256;
+        if (_pA >= X.romBase && _pA < X.romBase + X.romWords * 4) {
+            _w = X.bios.get(Operators.math("floor", (_pA - X.romBase) / 4) + 1) + 0;
+            v = Operators.math("floor", _w / X.bw.get((_pA - X.romBase) % 4 + 1)) % 256;
             return;
         }
-        if (a >= X.ahciBase && a < X.ahciBase + X.ahciWords * 4) {
-            _o = a - X.ahciBase;
+        if (_pA >= X.ahciBase && _pA < X.ahciBase + X.ahciWords * 4) {
+            _o = _pA - X.ahciBase;
             _w = X.ahci.get(Operators.math("floor", _o / 4) + 1) + 0;
             v = Operators.math("floor", _w / X.bw.get(_o % 4 + 1)) % 256;
             return;
@@ -940,8 +947,8 @@ class Cpu {
 #ifdef TURBOWARP
         /* Extended memory is the only thing the extension holds: above 1 MiB,
          * where there is no list to be fast with and no card to shadow it. */
-        if (a >= X.extBase && a < X.extBase + X.extWords * 4) {
-            v = Ram.read8(a - X.extBase);
+        if (_pA >= X.extBase && _pA < X.extBase + X.extWords * 4) {
+            v = Ram.read8(_pA - X.extBase);
         }
 #endif
     }
@@ -949,16 +956,18 @@ class Cpu {
     private void wrb(a, val) { // warp
 
         _wv = val % 256;
-        if (a < X.holeEnd) {           // hot path, and the same one comparison
-            _i = Operators.math("floor", a / 4) + 1;
-            _sh = X.bw.get(a % 4 + 1);
+        _pA = a;
+        if (_pA >= 4293918720) { _pA = _pA - 4293918720 + 983040; }
+        if (_pA < X.holeEnd) {         // hot path, and the same one comparison
+            _i = Operators.math("floor", _pA / 4) + 1;
+            _sh = X.bw.get(_pA % 4 + 1);
             _old = X.mem.get(_i) + 0;
             _b = Operators.math("floor", _old / _sh) % 256;
             X.mem.set(_i, _old - _b * _sh + _wv * _sh);
             return;
         }
-        if (a >= X.textBase && a < X.textBase + X.textWords * 4) {
-            _o = a - X.textBase;
+        if (_pA >= X.textBase && _pA < X.textBase + X.textWords * 4) {
+            _o = _pA - X.textBase;
             _i = Operators.math("floor", _o / 4) + 1;
             _sh = X.bw.get(_o % 4 + 1);
             _old = X.text.get(_i) + 0;
@@ -967,14 +976,14 @@ class Cpu {
             markCell(_o);
             return;
         }
-        if (a >= X.diskBase && a < X.diskBase + X.diskWords * 4) {
+        if (_pA >= X.diskBase && _pA < X.diskBase + X.diskWords * 4) {
             return;             // the disk window is read-only: nothing latches
         }
-        if (a >= X.romBase && a < X.romBase + X.romWords * 4) {
+        if (_pA >= X.romBase && _pA < X.romBase + X.romWords * 4) {
             return;             // so is the ROM
         }
-        if (a >= X.ahciBase && a < X.ahciBase + X.ahciWords * 4) {
-            _o = a - X.ahciBase;
+        if (_pA >= X.ahciBase && _pA < X.ahciBase + X.ahciWords * 4) {
+            _o = _pA - X.ahciBase;
             _i = Operators.math("floor", _o / 4) + 1;
             _sh = X.bw.get(_o % 4 + 1);
             _dw = X.ahci.get(_i) + 0;
@@ -984,8 +993,8 @@ class Cpu {
             return;
         }
 #ifdef TURBOWARP
-        if (a >= X.extBase && a < X.extBase + X.extWords * 4) {
-            Ram.write8(a - X.extBase, _wv);
+        if (_pA >= X.extBase && _pA < X.extBase + X.extWords * 4) {
+            Ram.write8(_pA - X.extBase, _wv);
         }
 #endif
     }
@@ -1024,7 +1033,56 @@ class Cpu {
         _pSeg = segIndex;
         if (_pSeg < 1) { _pSeg = 0; }      // segment 0: the interrupt table
         if (_pSeg > 0) { _pSeg = sbase.get(_pSeg) + 0; }
-        v = (_pSeg + off) % 1048576;
+        _lin = (_pSeg + off) % 4294967296;
+        if (cr0 % 2 == 0) {
+            /* Real mode wraps at a megabyte, and that is not a simplification:
+             * an 8086 with a segment of 0xFFFF and an offset of 0xFFFF really
+             * does come back round to the bottom. */
+            v = _lin % 1048576;
+            return;
+        }
+        /* Protected mode with paging off still wraps at a megabyte. That is
+         * what this board did before paging existed, and a real SeaBIOS turns
+         * out to depend on it -- the honest hardware answer would be an open
+         * bus above the installed RAM. Extended memory is reached the way a
+         * kernel reaches it: through page tables, which return a physical
+         * address untruncated. */
+        if (Operators.math("floor", cr0 / 2147483648) % 2 == 0) {
+            v = _lin % 1048576;
+            return;
+        }
+        pageWalk(_lin);
+    }
+
+    /* ---- paging --------------------------------------------------------- *
+     * Two levels, four kilobytes a page, and the only thing CR0.PG changes is
+     * that every address the machine produces goes through here first. A
+     * missing entry is a page fault, which is interrupt 14 with the address in
+     * CR2 -- and the fault handler itself runs through this same path, so a
+     * fault inside a fault stops the machine rather than looping for ever.
+     */
+    private void pageWalk(lin) { // warp
+        _pgAt = (cr3 - cr3 % 4096) + Operators.math("floor", lin / 4194304) * 4;
+        rdd(_pgAt);
+        _pde = v;
+        if (_pde % 2 == 0) { pageFault(lin, 0); return; }
+        _pgAt = _pde - _pde % 4096 + Operators.math("floor", lin / 4096) % 1024 * 4;
+        rdd(_pgAt);
+        _pte = v;
+        if (_pte % 2 == 0) { pageFault(lin, 1); return; }
+        v = (_pte - _pte % 4096) + lin % 4096;
+    }
+
+    private void pageFault(lin, level) { // warp
+        v = 0;
+        if (_pgFault == 1) {               // a fault while delivering one
+            err = join("page fault in a page fault at ", lin);
+            halted = 1;
+            return;
+        }
+        cr2 = lin;                         // the address that caused it
+        interrupt(14);
+        _pgFault = 0;
     }
 
     /* ---- the 386's protected mode ------------------------------------ *
@@ -1082,7 +1140,7 @@ class Cpu {
      * until the guest loads them again. */
     private void writeCr0(value) { // warp
         _was = cr0 % 2;
-        cr0 = value % 65536;
+        cr0 = value % 4294967296;          // PG is bit 31, so not a word
         if (_was == 0 && cr0 % 2 == 1) {
             _i = 1;
             while (_i < 7) {
@@ -1130,6 +1188,16 @@ class Cpu {
         v = _fLo + v * 256;
     }
 
+    /* A thirty-two-bit immediate: the operand size prefix is what asks for it,
+     * and `mov eax, 0x80000001` is how a kernel turns paging on, so it is the
+     * one 32-bit form that has to work before anything else does. */
+    private void f32() { // warp
+        f16();
+        _fLo32 = v;
+        f16();
+        v = _fLo32 + v * 65536;
+    }
+
     private void getReg8(i) { // warp
         if (i >= 4) {
             v = Operators.math("floor", r.get(i - 3) / 256) % 256;
@@ -1158,6 +1226,16 @@ class Cpu {
 
     private void putReg16(i, val) { // warp
         r.set(i + 1, val % 65536);
+    }
+
+    /* The full thirty-two bits. `mov cr0, eax` needs them: PG is bit 31, and a
+     * sixteen-bit transfer cannot reach it. */
+    private void getReg32(i) { // warp
+        v = r.get(i + 1) + 0;
+    }
+
+    private void putReg32(i, val) { // warp
+        r.set(i + 1, val % 4294967296);
     }
 
     /*
@@ -1502,10 +1580,8 @@ class Cpu {
              * with the *first* byte in the low half. Getting that backwards
              * reports a capacity of 0x7F000001 blocks of two bytes. */
             _last = X.ataSectors - 1;
-            X.scsiBuf.set(1, Operators.math("floor", _last / 16777216) % 256
-                + Operators.math("floor", _last / 65536) % 256 * 256);
-            X.scsiBuf.set(2, Operators.math("floor", _last / 256) % 256
-                + _last % 256 * 256);
+            X.scsiBuf.set(1, Operators.math("floor", _last / 16777216) % 256 + Operators.math("floor", _last / 65536) % 256 * 256);
+            X.scsiBuf.set(2, Operators.math("floor", _last / 256) % 256 + _last % 256 * 256);
             X.scsiBuf.set(3, 0);
             X.scsiBuf.set(4, 2);                    // 0x0000_0200: 512
             return;
@@ -2640,10 +2716,15 @@ class Cpu {
             }
             return;
         }
-        if (op >= 176 && op <= 191) {          // mov r8/r16, imm
+        if (op >= 176 && op <= 191) {          // mov r8/r16/r32, imm
             if (op < 184) {
                 f8();
                 putReg8(op - 176, v);
+                return;
+            }
+            if (oz == 4) {
+                f32();
+                putReg32(op - 184, v);
                 return;
             }
             f16();
@@ -3500,9 +3581,9 @@ class Cpu {
         }
         if (_tOp == 32 || _tOp == 34) {        // mov r32, cr / mov cr, r32
             /* Always a thirty-two-bit transfer, whatever the operand size
-             * prefix says: the register file here is sixteen bits wide, so the
-             * top half is dropped -- and PE, PG and the page table base all
-             * live in the bottom half, which is the half that matters. */
+             * prefix says -- and it really is thirty-two bits, because PG is
+             * bit 31 of CR0 and a page directory can sit anywhere in the
+             * low megabyte. */
             f8();
             _tMod = v;
             _tReg = Operators.math("floor", _tMod / 8) % 8;
@@ -3512,10 +3593,10 @@ class Cpu {
                 if (_tReg == 0) { _tV = cr0; }
                 if (_tReg == 2) { _tV = cr2; }
                 if (_tReg == 3) { _tV = cr3; }
-                putReg16(_tRm, _tV);
+                putReg32(_tRm, _tV);
                 return;
             }
-            getReg16(_tRm);
+            getReg32(_tRm);
             if (_tReg == 0) { writeCr0(v); }
             if (_tReg == 2) { cr2 = v % 65536; }
             if (_tReg == 3) { cr3 = v % 65536; }

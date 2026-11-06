@@ -530,20 +530,74 @@ class Machine:
 
     def phys(self, seg, off):
         """seg is an index into the six segment registers, not a selector."""
-        return (self.sbase(seg) + off) & 0xFFFFF
+        lin = (self.sbase(seg) + off) & 0xFFFF_FFFF
+        if not self.pe:
+            return lin & 0xFFFFF          # real mode wraps at a megabyte
+        if not self.cr[0] & 0x8000_0000:
+            # Protected mode with paging off still wraps at a megabyte here,
+            # which is what this board did before paging existed and what a real
+            # SeaBIOS turns out to depend on. It is not what the hardware does:
+            # on a 386, a linear address above the installed RAM reads an open
+            # bus. Extended memory is reached the way a kernel reaches it --
+            # through page tables, which return a physical address untruncated.
+            return lin & 0xFFFFF
+        return self.translate(lin)
+
+    # ---- paging ------------------------------------------------------
+
+    def translate(self, lin: int) -> int:
+        """Two levels, four kilobytes a page. A missing entry is a page fault:
+        interrupt 14, with the address that caused it left in CR2."""
+        pde_at = (self.cr[3] & ~0xFFF) + ((lin >> 22) & 0x3FF) * 4
+        pde = self.fetch_physical(pde_at)
+        if not pde & 1:
+            self.page_fault(lin)
+            return 0
+        pte_at = (pde & ~0xFFF) + ((lin >> 12) & 0x3FF) * 4
+        pte = self.fetch_physical(pte_at)
+        if not pte & 1:
+            self.page_fault(lin)
+            return 0
+        return (pte & ~0xFFF) + (lin & 0xFFF)
+
+    def fetch_physical(self, addr: int) -> int:
+        """A dword out of physical memory, without asking the pager again."""
+        at = addr & 0xFFFF_FFFF
+        if at + 4 > self.ram_size:
+            return 0xFFFF_FFFF
+        return int.from_bytes(self.ram[at:at + 4], "little")
+
+    def page_fault(self, lin: int) -> None:
+        if getattr(self, "_in_fault", False):
+            self.error = f"page fault in a page fault at {lin:#x}"
+            self.halted = True
+            return
+        self.cr[2] = lin & 0xFFFF_FFFF
+        self._in_fault = True
+        try:
+            self.interrupt(14)
+        finally:
+            self._in_fault = False
 
     def linear(self, selector, off):
         """The 20-bit address a real-mode selector:offset pair names."""
         return ((selector << 4) + off) & 0xFFFFF
 
     def read(self, addr, size):
-        addr &= 0xFFFFF
+        addr &= 0xFFFF_FFFF
+        # the chipset forwards the last megabyte of the four-gigabyte space to
+        # the top megabyte of the real one, which is where a protected-mode
+        # BIOS looks for its own ROM
+        if addr >= 0xFFF0_0000:
+            addr = addr - 0xFFF0_0000 + 0xF0000
         if addr + size > self.ram_size:
             return MASK[size]      # nothing there: an open bus reads all ones
         return int.from_bytes(self.ram[addr:addr + size], "little")
 
     def write(self, addr, value, size):
-        addr &= 0xFFFFF
+        addr &= 0xFFFF_FFFF
+        if addr >= 0xFFF0_0000:
+            addr = addr - 0xFFF0_0000 + 0xF0000
         if addr + size > self.ram_size:
             return                 # and a write to nothing goes nowhere
         self.ram[addr:addr + size] = (value & MASK[size]).to_bytes(size, "little")

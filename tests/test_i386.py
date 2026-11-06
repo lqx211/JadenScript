@@ -1320,6 +1320,232 @@ class I386DriveTests(unittest.TestCase):
         self.assertIn("drvStr", source, "and the buffer needs its own data segment")
 
 
+class I386KernelTests(unittest.TestCase):
+    """The smallest thing that deserves the name "kernel": it turns the machine
+    into a 386 with paging on, and then says so on the screen.
+
+    `userspace/i386/kernel.asm` loads a GDT, enters protected mode, builds a
+    page directory and a page table, sets CR3, sets CR0.PG -- and then stores
+    six characters at the text plane. Because the text plane is reached through
+    those tables, the characters are the evidence: they cannot appear unless
+    the pager walked.
+    """
+
+    BIN = ROOT / "userspace/i386/kernel.bin"
+
+    def run_kernel(self, limit: int = 6000) -> rv.Machine:
+        blob = self.BIN.read_bytes()
+        mach = rv.Machine()
+        mach.ram[0x1000:0x1000 + len(blob)] = blob
+        mach.sreg[rv.SEG_CS] = 0x0100
+        mach.eip = 0
+        for _ in range(limit):
+            mach.step()
+            if mach.halted:
+                break
+        return mach
+
+    def test_it_gets_to_protected_mode_with_paging_on(self) -> None:
+        mach = self.run_kernel()
+        self.assertTrue(mach.pe, "PE")
+        self.assertTrue(mach.cr[0] & 0x8000_0000, "PG")
+        self.assertEqual(mach.cr[3], 0x2000, "CR3 points at the directory")
+
+    def test_the_tables_are_what_it_built(self) -> None:
+        mach = self.run_kernel()
+        pde = mach.read(0x2000, 4)
+        self.assertEqual(pde & ~0xFFF, 0x3000, "the directory points at the table")
+        self.assertTrue(pde & 0x07, "present, writable, user")
+        for page in (0x0, 0x1, 0x7, 0xB8):
+            entry = mach.read(0x3000 + page * 4, 4)
+            self.assertEqual(entry, page * 0x1000 | 0x07,
+                             f"page {page:#x} maps to itself")
+
+    def test_it_prints_through_the_pager(self) -> None:
+        mach = self.run_kernel()
+        row = bytes(mach.ram[0xB8000:0xB8000 + 12])
+        text = "".join(chr(row[i]) for i in range(0, len(row), 2))
+        self.assertEqual(text, "KERNEL")
+        self.assertEqual(row[1], 0x0F, "white on black, like a real VGA card")
+
+    def test_it_halts_rather_than_running_off(self) -> None:
+        mach = self.run_kernel()
+        self.assertTrue(mach.halted)
+        self.assertEqual(mach.error, "", "and with nothing to complain about")
+
+
+class I386PagingTests(unittest.TestCase):
+    """Two levels, four kilobytes a page, and every address goes through it.
+
+    A kernel turns paging on early, so the machine has to do the walk rather
+    than ignore CR0.PG. The interesting case is not an identity map -- that
+    passes even if nothing is translated -- but two virtual pages pointing at
+    different physical ones.
+    """
+
+    PD = 0x2000        # page directory
+    PT = 0x3000        # page table for the first 4 MiB
+    PHYS_A = 0x4000    # where virtual 0x0000 lands
+    PHYS_B = 0x5000    # where virtual 0x1000 lands
+
+    def ref(self):
+        mach = rv.Machine()
+        mach.ram[:] = i386_image.build()
+        self.program_tables(mach.write)
+        return mach
+
+    def program_tables(self, write) -> None:
+        write(self.PD, self.PT | 0x07, 4)          # present, rw, user
+        write(self.PT + 0, self.PHYS_A | 0x07, 4)  # virtual 0x0000
+        write(self.PT + 4, self.PHYS_B | 0x07, 4)  # virtual 0x1000
+        write(self.PT + 8, 0x0000_0000, 4)         # virtual 0x2000: not present
+
+    def enable(self, mach) -> None:
+        mach.cr[3] = self.PD
+        mach.write_cr0(0x8000_0001)                # PE and PG
+
+    def test_a_virtual_page_reaches_a_different_physical_page(self) -> None:
+        mach = self.ref()
+        mach.write(self.PHYS_A, 0xCD, 1)
+        mach.write(self.PHYS_B, 0xAB, 1)
+        self.enable(mach)
+        self.assertEqual(mach.read(mach.phys(rv.SEG_DS, 0x0000), 1), 0xCD)
+        self.assertEqual(mach.read(mach.phys(rv.SEG_DS, 0x1000), 1), 0xAB,
+                         "virtual 0x1000 has to translate to physical 0x3000")
+        self.assertEqual(mach.read(mach.phys(rv.SEG_DS, 0x1000), 1),
+                         mach.read(self.PHYS_B, 1))
+
+    def test_paging_off_means_the_linear_address_is_the_physical_one(self) -> None:
+        mach = self.ref()
+        mach.write_cr0(0x0000_0001)                # protected, but no paging
+        self.assertEqual(mach.phys(rv.SEG_DS, 0x1234), 0x1234)
+
+    def test_real_mode_wraps_at_a_megabyte(self) -> None:
+        """The old mask was not a shortcut: an 8086 really does come back round
+        to the bottom of memory."""
+        mach = self.ref()
+        mach.base[rv.SEG_DS] = 0xFFFF0
+        self.assertEqual(mach.phys(rv.SEG_DS, 0x10), 0,
+                         "FFFF:0010 is 0x100000, which the 20-bit bus wraps to 0")
+
+    def test_a_missing_page_faults_and_lands_on_the_handler(self) -> None:
+        """A fault is interrupt 14 through the IDT, not a stop."""
+        mach = self.ref()
+        # a GDT with one code descriptor at 0x08: base 0, 1 MiB, read/execute
+        mach.gdtr = [0x7000, 15]
+        for i, byte in enumerate((0xFF, 0xFF, 0x00, 0x00, 0x00, 0x9A, 0x00, 0x00)):
+            mach.write(0x7008 + i, byte, 1)
+        # and an IDT whose vector 14 points at 0x1234:0x0008
+        mach.idtr = [0x6000, 0x7FF]
+        mach.write(0x6000 + 14 * 8, 0x1234, 2)
+        mach.write(0x6000 + 14 * 8 + 2, 0x0008, 2)
+        mach.write(0x6000 + 14 * 8 + 4, 0x8E00, 2)
+        mach.write(0x6000 + 14 * 8 + 6, 0x0000, 2)
+        # the interrupt pushes onto the stack, so the stack has to be in a
+        # page that is mapped -- power-on leaves SP at 0, which wraps to the
+        # top of memory and is not
+        mach.reg[4] = 0x0800
+        self.enable(mach)
+        mach.phys(rv.SEG_DS, 0x2000)
+        self.assertEqual(mach.cr[2], 0x2000, "CR2 holds the faulting address")
+        self.assertEqual(mach.eip, 0x1234, "and the handler is running")
+        self.assertEqual(mach.sreg[rv.SEG_CS], 0x0008, "in the code segment")
+        self.assertFalse(mach.halted)
+
+    def test_a_fault_with_no_idt_stops_rather_than_looping(self) -> None:
+        mach = self.ref()
+        self.enable(mach)
+        mach.phys(rv.SEG_DS, 0x2000)
+        self.assertTrue(mach.halted, "no handler, and none to fault into")
+
+    def test_extended_memory_is_reached_through_page_tables(self) -> None:
+        """A segment base of 1 MiB does not get there on its own -- protected
+        mode with paging off wraps at a megabyte, which is what a real SeaBIOS
+        depends on. A page table does, because the physical address it produces
+        is not truncated: that is how a kernel uses the 128 MiB above the hole.
+        """
+        mach = self.ref()
+        mach.write(0x2000, 0x3000 | 0x07, 4)
+        mach.write(0x3000, 0x0020_0000 | 0x07, 4)   # virtual 0 -> physical 2 MiB
+        mach.cr[3] = 0x2000
+        mach.write_cr0(0x8000_0001)
+        self.assertEqual(mach.phys(rv.SEG_DS, 0x40), 0x0020_0040,
+                         "a mapped page above 1 MiB keeps its address")
+
+    def test_protected_mode_without_paging_still_wraps(self) -> None:
+        mach = self.ref()
+        mach.write_cr0(0x0000_0001)
+        mach.base[rv.SEG_DS] = 0x0010_0000
+        self.assertEqual(mach.phys(rv.SEG_DS, 0x40), 0x40,
+                         "the board aliases above a megabyte; a real SeaBIOS needs it")
+
+    def test_the_scratch_machine_walks_the_same_tables(self) -> None:
+        """The generated project, stepped to the same state and asked the same
+        question: two virtual pages, two physical pages."""
+        import json
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "m.sb3"
+            back = Path(tmp) / "m.jsw"
+            subprocess.run([sys.executable, "-m", "jswc", "build",
+                            str(RVDIR / "i386.jsw"), "-o", str(out)],
+                           cwd=ROOT, check=True, capture_output=True)
+            subprocess.run([sys.executable, "-m", "jswc", "decompile", str(out),
+                            "-o", str(back), "--skip-assets"],
+                           cwd=ROOT, check=True, capture_output=True)
+            source = back.read_text()
+
+        env = jsw_sim.Env()
+        classes = jsw_sim.parse_program(source, env)
+        procs = classes["Cpu"].procs
+        env.procs = procs
+        env.threads.append({})
+        env.current = 0
+        for name, asset in (("rom", "bios"), ("disk", "disk"), ("ident", "ident")):
+            env.lists[name] = json.loads(
+                (RVDIR / "assets" / "lists" / f"{asset}.jsa").read_text())
+        env.vars["X.cores"] = 1
+        gen = jsw_sim.call(env, procs["powerOn"], [])
+        try:
+            while True:
+                next(gen)
+        except StopIteration:
+            pass
+
+        def call(name, *args):
+            g = jsw_sim.call(env, procs[name], list(args))
+            try:
+                while True:
+                    next(g)
+            except StopIteration:
+                pass
+
+        def poke(addr, value, size=4):
+            for k in range(size):
+                call("wrb", addr + k, (value >> (8 * k)) & 0xFF)
+
+        mem = env.lists["X.mem"]
+
+        def word(addr):
+            return int(mem[addr // 4]) >> (8 * (addr % 4)) & 0xFF
+
+        self.program_tables(poke)
+        poke(self.PHYS_A, 0xCD)
+        poke(self.PHYS_B, 0xAB)
+        env.vars["cr3"] = self.PD
+        call("writeCr0", 0x80000001)              # PE and PG
+        call("phys", 4, 0x0000)
+        low = int(jsw_sim.Env.num(env.vars["v"]))
+        call("phys", 4, 0x1000)
+        high = int(jsw_sim.Env.num(env.vars["v"]))
+        self.assertEqual(high, self.PHYS_B,
+                         f"virtual 0x1000 translated to {high:#x}")
+        self.assertEqual(low, self.PHYS_A)
+        self.assertEqual(word(high), 0xAB)
+        self.assertEqual(word(low), 0xCD)
+
+
 class I386OpcodeCoverageTests(unittest.TestCase):
     """Every opcode both machines implement has to do the same thing.
 

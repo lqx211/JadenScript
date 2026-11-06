@@ -137,6 +137,12 @@ i386-pm:
 	cd userspace/i386 && nasm -f bin pm16.asm -o pm16.bin
 	$(PY) tools/i386_jsw_check.py --code userspace/i386/pm16.bin --steps 40 --no-build
 
+# the smallest thing that deserves the name "kernel": protected mode, a page
+# directory and a page table, CR0.PG, and six characters stored through them.
+i386-kernel:
+	cd userspace/i386 && nasm -f bin kernel.asm -o kernel.bin
+	$(PY) tools/i386_jsw_check.py --code userspace/i386/kernel.bin --steps 6000 --no-build
+
 # the same comparison into the setup utility: Delete stops the countdown and
 # opens the setup straight away
 i386-setup-check:
