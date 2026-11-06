@@ -394,6 +394,26 @@ class I386SetupTests(unittest.TestCase):
         self.assertEqual(mach.cmos[0x36], 0x03, "40 MHz, the next entry up")
         self.assertEqual(mach.cpu_base, 40)
 
+    def test_a_setting_wraps_at_both_ends(self) -> None:
+        """0 - 1 is 0xFF, which is bigger than every count on the screen, so a
+        plain "over the top, wrap to zero" turned Left on the first entry into a
+        value that stayed on the first entry. Boot Sequence has four entries and
+        starts at zero, which is where it showed."""
+        first = self._setup([self.F2] + [self.DOWN] * 11
+                            + [self.ENTER, self.LEFT, self.ENTER])
+        self.assertEqual(first.read(0x500 + 8, 1), 3,
+                         "Left on the first entry lands on the last")
+        last = self._setup([self.F2] + [self.DOWN] * 11
+                           + [self.ENTER] + [self.RIGHT] * 4 + [self.ENTER])
+        self.assertEqual(last.read(0x500 + 8, 1), 0,
+                         "Right on the last entry lands on the first")
+
+    def test_the_clock_wraps_down_past_midnight(self) -> None:
+        # 12 o'clock, thirteen steps left: 11, 10 ... 0, then 23
+        mach = self._setup([self.F2] + [self.DOWN] * 8
+                           + [self.ENTER] + [self.LEFT] * 13 + [self.ENTER])
+        self.assertEqual(mach.read(0x500 + 3, 1), 23, "the hour before 0 is 23")
+
     def test_the_dialog_is_a_panel_with_a_shadow(self) -> None:
         mach = self._setup([self.F2] + self.TO_MONTH + [self.ENTER])
         shadows = sum(1 for row in range(rv.TEXT_ROWS)

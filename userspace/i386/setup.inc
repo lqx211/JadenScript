@@ -493,121 +493,38 @@ suAdjust:
     call    suStep31
     jmp     .store
 .not_day:
+    ; everything else counts from zero, and the count is the length of the
+    ; table the row reads its words out of
+    mov     cl, 100                 ; the year
     cmp     bl, 2
-    jne     .not_year
-    add     al, dl
-    cmp     al, 100
-    jb      .y_ok
-    xor     al, al
-.y_ok:
-    cmp     al, 0
-    jge     .y_done
-    mov     al, 99
-.y_done:
-    jmp     .store
-.not_year:
+    je      .wrap
+    mov     cl, 24                  ; the hour
     cmp     bl, 3
-    jne     .not_hour
-    add     al, dl
-    cmp     al, 24
-    jb      .h_ok
-    xor     al, al
-.h_ok:
-    cmp     al, 0
-    jge     .h_done
-    mov     al, 23
-.h_done:
-    jmp     .store
-.not_hour:
+    je      .wrap
+    mov     cl, 60                  ; minute and second
     cmp     bl, 4
-    jne     .not_min
-    call    suStep60
-    jmp     .store
-.not_min:
+    je      .wrap
     cmp     bl, 5
-    jne     .not_sec
-    call    suStep60
-    jmp     .store
-.not_sec:
+    je      .wrap
+    mov     cl, 5                   ; the floppy table
     cmp     bl, 6
-    jne     .not_flop
-    add     al, dl
-    cmp     al, 5
-    jb      .f_ok
-    xor     al, al
-.f_ok:
-    cmp     al, 0
-    jge     .f_done
-    mov     al, 4
-.f_done:
-    jmp     .store
-.not_flop:
+    je      .wrap
+    mov     cl, 4                   ; the disk and the boot order
     cmp     bl, 7
-    jne     .not_hd
-    add     al, dl
-    cmp     al, 4
-    jb      .d_ok
-    xor     al, al
-.d_ok:
-    cmp     al, 0
-    jge     .d_done
-    mov     al, 3
-.d_done:
-    jmp     .store
-.not_hd:
+    je      .wrap
     cmp     bl, 8
-    jne     .not_boot
-    add     al, dl
-    cmp     al, 4
-    jb      .b_ok
-    xor     al, al
-.b_ok:
-    cmp     al, 0
-    jge     .b_done
-    mov     al, 3
-.b_done:
-    jmp     .store
-.not_boot:
-    cmp     bl, 10
-    jne     .not_emusw
-    jmp     .memrow                  ; the core count: 0..10, and read-only
-.not_emusw:
+    je      .wrap
+    mov     cl, 11                  ; base memory, in 64 KiB steps
+    cmp     bl, 9
+    je      .wrap
+    mov     cl, 2                   ; the two On/Off switches
     cmp     bl, 11
-    jb      .memrow                  ; base memory has the same outer range
+    je      .wrap
     cmp     bl, 12
-    ja      .not_onoff
-    ; the two switches: On and Off, wrapping
-    add     al, dl
-    cmp     al, 2
-    jb      .sw_ok
-    xor     al, al
-.sw_ok:
-    cmp     al, 0
-    jge     .store
-    mov     al, 1
-    jmp     .store
-.not_onoff:
-    ; the clock and the repeat rate: five entries each, wrapping
-    add     al, dl
-    cmp     al, 5
-    jb      .en_ok
-    xor     al, al
-.en_ok:
-    cmp     al, 0
-    jge     .store
-    mov     al, 4
-    jmp     .store
-.memrow:
-    ; base memory: the buffer counts 64 KiB steps, the outer range is 0..10
-    add     al, dl
-    cmp     al, 10
-    jbe     .m_lo
-    mov     al, 10
-.m_lo:
-    cmp     al, 0
-    jge     .m_done
-    xor     al, al
-.m_done:
+    je      .wrap
+    mov     cl, 5                   ; the clock and the repeat rate
+.wrap:
+    call    suStepN
 .store:
     mov     bl, ah
     mov     [es:SU_BUF + bx], al
@@ -616,6 +533,25 @@ suAdjust:
     pop     cx
     pop     bx
     pop     ax
+    ret
+
+; al/dx = the value and the step, cl = how many entries. Wraps at both ends.
+;
+; The downward wrap is the one an unsigned compare gets wrong: 0 - 1 is 0xFF,
+; which is bigger than every count on this screen, so a plain "if it is over
+; the top, wrap to zero" turns Left on the first entry into a value that stays
+; on the first entry. The sign flag knows the difference.
+suStepN:
+    add     al, dl
+    jns     .pos
+    mov     al, cl
+    dec     al
+    ret
+.pos:
+    cmp     al, cl
+    jb      .done
+    xor     al, al
+.done:
     ret
 
 ; 1..12, wrapping
