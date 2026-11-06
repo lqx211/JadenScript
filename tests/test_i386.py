@@ -498,6 +498,49 @@ class I386BoardTests(unittest.TestCase):
         self.assertGreater(mach.read(0x500, 2), first)
 
 
+    def test_the_pit_read_back_hands_out_the_count_twice(self) -> None:
+        """SeaBIOS reads the counter with a read-back command and two port
+        reads.  The high byte used to be stashed where the *next* call's first
+        read would find it, so from the third read on the timer stood still at
+        zero and every `timer_sleep` in the BIOS span for ever."""
+        mach = rv.Machine()
+        mach.pit.control(0x34)                    # counter 0, lo then hi, mode 2
+        mach.pit.write(0, 0x34)
+        mach.pit.write(0, 0x12)
+        mach.pit.count[0] = 0x3549
+        for attempt in range(3):
+            mach.pit.control(0xD2)                # read-back: counter 0, value
+            lo, hi = mach.pit.read(0), mach.pit.read(0)
+            self.assertEqual(lo | hi << 8, 0x3549, f"attempt {attempt}")
+
+    def test_the_pit_read_back_can_ask_for_the_status(self) -> None:
+        mach = rv.Machine()
+        mach.pit.control(0x34)
+        mach.pit.write(0, 0x34)
+        mach.pit.write(0, 0x12)
+        mach.pit.control(0xE2)                    # read-back: counter 0, status
+        status = mach.pit.read(0)
+        self.assertEqual(status & 0x30, 0x30, "read/write field: lo then hi")
+        self.assertEqual((status >> 1) & 7, 2, "mode 2")
+
+    def test_the_pic_takes_its_initialisation_words_on_the_data_port(self) -> None:
+        """A real 8259 takes ICW2..ICW4 on 0x21, not 0x20.  Our own BIOS writes
+        them the other way and the chip tolerates that; SeaBIOS writes them the
+        real way, and a chip that treated them as the mask would still be in
+        initialization when the first EOI arrived -- and would swallow it."""
+        mach = rv.Machine()
+        mach.pic.command(0x11)                    # ICW1
+        mach.pic.data_write(0x08)                 # ICW2: vectors start at 08
+        mach.pic.data_write(0x04)                 # ICW3: a slave on line 2
+        mach.pic.data_write(0x01)                 # ICW4: 8086 mode
+        mach.pic.data_write(0xFE)                 # OCW1: only IRQ0 open
+        mach.pic.raise_line(0)
+        self.assertEqual(mach.pic.acknowledge(), 0x08)
+        self.assertEqual(mach.pic.isr, 0x01, "IRQ0 in service")
+        mach.pic.command(0x20)                    # EOI
+        self.assertEqual(mach.pic.isr, 0x00, "the EOI is not an ICW2")
+
+
 class I386SmpTests(unittest.TestCase):
     """Cores 2..N are woken through the chipset and check in through memory."""
 
@@ -767,6 +810,17 @@ class I386RealRomTests(unittest.TestCase):
         self.assertTrue(mach.pe, "CR0.PE after the far jump")
         self.assertEqual(mach.sreg[rv.SEG_CS], 0x08, "the 32-bit code selector")
         self.assertEqual(mach.dsz, 4, "and the code segment is 32-bit")
+
+    def test_real_seabios_gets_its_timer_interrupts(self) -> None:
+        """Two chip bugs used to stop it dead: the counter read came back as
+        zero after two reads, so `timer_sleep` never expired; and the 8259 was
+        still waiting for initialization words when the first EOI arrived, so
+        it read the EOI as ICW2 and left IRQ0 in service for ever."""
+        mach = self.boot_rom(2_000_000)
+        self.assertEqual(mach.pic.init, 0, "initialisation finished")
+        self.assertEqual(mach.pic.base, 0x08, "and the vector base survived it")
+        self.assertNotEqual(mach.pic.imr, 0xFF, "IRQ0 got unmasked")
+        self.assertEqual(mach.pic.isr, 0, "no interrupt stuck in service")
 
     def test_real_seabios_runs_a_hundred_thousand_instructions(self) -> None:
         """No unknown instruction for a long way in: this is a compiler's

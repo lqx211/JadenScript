@@ -161,23 +161,31 @@ class Pic:
         else:
             self.isr &= self.isr - 1      # the lowest set bit is the top priority
 
+    def icw(self, value: int) -> None:
+        """ICW2, ICW3 and ICW4, which on a real 8259 arrive on the data port
+        (0x21) right after ICW1 has gone to the command port.
+
+        Accepting them on the command port too is a kindness: our own BIOS was
+        written that way, and a chip that refuses them there would deadlock on
+        the first EOI -- which is exactly what happened to SeaBIOS.
+        """
+        if self.init == 1:
+            self.base = value & 0xF8
+            self.init = 2
+        elif self.init == 2:
+            self.slave_mask = value & 0xFF
+            self.init = 3 if self.need4 else 0
+        else:
+            self.init = 0
+
     def command(self, value: int) -> None:
         if self.init:
-            if self.init == 1:
-                self.base = value & 0xF8
-                self.init = 2 if self.need4 == 2 else 0
-                if self.need4 == 1:
-                    self.init = 3
-            elif self.init == 2:
-                self.slave_mask = value & 0xFF
-                self.init = 3 if self.need4 else 0
-            else:
-                self.init = 0
+            self.icw(value)
             return
         if value & 0x10:                  # ICW1: start an initialization
             self.irr = 0
             self.isr = 0
-            self.need4 = 2 if value & 0x01 else 1
+            self.need4 = 1 if value & 0x01 else 0
             self.init = 1
             return
         if value & 0x08:                  # OCW3: pick which register is read
@@ -186,8 +194,16 @@ class Pic:
             return
         if value & 0x40:                  # OCW2 with SL: specific EOI
             self.eoi(True, value & 0x07)
-        elif not value & 0x10:
+        else:
             self.eoi()                    # OCW2 non-specific EOI
+
+    def data_write(self, value: int) -> None:
+        """The data port: an initialization word while one is expected, and
+        the mask otherwise."""
+        if self.init:
+            self.icw(value)
+        else:
+            self.imr = value & 0xFF
 
 
 class Pit:
@@ -207,17 +223,32 @@ class Pit:
         self.bcd = [0, 0, 0]
         self.next_byte = [0, 0, 0]        # which of the two has been written
         self.low = [0, 0, 0]
-        self.latched = [None, None, None]
+        self.latched = [None, None, None]   # counts held by a latch command
+        self.status = [None, None, None]    # status bytes held the same way
+        self.hi = [None, None, None]        # the high byte of a lo/hi read
         self.cmd = 0                      # the control word being written
         self.cmd_bytes = 0
 
     def control(self, value: int) -> None:
         channel = value >> 6
         access = (value >> 4) & 3
-        if channel == 3:                  # read-back: latch what was asked for
+        if channel == 3:                  # the read-back command
+            # Bits 5:4 are a two-bit field, not two flags, and the values are
+            # the ones the guests actually use: 1 means "the count", 2 means
+            # "the status byte", 0 means "the status byte, then the count".
+            # SeaBIOS writes 0xD2 -- counter 0, "value" -- and then reads two
+            # bytes as lo and hi; a chip that answered with the status byte
+            # first would leave its timer running 256 times too slow.
+            kind = (value >> 4) & 3
             for i in range(3):
-                if not value & (2 << i):
-                    self.latched[i] = self.count[i]
+                if value & (2 << i):      # a 1 in the field picks the counter
+                    if kind == 2:
+                        self.status[i] = self.status_byte(i)
+                    elif kind == 1:
+                        self.latched[i] = self.count[i]
+                    else:
+                        self.status[i] = self.status_byte(i)
+                        self.latched[i] = self.count[i]
             return
         self.access[channel] = access if access else self.access[channel]
         self.mode[channel] = (value >> 1) & 7
@@ -243,20 +274,37 @@ class Pit:
         if self.reload[channel] == 0:
             self.reload[channel] = 0x10000
         self.count[channel] = self.reload[channel]
+        self.hi[channel] = None           # a reload starts a fresh read
+
+    def status_byte(self, channel: int) -> int:
+        """What the 8254 hands back when the read-back command asks for it:
+        the output pin, whether the count has been loaded, and the control
+        word's own fields, packed into one byte."""
+        null_count = 1 if self.count[channel] == self.reload[channel] else 0
+        out = 0                           # this board wires no gates to it
+        return ((out << 7) | (null_count << 6) | (self.access[channel] << 4)
+                | (self.mode[channel] << 1) | self.bcd[channel])
 
     def read(self, channel: int) -> int:
+        if self.status[channel] is not None:
+            value = self.status[channel]
+            self.status[channel] = None
+            return value
         if self.latched[channel] is not None:
             value = self.latched[channel]
             self.latched[channel] = None
+        elif self.hi[channel] is not None:
+            # the second byte of a lo-then-hi read, stashed by the first
+            value = self.hi[channel]
+            self.hi[channel] = None
         else:
             value = self.count[channel]
         if self.access[channel] == 1:
             return value & 0xFF
         if self.access[channel] == 2:
             return (value >> 8) & 0xFF
-        low = value & 0xFF
-        self.latched[channel] = (value >> 8) & 0xFF
-        return low
+        self.hi[channel] = (value >> 8) & 0xFF
+        return value & 0xFF
 
     def tick(self) -> int:
         """One input clock. Returns the channels that reached their terminal
@@ -504,6 +552,13 @@ class Machine:
             return self.cmos_index
         if port == 0x71:
             return self.cmos[self.cmos_index & 0x7F]
+        if port in (0x1F7, 0x177, 0x3F6, 0x376):
+            # an IDE channel with no drive on it: not busy, and not ready.
+            # Reading 0xFF here -- a floating bus -- makes an ATA probe spin
+            # for ever on the busy bit, which is what SeaBIOS did.
+            return 0x00
+        if 0x1F0 <= port <= 0x1F6 or 0x170 <= port <= 0x176:
+            return 0xFF
         if port == 0x3FD:
             return 0x60
         if port == 0x3F8:
@@ -525,13 +580,13 @@ class Machine:
             self.pic.command(value & 0xFF)
             return
         if port == PIC_MASTER + 1:
-            self.pic.imr = value & 0xFF
+            self.pic.data_write(value)
             return
         if port == PIC_SLAVE:
             self.pic2.command(value & 0xFF)
             return
         if port == PIC_SLAVE + 1:
-            self.pic2.imr = value & 0xFF
+            self.pic2.data_write(value)
             return
         if port == 0x5A1:
             core = value & 0xFF
@@ -1125,6 +1180,8 @@ def execute(m):
         return
     if op in (0xC4, 0xC5):
         mod, reg, rm, addr = m.modrm(seg, addr_size)
+        if mod == 3:                         # `les ax, ax` is #UD, not a crash
+            return
         m.setreg(reg, m.read(addr, 4) & 0xFFFF, 2)
         m.loadseg(SEG_ES if op == 0xC4 else SEG_DS, m.read(addr + 2, 2))
         return
@@ -1327,6 +1384,8 @@ def execute(m):
         return
     if op == 0x62:                           # bound: #BR when out of range
         mod, reg, rm, addr = m.modrm(seg, addr_size)
+        if mod == 3:                         # a register operand is #UD
+            return
         index = m.getreg(reg, 2)
         low = m.read(addr, 2)
         high = m.read(addr + 2, 2)
