@@ -1146,6 +1146,27 @@ pageInfo:
     mov     si, msg_su_diskline
     mov     bl, SU_PAPER
     call    suPrint
+    ; the chips, and the tick counter they drive -- the number climbing here
+    ; is the proof that the 8254 is counting and int 08h is running
+    mov     dl, 2
+    mov     dh, SU_ROW0 + 6
+    call    suGoto
+    mov     si, msg_su_timer
+    mov     bl, SU_PAPER
+    call    suPrint
+    mov     dl, 2
+    mov     dh, SU_ROW0 + 7
+    call    suGoto
+    mov     si, msg_su_ticks
+    mov     bl, SU_PAPER
+    call    suPrint
+    push    ds
+    xor     ax, ax
+    mov     ds, ax
+    mov     ax, [ds:BDA_TICKS]
+    pop     ds
+    mov     bl, SU_PAPER
+    call    put3
     mov     dl, SU_RX
     mov     dh, SU_ROW0 + 1
     call    suGoto
@@ -1913,6 +1934,8 @@ msg_su_diskline: db "Disk: int 13h, one boot sector", 0
 msg_su_ramline: db "RAM: 640 KB below 1 MB", 0
 msg_su_romline: db "ROM: 64 KB at F000:0000", 0
 msg_su_videoline: db "Video: VGA text, 80x30", 0
+msg_su_timer:   db "Chipset: 8254 timer, 8259 PIC", 0
+msg_su_ticks:   db "Ticks: ", 0
 msg_su_tabhelp: db "< > switches pages", 0
 
 ; the exit page

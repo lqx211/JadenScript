@@ -227,6 +227,8 @@ class I386SetupTests(unittest.TestCase):
         screen = mach.text()
         self.assertIn("System information", screen)
         self.assertIn("Video: VGA text, 80x30", screen)
+        self.assertIn("Chipset: 8254 timer, 8259 PIC", screen)
+        self.assertIn("Ticks: ", screen, "the timer is running while setup is open")
         self.assertNotIn("Base memory", screen)
 
     def test_enter_edits_the_selected_value(self) -> None:
