@@ -218,7 +218,7 @@ class I386SetupTests(unittest.TestCase):
         mach = self._setup([0x53, 0x4D])               # Del, Right
         screen = mach.text()
         self.assertIn("System information", screen)
-        self.assertIn("Video: VGA text, 80x25", screen)
+        self.assertIn("Video: VGA text, 80x30", screen)
         self.assertNotIn("Base memory", screen)
 
     def test_enter_edits_the_selected_value(self) -> None:
