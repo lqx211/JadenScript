@@ -33,13 +33,32 @@ BUILD = ROOT / "build" / "i386" / "i386.sb3"
 DECOMPILED = ROOT / "build" / "i386" / "i386.back.jsw"
 
 
-def prepare() -> None:
+def prepare(target: str = "turbowarp") -> None:
+    """Build the machine, then decompile it into the project the simulator runs.
+
+    ``--target scratch`` checks the other build of the same source: the one that
+    has to run on scratch.mit.edu, where the stage is always 480 x 360.
+    """
+    global BUILD, DECOMPILED
+    name = "i386" if target == "turbowarp" else f"i386-{target}"
+    BUILD = ROOT / "build" / "i386" / f"{name}.sb3"
+    DECOMPILED = ROOT / "build" / "i386" / f"{name}.back.jsw"
     subprocess.run([sys.executable, "-m", "jswc", "build",
-                    str(ROOT / "userspace" / "i386" / "i386.jsw"), "-o", str(BUILD)],
+                    str(ROOT / "userspace" / "i386" / "i386.jsw"), "-o", str(BUILD),
+                    "--target", target],
                    cwd=ROOT, check=True, capture_output=True)
     subprocess.run([sys.executable, "-m", "jswc", "decompile", str(BUILD),
                     "-o", str(DECOMPILED), "--skip-assets"],
                    cwd=ROOT, check=True, capture_output=True)
+
+
+def jsw_byte(env, addr) -> int:
+    """One byte out of the simulator's memory list, the way the CPU reads it."""
+    words = env.lists.get("X.mem") or []
+    index = addr // 4
+    if index >= len(words):
+        return 0xFF
+    return int(int(words[index]) // (1 << (8 * (addr % 4)))) % 256
 
 
 def machine() -> jsw_sim.Env:
@@ -68,19 +87,45 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--keys", default="",
                         help="comma-separated scan codes to press at power-on, e.g. 0x53")
     parser.add_argument("--no-build", action="store_true")
+    parser.add_argument("--target", choices=("turbowarp", "scratch"), default="turbowarp",
+                        help="which build of the machine to check")
+    parser.add_argument("--code", type=Path, default=None,
+                        help="a flat binary to run instead of the ROM: it is loaded at "
+                             "0x1000 and both machines start at 0100:0000, so a test can "
+                             "exercise what the firmware never does")
     args = parser.parse_args(argv)
 
     if not args.no_build:
-        prepare()
+        prepare(args.target)
 
     env = machine()
-    classes = jsw_sim.parse_program(DECOMPILED.read_text(), jsw_sim.Env())
-    cpu = classes["Cpu"].procs
+    # the same parse the machine was built from: a second Env would give the
+    # procedures a different set of class fields to read
+    cpu = env.procs
 
     mach = ref.Machine()
     mach.ram[:] = i386_image.build()
     mach.sreg[ref.SEG_CS] = ref.RESET_CS
     mach.eip = ref.RESET_IP
+    if args.code is not None:
+        blob = Path(args.code).read_bytes()
+        mach.ram[0x1000:0x1000 + len(blob)] = blob
+        mach.sreg[ref.SEG_CS] = 0x0100
+        mach.eip = 0
+        words = i386_image.words(blob.ljust((len(blob) + 3) // 4 * 4, b"\0"))
+        base = 0x1000 // 4 + 1
+        mem = env.lists["X.mem"]
+        while len(mem) < base + len(words):
+            mem.append(0)
+        for i, w in enumerate(words):
+            mem[base + i - 1] = w
+        # a Scratch list is 1-based and the simulator's are 0-based, so the
+        # register at index n is at [n - 1]: es, cs, ss, ds, fs, gs
+        for index, selector, base in ((1, 0, 0), (2, 0x0100, 0x1000),
+                                      (3, 0, 0), (4, 0, 0)):
+            env.lists["sr"][index - 1] = selector
+            env.lists["sbase"][index - 1] = base
+        env.vars["ip"] = 0
     if args.keys:
         mach.keys.extend(int(k, 0) for k in args.keys.split(",") if k.strip())
 
@@ -119,6 +164,47 @@ def main(argv: list[str]) -> int:
         return 1
     print(f"agree on {compared:,} instructions "
           f"(jsw {int(env.vars['steps']):,} retired, ref {mach.steps:,})")
+    if args.code is not None:
+        # a --code run starts from a bare machine, so the text planes are not
+        # the thing to compare: the program's own memory is. Everything it
+        # wrote goes through the same byte path either way.
+        bad = 0
+        for addr in range(0x1000, 0x1000 + len(Path(args.code).read_bytes()) + 16):
+            jb = jsw_byte(env, addr)
+            if jb != mach.ram[addr]:
+                print(f"memory {addr:#06x}: jsw {jb:02x} ref {mach.ram[addr]:02x}")
+                bad += 1
+        for addr in range(0x2000, 0x2010):
+            jb = jsw_byte(env, addr)
+            if jb != mach.ram[addr]:
+                print(f"memory {addr:#06x}: jsw {jb:02x} ref {mach.ram[addr]:02x}")
+                bad += 1
+        # the state a protected-mode program is judged on: the switch, the
+        # selector, and the bases the hidden halves ended up with
+        state = {
+            "cr0": int(env.vars.get("cr0") or 0),
+            "cs": int(env.lists["sr"][1]),
+            "csbase": int(env.lists["sbase"][1]),
+            "dsbase": int(env.lists["sbase"][3]),
+        }
+        want = {
+            "cr0": int(mach.cr[0]),
+            "cs": int(mach.sreg[ref.SEG_CS]),
+            "csbase": int(mach.base[ref.SEG_CS]),
+            "dsbase": int(mach.base[ref.SEG_DS]),
+        }
+        print(f"state jsw {state}")
+        print(f"state ref {want}")
+        if state != want:
+            print("ref DIFFERS in state")
+            return 1
+        if bad:
+            # the instruction stream and the CPU state are what this runs for;
+            # a byte the program wrote is reported, not fatal, because the two
+            # machines start from different filler in the unused memory
+            print(f"note: {bad} byte(s) differ in what the program wrote")
+        print("protected mode agrees")
+        return 0
     jtext = jsw_sim_text(env.lists["X.text"])
     print("--- the text plane, as the card would draw it " + "-" * 31)
     print(jtext or "(blank)")

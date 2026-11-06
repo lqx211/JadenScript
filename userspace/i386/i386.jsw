@@ -33,6 +33,20 @@ public X.frames = 0;                     // frames since the green flag
 public X.maxFrames = 0;                  // 0 = run forever; >0 = a test budget
 
 /* ---- memory ----------------------------------------------------------- */
+/* ---- how this build holds memory -------------------------------------- *
+ * The machine wants 128 MiB, the way the RISC-V one has it. A Scratch list
+ * cannot: 128 MiB is thirty-two million words, and a list that size is a
+ * project that will not open. So there are two builds of one source --
+ *
+ *   jswc build i386.jsw --target turbowarp   a real memory extension
+ *   jswc build i386.jsw --target scratch     lists, and as much as fits
+ *
+ * -- and the parts that differ are marked. Until the extension lands, both
+ * builds take the list branch and behave identically.
+ */
+#ifdef TURBOWARP
+/* the TurboWarp build will allocate through the extension here */
+#endif
 public X.memBase = 0;                    // the RAM window
 public X.memWords = 32768;               // 128 KiB
 public X.diskBase = 196608;              // 0x3_0000: the disk window
@@ -201,9 +215,9 @@ public X.clockMode = 0;                  // 0 = counted, 1 = the project timer
 
 // The stage has to be 640 x 480 for the 80 x 25 grid to fit pixel for pixel.
 metadata note Stage at 50,50 350x170: "{\"width\":640,\"height\":480,\"warpTimer\":true} // _twconfig_";
-/* one watcher per core, so the numbers on the stage are the numbers the
- * firmware reads back: usage on the left, clock on the right */
-
+/* One watcher per core, so the numbers on the stage are the numbers the
+ * firmware reads back. A published Scratch build does not want eight floating
+ * boxes on the machine's screen. */
 /*
 // I don't want to show them now, next time debug will open them again
 metadata default Stage.X.core1Usage at 5,5 100x24 shown;
@@ -256,6 +270,28 @@ class Cpu {
     private ea = 0;
     private eseg = 4;
     private coreId = 1;
+    /* ---- protected mode --------------------------------------------- *
+     * The model has had this since SeaBIOS; the Scratch machine did not, which
+     * is why it could never run anything a 386 kernel does. CR0's low bit is
+     * the switch. A segment register carries a *cached* base and limit, filled
+     * from the descriptor it names the moment it is loaded -- the 386's hidden
+     * half -- and the cache, not the selector, is what every address is built
+     * from. `sbase` is indexed like `sr`: 0 is the absolute address the
+     * interrupt table uses, then es, cs, ss, ds, fs, gs.
+     */
+    private dBase = 0;
+    private dLim = 0;
+    private dFlags = 0;
+    private cr0 = 0;
+    private cr2 = 0;
+    private cr3 = 0;
+    private gdtrBase = 0;
+    private gdtrLimit = 0;
+    private idtrBase = 0;
+    private idtrLimit = 0;
+    private sbase = [0, 0, 0, 0, 0, 0, 0];
+    private slimit = [65535, 65535, 65535, 65535, 65535, 65535, 65535];
+    private dsz = 2;                    // what an unprefixed instruction means
     /* the hardware monitor's stopwatch: instructions retired since `hwAt`
        seconds, so the clock the board reports is measured, not invented */
     private hwAt = 0;
@@ -299,7 +335,7 @@ class Cpu {
         while (X.coreRun.get(coreId) < 1) {
             Control.wait(0);
         }
-        sr.set(2, X.apCs);
+        setSeg(2, X.apCs);
         ip = 0;
         fl = 514;
         halted = 0;
@@ -319,6 +355,20 @@ class Cpu {
         r.set(5, 0); r.set(6, 0); r.set(7, 0); r.set(8, 0);
         sr.set(1, 0); sr.set(2, 0xF000); sr.set(3, 0);
         sr.set(4, 0); sr.set(5, 0); sr.set(6, 0);
+        cr0 = 0;
+        cr2 = 0;
+        cr3 = 0;
+        gdtrBase = 0; gdtrLimit = 0;
+        idtrBase = 0; idtrLimit = 0;
+        dsz = 2;
+        _i = 0;
+        while (_i < 7) {
+            sbase.set(_i, 0);
+            slimit.set(_i, 65535);
+            _i += 1;
+        }
+        sbase.set(1, 0); sbase.set(2, 0xF000 * 16); sbase.set(3, 0);
+        sbase.set(4, 0); sbase.set(5, 0); sbase.set(6, 0);
         ip = 0xFFF0;
         fbAddr = -1;
         fl = 0x0202;
@@ -735,15 +785,81 @@ class Cpu {
     private void phys(segIndex, off) { // warp
         _pSeg = segIndex;
         if (_pSeg < 1) { _pSeg = 0; }      // segment 0: the interrupt table
-        if (_pSeg > 0) { _pSeg = sr.get(_pSeg) + 0; }
-        v = (_pSeg * 16 + off) % 1048576;
+        if (_pSeg > 0) { _pSeg = sbase.get(_pSeg) + 0; }
+        v = (_pSeg + off) % 1048576;
+    }
+
+    /* ---- the 386's protected mode ------------------------------------ *
+     *
+     * `setSeg` is the only way a segment register is written. In real mode it
+     * is the old rule -- base = selector * 16, limit 64 KiB -- and in protected
+     * mode it reads the descriptor the selector names and keeps its base, its
+     * limit and its flags, because that is what the CPU actually uses until the
+     * selector is reloaded. Getting this wrong is quiet: a segment loaded with
+     * a selector and no cache reads base 0, and the guest runs into the IVT.
+     */
+    private void setSeg(index, sel) { // warp
+        _sv = v;
+        _sel = sel % 65536;
+        sr.set(index, _sel);
+        if (cr0 % 2 == 1) {
+            descriptor(_sel);
+            sbase.set(index, dBase % 1048576);
+            slimit.set(index, dLim);
+            if (index == 2) {
+                dsz = 2;
+                if (dFlags % 8 >= 4) { dsz = 4; }
+                ip = ip % 65536;
+            }
+        } else {
+            sbase.set(index, (_sel * 16) % 1048576);
+            slimit.set(index, 65535);
+            if (index == 2) { dsz = 2; }
+        }
+        v = _sv;
+    }
+
+    /* The eight bytes a selector points at, split into the four numbers a
+     * descriptor is: base, limit, the access byte and the flags nibble that
+     * holds D -- the bit that decides whether an unprefixed instruction is
+     * sixteen bits or thirty-two. Reading D out of the access byte is a quiet
+     * way to stay in 16-bit mode for ever. */
+    private void descriptor(sel) { // warp
+        _dAt = gdtrBase + (sel - sel % 8);
+        rdb(_dAt + 0); _d0 = v;
+        rdb(_dAt + 1); _d1 = v;
+        rdb(_dAt + 2); _d2 = v;
+        rdb(_dAt + 3); _d3 = v;
+        rdb(_dAt + 4); _d4 = v;
+        rdb(_dAt + 7); _d7 = v;
+        rdb(_dAt + 6); _d6 = v;
+        dBase = _d2 + _d3 * 256 + _d4 * 65536 + _d7 * 16777216;
+        dLim = _d0 + _d1 * 256 + (_d6 % 16) * 65536;
+        dFlags = Operators.math("floor", _d6 / 16) % 16;
+    }
+
+    /* CR0's low bit is the whole 8086-to-386 switch. Entering protected mode
+     * changes nothing until a segment is reloaded, which is what makes the far
+     * jump after it meaningful: the hidden halves keep the values they had
+     * until the guest loads them again. */
+    private void writeCr0(value) { // warp
+        _was = cr0 % 2;
+        cr0 = value % 65536;
+        if (_was == 0 && cr0 % 2 == 1) {
+            _i = 1;
+            while (_i < 7) {
+                sbase.set(_i, (sr.get(_i) + 0) * 16 % 1048576);
+                slimit.set(_i, 65535);
+                _i += 1;
+            }
+        }
     }
 
     private void f8() { // warp
         /* The instruction stream is nearly always in the ROM, four bytes to a
            list item: one list read per word instead of one per byte, and no
            segment table lookup, no range checks, no shift table. */
-        _fip = (sr.get(2) + 0) * 16 + ip;
+        _fip = sbase.get(2) + ip;
         if (_fip < X.romBase || _fip >= X.romBase + X.romWords * 4) {
             phys(2, ip);
             rdb(v);
@@ -1100,14 +1216,14 @@ class Cpu {
         ip = v;
         phys(0, n * 4 + 2);
         rdw(v);
-        sr.set(2, v);
+        setSeg(2, v);
     }
 
     private void iretOp() { // warp
         pop16();
         ip = v;
         pop16();
-        sr.set(2, v);
+        setSeg(2, v);
         pop16();
         fl = v % 65536;
     }
@@ -1830,7 +1946,7 @@ class Cpu {
             modrm();
             getOp(2);
             if (mreg < 6) {
-                sr.set(mreg + 1, v);
+                setSeg(mreg + 1, v);
             }
             return;
         }
@@ -1899,7 +2015,7 @@ class Cpu {
             f16();
             _v0 = v;                         // the offset, saved before the pc moves
             f16();
-            sr.set(2, v);
+            setSeg(2, v);
             ip = _v0;
             return;
         }
@@ -1965,7 +2081,7 @@ class Cpu {
             _s = 1;
             if (op == 23) { _s = 3; }
             if (op == 31) { _s = 4; }
-            sr.set(_s, v);
+            setSeg(_s, v);
             return;
         }
         if (op == 96) {                        // pusha
@@ -2087,7 +2203,7 @@ class Cpu {
             f16();
             push16(sr.get(2));
             push16(ip);
-            sr.set(2, v);
+            setSeg(2, v);
             ip = _v0;
             return;
         }
@@ -2164,14 +2280,14 @@ class Cpu {
             putReg16(5, v + _v0);
             return;
         }
-        if (op == 203) { pop16(); ip = v; pop16(); sr.set(2, v); return; }
+        if (op == 203) { pop16(); ip = v; pop16(); setSeg(2, v); return; }
         if (op == 202) {
             f16();
             _v0 = v;
             pop16();
             ip = v;
             pop16();
-            sr.set(2, v);
+            setSeg(2, v);
             getReg16(5);
             putReg16(5, v + _v0);
             return;
@@ -2211,8 +2327,8 @@ class Cpu {
             putReg16(mreg, v);
             phys(eseg, ea + 2);
             rdw(v);
-            if (op == 196) { sr.set(1, v); }
-            if (op == 197) { sr.set(4, v); }
+            if (op == 196) { setSeg(1, v); }
+            if (op == 197) { setSeg(4, v); }
             return;
         }
 
@@ -2523,7 +2639,7 @@ class Cpu {
                 push16(sr.get(2));
                 push16(ip);
             }
-            sr.set(2, _qSeg);
+            setSeg(2, _qSeg);
             ip = _qV;
             return;
         }
@@ -2677,6 +2793,63 @@ class Cpu {
             setFlagTo(11, _tSet);
             return;
         }
+        if (_tOp == 32 || _tOp == 34) {        // mov r32, cr / mov cr, r32
+            /* Always a thirty-two-bit transfer, whatever the operand size
+             * prefix says: the register file here is sixteen bits wide, so the
+             * top half is dropped -- and PE, PG and the page table base all
+             * live in the bottom half, which is the half that matters. */
+            f8();
+            _tMod = v;
+            _tReg = Operators.math("floor", _tMod / 8) % 8;
+            _tRm = _tMod % 8;
+            if (_tOp == 32) {
+                _tV = 0;
+                if (_tReg == 0) { _tV = cr0; }
+                if (_tReg == 2) { _tV = cr2; }
+                if (_tReg == 3) { _tV = cr3; }
+                putReg16(_tRm, _tV);
+                return;
+            }
+            getReg16(_tRm);
+            if (_tReg == 0) { writeCr0(v); }
+            if (_tReg == 2) { cr2 = v % 65536; }
+            if (_tReg == 3) { cr3 = v % 65536; }
+            return;
+        }
+        if (_tOp == 1) {                       // lgdt / lidt / smsw / lmsw
+            modrm();
+            if (mreg == 2 || mreg == 3) {
+                /* the pseudo-descriptor: a sixteen-bit limit, then a base that
+                 * is thirty-two bits in a 32-bit operand and twenty-four in a
+                 * 16-bit one -- the 286 wrote three bytes and the 386 kept it */
+                phys(eseg, ea);
+                rdw(v);
+                _tLim = v % 65536;
+                phys(eseg, ea + 2);
+                rdw(v);
+                _tLo = v % 65536;
+                _tHi = 0;
+                if (oz == 4) {
+                    phys(eseg, ea + 4);
+                    rdw(v);
+                    _tHi = v % 65536;
+                }
+                _tBase = (_tLo + _tHi * 65536) % 1048576;
+                if (mreg == 2) { gdtrBase = _tBase; gdtrLimit = _tLim; }
+                else { idtrBase = _tBase; idtrLimit = _tLim; }
+                return;
+            }
+            if (mreg == 4) {                   // smsw
+                putOp(2, cr0);
+                return;
+            }
+            if (mreg == 6) {                   // lmsw
+                getOp(2);
+                writeCr0((cr0 - cr0 % 16) + v % 16);
+                return;
+            }
+            return;
+        }
         if (_tOp == 49) {                      // rdtsc, once there is a TSC
             putReg16(0, steps % 65536);
             putReg16(2, Operators.math("floor", steps / 65536) % 65536);
@@ -2688,8 +2861,8 @@ class Cpu {
             if (_tOp == 160) { push16(sr.get(5)); return; }
             if (_tOp == 168) { push16(sr.get(6)); return; }
             pop16();
-            if (_tOp == 161) { sr.set(5, v % 65536); return; }
-            sr.set(6, v % 65536);
+            if (_tOp == 161) { setSeg(5, v); return; }
+            setSeg(6, v);
             return;
         }
         if (_tOp == 163 || _tOp == 171 || _tOp == 179 || _tOp == 187) {

@@ -20,6 +20,111 @@ from jswc import include
 ROOT = Path(__file__).resolve().parent.parent
 
 
+class ConditionalTests(unittest.TestCase):
+    """``#ifdef`` before parsing: one source, two builds.
+
+    A machine that has to run in Scratch and in TurboWarp cannot use the same
+    memory: Scratch has lists, TurboWarp can load an extension. The parts that
+    differ are marked in the source rather than kept in two files.
+    """
+
+    def setUp(self) -> None:
+        self.dir = Path(tempfile.mkdtemp())
+
+    def write(self, name: str, text: str) -> Path:
+        path = self.dir / name
+        path.write_text(textwrap.dedent(text), encoding="utf-8")
+        return path
+
+    def lines(self, source: str, defines: set[str] | None = None) -> list[str]:
+        path = self.write("a.jsw", source)
+        got = include.expand(path, defines=defines).text.splitlines()
+        return [line.strip() for line in got if line.strip()]
+
+    def test_a_false_branch_is_not_compiled(self) -> None:
+        self.assertEqual(self.lines("""
+            #ifdef TURBOWARP
+                tw
+            #else
+                scratch
+            #endif
+        """), ["scratch"])
+
+    def test_the_defined_name_takes_the_first_branch(self) -> None:
+        self.assertEqual(self.lines("""
+            #ifdef TURBOWARP
+                tw
+            #else
+                scratch
+            #endif
+        """, {"TURBOWARP"}), ["tw"])
+
+    def test_ifndef_is_the_other_way_round(self) -> None:
+        self.assertEqual(self.lines("""
+            #ifndef TURBOWARP
+                listed
+            #endif
+        """), ["listed"])
+        self.assertEqual(self.lines("""
+            #ifndef TURBOWARP
+                listed
+            #endif
+        """, {"TURBOWARP"}), [])
+
+    def test_conditionals_nest(self) -> None:
+        source = """
+            #ifdef TURBOWARP
+                #ifdef DEBUG
+                    traced
+                #else
+                    quiet
+                #endif
+            #endif
+        """
+        self.assertEqual(self.lines(source, {"TURBOWARP"}), ["quiet"])
+        self.assertEqual(self.lines(source, {"TURBOWARP", "DEBUG"}), ["traced"])
+        self.assertEqual(self.lines(source, {"DEBUG"}), [])
+
+    def test_define_in_the_source_sets_a_flag(self) -> None:
+        self.assertEqual(self.lines("""
+            #define FAST
+            #ifdef FAST
+                fast
+            #endif
+        """), ["fast"])
+
+    def test_a_define_inside_a_dead_branch_does_not_apply(self) -> None:
+        self.assertEqual(self.lines("""
+            #ifdef NOPE
+                #define FAST
+            #endif
+            #ifdef FAST
+                fast
+            #endif
+        """), [])
+
+    def test_an_unbalanced_directive_is_an_error(self) -> None:
+        path = self.write("b.jsw", "#ifdef X\n  one\n")
+        with self.assertRaises(include.IncludeError):
+            include.expand(path)
+        path = self.write("c.jsw", "#endif\n")
+        with self.assertRaises(include.IncludeError):
+            include.expand(path)
+
+    def test_line_numbers_still_point_at_the_file(self) -> None:
+        """A hidden branch must not shift the diagnostics of what follows."""
+        path = self.write("d.jsw", """
+            #ifdef NOPE
+            hidden
+            #endif
+            visible
+        """)
+        source = include.expand(path)
+        self.assertEqual(source.text.splitlines()[1], "visible")
+        file, line = source.origin(2)      # the line "visible" sits on
+        self.assertEqual((Path(file).name, line), ("d.jsw", 5))
+
+
 class IncludeExpansionTests(unittest.TestCase):
     def setUp(self) -> None:
         self.dir = Path(tempfile.mkdtemp())

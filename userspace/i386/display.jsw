@@ -60,6 +60,12 @@ class Display {
      * of it, a smaller one gets it in the corner with the firmware printing
      * less. */
     private void dispMeasure() { // warp
+#ifdef SCRATCH
+        /* Scratch's stage is 480 x 360 and a shared project cannot be resized,
+         * so there is nothing to measure: skip the scan and say so. */
+        _w = 480;
+        _h = 360;
+#else
         Looks.switchCostume("Frame");
         Looks.size = 100;
         Motion.setXY(1 / 0, 1 / 0);
@@ -98,6 +104,7 @@ class Display {
         }
         if (_w < 320) { _w = X.stageW; }        // no answer worth having
         if (_h < 240) { _h = X.stageH; }
+#endif
         Motion.setXY(0, 0);
         /* The fence gives up half a costume on some VMs and not on others, so
          * the answer is worth a pixel either way: snap it to the cell grid
@@ -106,6 +113,9 @@ class Display {
         _rows = Operators.math("round", _h / X.dispCellH);
         if (_cols < 1) { _cols = X.dispCols; }
         if (_rows < 1) { _rows = X.dispRows; }
+        /* rounding up must not hang the screen over the edge of the stage */
+        while (_cols * X.dispCellW > _w && _cols > 1) { _cols -= 1; }
+        while (_rows * X.dispCellH > _h && _rows > 1) { _rows -= 1; }
         _w = _cols * X.dispCellW;
         _h = _rows * X.dispCellH;
         X.stageW = _w;

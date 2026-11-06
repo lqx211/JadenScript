@@ -119,11 +119,23 @@ i386:
 	cd userspace/i386 && nasm -f bin bios.asm -o bios.bin -l bios.lst
 	cd userspace/i386 && nasm -f bin mbr.asm -o mbr.bin -l mbr.lst
 	$(PY) tools/i386_image.py --check
-	$(PY) -m jswc build userspace/i386/i386.jsw -o build/i386/i386.sb3
+	$(PY) -m jswc build userspace/i386/i386.jsw -o build/i386/i386.sb3 --target turbowarp
+
+# One source, two builds. This one is what could be published to scratch.mit.edu:
+# built-ins only, no extension that TurboWarp would allow.
+i386-scratch: i386
+	$(PY) -m jswc build userspace/i386/i386.jsw -o build/i386/i386-scratch.sb3 --target scratch
 
 # the Scratch machine against the model, instruction for instruction
 i386-check:
 	$(PY) tools/i386_jsw_check.py --steps 30000
+
+# the 386's protected mode, proved on the smallest program that needs it: a
+# GDT, a far jump and a store through a descriptor whose base is not its
+# selector. Both machines run the same bytes.
+i386-pm:
+	cd userspace/i386 && nasm -f bin pm16.asm -o pm16.bin
+	$(PY) tools/i386_jsw_check.py --code userspace/i386/pm16.bin --steps 40 --no-build
 
 # the same comparison into the setup utility: Delete stops the countdown and
 # opens the setup straight away

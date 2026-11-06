@@ -7,6 +7,7 @@ a real 512-byte sector read through a real int 13h.
 
 from __future__ import annotations
 
+import subprocess
 import sys
 import unittest
 from pathlib import Path
@@ -232,6 +233,52 @@ class I386UnitTests(unittest.TestCase):
         self.assertEqual(mach.flag(rv.FLAG_IF), 0, "interrupts are off inside")
         mach.iret()
         self.assertEqual(mach.reg[4], 0x7C00)
+
+
+class I386ProtectedModeTests(unittest.TestCase):
+    """The one thing a 386 has that an 8086 does not: descriptors. The demo in
+    userspace/i386/pm16.asm sets CR0.PE, far-jumps through a code descriptor
+    and writes through a data segment whose base is not its selector -- so a
+    machine that only stores selectors lands in the interrupt table instead."""
+
+    def run_demo(self) -> rv.Machine:
+        blob = (ROOT / "userspace/i386/pm16.bin").read_bytes()
+        mach = rv.Machine()
+        mach.ram[0x1000:0x1000 + len(blob)] = blob
+        mach.sreg[rv.SEG_CS] = 0x0100
+        mach.eip = 0
+        for _ in range(40):
+            mach.step()
+            if mach.halted:
+                break
+        return mach
+
+    def test_the_switch_is_cr0_bit_zero(self) -> None:
+        mach = self.run_demo()
+        self.assertEqual(mach.cr[0] & 1, 1, "protected mode is on")
+        self.assertTrue(mach.pe)
+
+    def test_the_far_jump_loads_the_descriptor_not_the_selector(self) -> None:
+        mach = self.run_demo()
+        self.assertEqual(mach.sreg[rv.SEG_CS], 0x08)
+        self.assertEqual(mach.base[rv.SEG_CS], 0x0000, "the code base, not 0x80")
+        self.assertEqual(mach.sreg[rv.SEG_DS], 0x10)
+        self.assertEqual(mach.base[rv.SEG_DS], 0x2000, "the data base, not 0x100")
+
+    def test_a_store_through_the_descriptor_lands_at_its_base(self) -> None:
+        mach = self.run_demo()
+        self.assertEqual(bytes(mach.ram[0x2000:0x2003]), b"PM!")
+        self.assertEqual(bytes(mach.ram[0x0100:0x0103]), b"\0\0\0",
+                         "and not at selector * 16")
+
+    def test_the_program_agrees_with_the_scratch_machine(self) -> None:
+        """The same bytes in both machines, instruction for instruction."""
+        blob = ROOT / "userspace/i386/pm16.bin"
+        self.assertTrue(blob.exists(), "run nasm -f bin pm16.asm -o pm16.bin")
+        r = subprocess.run([sys.executable, str(ROOT / "tools" / "i386_jsw_check.py"),
+                            "--code", str(blob), "--steps", "40", "--no-build"],
+                           cwd=ROOT, capture_output=True, text=True)
+        self.assertIn("protected mode agrees", r.stdout, r.stdout + r.stderr)
 
 
 class I386SetupTests(unittest.TestCase):
@@ -841,7 +888,8 @@ class I386JswTests(unittest.TestCase):
         out = ROOT / "build" / "i386" / "i386.sb3"
         back = ROOT / "build" / "i386" / "i386.back.jsw"
         subprocess.run([sys.executable, "-m", "jswc", "build",
-                        str(RVDIR / "i386.jsw"), "-o", str(out)],
+                        str(RVDIR / "i386.jsw"), "-o", str(out),
+                        "--target", "turbowarp"],
                        cwd=ROOT, check=True, capture_output=True)
         subprocess.run([sys.executable, "-m", "jswc", "decompile", str(out),
                         "-o", str(back), "--skip-assets"],
@@ -944,8 +992,16 @@ class I386JswTests(unittest.TestCase):
         mach.write(1 * 4, 0x0000, 2)
         mach.write(1 * 4 + 2, 0x1100, 2)
         env.vars["ip"] = 0
-        env.lists["sr"][1] = 0x1000                      # sr.get(2) is cs
-        env.lists["sr"][2] = 0x0A00                      # sr.get(3) is ss
+        # A selector is not enough: the machine keeps the base it was loaded
+        # with, so go through its own `setSeg` instead of writing `sr` and
+        # leaving the cache pointing where the firmware left it.
+        for index, sel in ((2, 0x1000), (3, 0x0A00)):    # 2 is cs, 3 is ss
+            gen = jsw_sim.call(env, cpu["setSeg"], [index, sel])
+            try:
+                while True:
+                    next(gen)
+            except StopIteration:
+                pass
         env.lists["r"][4] = 0xFFFE                       # r.get(5) is sp
         env.lists["X.mem"][0x11000 // 4] += 0xCF * 256 ** 0
         # vector 1 lives at 0:0x04 -- ip at 4..5, cs at 6..7, which is the

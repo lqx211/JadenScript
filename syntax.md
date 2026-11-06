@@ -1583,13 +1583,59 @@ JadenScript if the compiler ignores them.
 3. Add a unit test in `tests/test_codegen.py` that asserts the opcode appears
    and that the project still validates.
 
-## 11. Command line
+## 11. Conditional compilation (v1.1)
+
+One source, more than one build. `#ifdef` / `#ifndef` / `#else` / `#endif` are
+resolved *before* lexing, so the compiler never sees the hidden lines and the
+two builds are ordinary programs:
+
+```jsw
+#ifdef TURBOWARP
+    Looks.switchCostume("Frame");        // measure the stage the hard way
+#else
+    _w = 480;                            // Scratch's stage is always this
+    _h = 360;
+#endif
+```
+
+The rules are the C preprocessor's, cut down to the part that pays for itself:
+
+| directive | meaning |
+| --- | --- |
+| `#define NAME` | NAME counts as defined from here on |
+| `#ifdef NAME` … `#endif` | keep the block only when NAME is defined |
+| `#ifndef NAME` … `#endif` | keep the block only when NAME is not defined |
+| `#else` | the other half of the nearest open block |
+
+Nesting is unlimited, `#define` inside a block that was dropped has no effect,
+and an `#ifdef` without `#endif` is an error rather than a silently truncated
+program. A dropped line occupies no line number, because the origin of every
+surviving line is carried with it: diagnostics still point at the file and line
+the author wrote.
+
+Two names are defined for you:
+
+```bash
+jswc build machine.jsw -o machine.sb3 --target turbowarp   # TURBOWARP
+jswc build machine.jsw -o machine.sb3 --target scratch     # SCRATCH
+jswc build machine.jsw -o out.sb3 -D DEBUG -D TRACE        # anything else
+```
+
+`--target turbowarp` is the build that may use extensions; `--target scratch`
+is the one that has to run on scratch.mit.edu, where only built-in blocks
+exist. Building with no `--target` defines neither name, which is the "neither
+build in particular" case the tests and the offline simulators want. Use
+`#ifdef SCRATCH` when the *Scratch* side is the one that has to differ — as
+above, where 480 x 360 is a constant and measuring it is wasted frames.
+
+## 12. Command line
 
 `jswc` is the only entry point; the full tour lives in
 [`docs/CLI.md`](./docs/CLI.md). The short version:
 
 ```bash
 jswc build   project.jsw -o build/project.sb3     # ← the usual command
+jswc build   project.jsw --target scratch         # or turbowarp, see §11
 jswc decompile project.sb3 -o project.jsw         # recover source (+ assets/)
 jswc check   project.jsw --strict                 # parse only, fail on diagnostics
 jswc ast     project.jsw [--json]                 # class / method tree

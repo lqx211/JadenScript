@@ -32,9 +32,9 @@ def _read(path: str | Path) -> str:
     return Path(path).read_text(encoding="utf-8")
 
 
-def _load(path: str | Path) -> Source:
+def _load(path: str | Path, defines: set[str] | None = None) -> Source:
     """Read a source file with its ``// include`` lines expanded."""
-    return include.expand(path)
+    return include.expand(path, defines=defines)
 
 
 def _parse(path: str | Path, lenient: bool = True) -> tuple[Parser, object]:
@@ -289,8 +289,11 @@ def cmd_decompile(args: argparse.Namespace) -> int:
 
 def cmd_build(args: argparse.Namespace) -> int:
     source_path = Path(args.source)
+    defines = set(args.define)
+    if args.target is not None:
+        defines.add(args.target.upper())
     try:
-        loaded = _load(args.source)
+        loaded = _load(args.source, defines)
     except include.IncludeError as exc:
         _err(ui.failure(str(exc)))
         return EXIT_FAILED
@@ -503,6 +506,11 @@ def build_parser() -> argparse.ArgumentParser:
     build.add_argument("--enable", action="append", default=[], metavar="FEATURE",
                        help="enable a language feature (useTempVariables, commentMetadata, "
                             "namespacedNames, doObfuscation)")
+    build.add_argument("-D", "--define", action="append", default=[], metavar="NAME",
+                       help="define NAME for #ifdef, e.g. -D TURBOWARP (repeatable)")
+    build.add_argument("--target", choices=("scratch", "turbowarp"), default=None,
+                       help="shorthand for -D SCRATCH or -D TURBOWARP: the two builds "
+                            "of a machine that has to run in both places")
     build.add_argument("--allow-undefined", action="store_true",
                        help="downgrade undefined-variable errors (needed for legacy sources)")
     build.add_argument("--strict", action="store_true",
