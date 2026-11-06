@@ -315,6 +315,50 @@ public X.ataSectors = 128;       // the image is 128 sectors of 512 bytes
  * them: reallocated sectors, power-on hours, power cycles, temperature, and
  * the pending sector count */
 public X.ataSmartId = [5, 9, 12, 194, 197];
+
+/* ---- AHCI: the same drive, SATA-shaped ------------------------------- *
+ * A SATA controller is not a register file behind ports, it is a piece of
+ * memory: an HBA with a global block, one 128-byte block a port, and a command
+ * list the driver builds in RAM. Writing a slot number to PxCI is the whole
+ * protocol -- the controller then fetches the command header, follows it to a
+ * command table, reads the Register H2D FIS, does the transfer through the
+ * PRDT and writes the result straight into guest memory.
+ *
+ * Which is why it lives in the address decoder and not in portIn: the guest
+ * talks to it with ordinary stores. The window is the 128 KiB between the disk
+ * window and the ROM, and it is 32-bit registers, so a 16-bit guest sees each
+ * one as two halves -- the same bytes, the same order.
+ */
+public X.ahciBase = 851968;      // 0xD_0000
+public X.ahciWords = 2048;       // 8 KiB of register space
+public X.ahci = [];              // the HBA and its port blocks, as dwords
+public X.ahciPorts = 1;
+public X.ahciIs = 0;             // interrupt status, mirrored for the firmware
+
+/* ---- SCSI: a third way to ask the same drive the same questions -------- *
+ * A SCSI host adapter is a byte machine: put a command block in registers,
+ * poke the adapter, then read the data back a word at a time. The command set
+ * is the Small Computer System Interface's, because that is what a probe sends
+ * -- TEST UNIT READY, INQUIRY, READ CAPACITY, READ(10) -- and the answers are
+ * big-endian, which is the thing people forget when they write one of these.
+ */
+public X.scsiDataPort = 784;     // 0x310, read: 16 bits of data
+public X.scsiCmdPort = 785;      // 0x311, write: the opcode
+public X.scsiLbaLoPort = 786;    // 0x312
+public X.scsiLbaMidPort = 787;   // 0x313
+public X.scsiLbaHiPort = 788;    // 0x314
+public X.scsiLenPort = 789;      // 0x315
+public X.scsiStatPort = 790;     // 0x316, read: 0 good, 1 check condition
+public X.scsiSensePort = 791;    // 0x317, read: the sense key
+public X.scsiBuf = [];
+public X.scsiPos = 0;
+public X.scsiStatus = 0;
+public X.scsiSense = 0;
+public X.scsiLba = 0;
+public X.scsiLen = 1;
+public X.scsiCmd = 0;
+/* a standard INQUIRY answer: direct-access device, JSW, VIRTUAL DISK, 1.0 */
+public X.scsiInquiry = [0x0000, 0x0205, 0x001F, 0x0000, 0x534A, 0x2057, 0x2020, 0x2020, 0x4956, 0x5452, 0x4155, 0x204C, 0x4944, 0x4B53, 0x2020, 0x2020, 0x2E31, 0x2030];
 /* IDENTIFY DEVICE, generated and checksummed: every word a real drive has to
  * answer with, including the model string a setup screen reads out. The last
  * word makes the 256-word block sum to zero, which is what ATA requires and
@@ -514,6 +558,18 @@ class Cpu {
             X.ataBuf.add(0);
             _i += 1;
         }
+        ahciInit();
+        X.scsiBuf.clear();
+        _i = 1;
+        while (_i <= 256) {
+            X.scsiBuf.add(0);
+            _i += 1;
+        }
+        X.scsiPos = 0;
+        X.scsiStatus = 0;
+        X.scsiSense = 0;
+        X.scsiLba = 0;
+        X.scsiLen = 1;
         X.ataCount = 1;
         X.ataLba = 0;
         X.ataPos = 0;
@@ -873,6 +929,12 @@ class Cpu {
             v = Operators.math("floor", _w / X.bw.get((a - X.romBase) % 4 + 1)) % 256;
             return;
         }
+        if (a >= X.ahciBase && a < X.ahciBase + X.ahciWords * 4) {
+            _o = a - X.ahciBase;
+            _w = X.ahci.get(Operators.math("floor", _o / 4) + 1) + 0;
+            v = Operators.math("floor", _w / X.bw.get(_o % 4 + 1)) % 256;
+            return;
+        }
 #ifdef TURBOWARP
         /* Extended memory is the only thing the extension holds: above 1 MiB,
          * where there is no list to be fast with and no card to shadow it. */
@@ -908,6 +970,16 @@ class Cpu {
         }
         if (a >= X.romBase && a < X.romBase + X.romWords * 4) {
             return;             // so is the ROM
+        }
+        if (a >= X.ahciBase && a < X.ahciBase + X.ahciWords * 4) {
+            _o = a - X.ahciBase;
+            _i = Operators.math("floor", _o / 4) + 1;
+            _sh = X.bw.get(_o % 4 + 1);
+            _dw = X.ahci.get(_i) + 0;
+            _b = Operators.math("floor", _dw / _sh) % 256;
+            X.ahci.set(_i, _dw - _b * _sh + _wv * _sh);
+            ahciWrite(_o, X.ahci.get(_i) + 0);
+            return;
         }
 #ifdef TURBOWARP
         if (a >= X.extBase && a < X.extBase + X.extWords * 4) {
@@ -1396,6 +1468,255 @@ class Cpu {
      * The CMOS is the interesting one: index at 0x70, data at 0x71, and the
      * bytes behind it live in a Stage list, so they survive a green flag.
      */
+    /* ---- SCSI ------------------------------------------------------------ *
+     * The adapter answers from the same 128-sector image, but in the SCSI
+     * dialect: big-endian fields, a command block, and a sense key instead of
+     * an error register. Nothing here is asynchronous -- a command is finished
+     * by the store that started it.
+     */
+    private void scsiCommand(op) { // warp
+        X.scsiCmd = op;
+        X.scsiPos = 0;
+        X.scsiStatus = 0;
+        X.scsiSense = 0;
+        _i = 1;
+        while (_i <= 256) {
+            X.scsiBuf.set(_i, 0);
+            _i += 1;
+        }
+        if (op == 0) { return; }                    // TEST UNIT READY
+        if (op == 18) {                             // INQUIRY
+            _i = 0;
+            while (_i < 18) {
+                X.scsiBuf.set(_i + 1, X.scsiInquiry.get(_i + 1) + 0);
+                _i += 1;
+            }
+            return;
+        }
+        if (op == 37) {                             // READ CAPACITY(10)
+            /* Two big-endian dwords -- the last LBA, then the block size --
+             * and the buffer holds 16-bit words, so each word is a byte pair
+             * with the *first* byte in the low half. Getting that backwards
+             * reports a capacity of 0x7F000001 blocks of two bytes. */
+            _last = X.ataSectors - 1;
+            X.scsiBuf.set(1, Operators.math("floor", _last / 16777216) % 256
+                + Operators.math("floor", _last / 65536) % 256 * 256);
+            X.scsiBuf.set(2, Operators.math("floor", _last / 256) % 256
+                + _last % 256 * 256);
+            X.scsiBuf.set(3, 0);
+            X.scsiBuf.set(4, 2);                    // 0x0000_0200: 512
+            return;
+        }
+        if (op == 40) {                             // READ(10)
+            if (X.scsiLba >= X.ataSectors) {
+                X.scsiStatus = 1;
+                X.scsiSense = 0x21;                 // LBA out of range
+                return;
+            }
+            _k = 0;
+            while (_k < 256) {
+                _o = X.scsiLba * 128 + Operators.math("floor", _k / 2);
+                _dw = 0;
+                if (_o < X.disk.length()) {
+                    _dw = X.disk.get(_o + 1) + 0;
+                }
+                _w = _dw % 65536;
+                if (_k % 2 == 1) { _w = Operators.math("floor", _dw / 65536) % 65536; }
+                X.scsiBuf.set(_k + 1, _w);
+                _k += 1;
+            }
+            return;
+        }
+        X.scsiStatus = 1;
+        X.scsiSense = 0x20;                         // invalid command
+    }
+
+    private void scsiData() { // warp
+        v = 0;
+        if (X.scsiPos < 256) {
+            v = X.scsiBuf.get(X.scsiPos + 1) + 0;
+            X.scsiPos += 1;
+        }
+    }
+
+    /* ---- AHCI ------------------------------------------------------------ *
+     * The register file is a list of dwords and the decoder does the byte
+     * arithmetic, so a 32-bit register reads correctly as one dword, two words
+     * or four bytes. Nothing here is time-dependent: the controller finishes a
+     * command inside the store that started it, and the interrupt status says
+     * so before the guest can look.
+     */
+    private void ahciInit() { // warp
+        X.ahci.clear();
+        _i = 1;
+        while (_i <= X.ahciWords) {
+            X.ahci.add(0);
+            _i += 1;
+        }
+        /* CAP: 32 command slots, one port, and the two capabilities a driver
+         * looks for -- stagger spin-up and activity LED. GHC comes up with
+         * AHCI disabled, because that is what a driver expects to switch on. */
+        X.ahci.set(1, 0x00141F00);         // CAP: 32 slots (bits 8-12), 1 port
+        X.ahci.set(4, X.ahciPorts);        // PI
+        X.ahci.set(5, 0x00010300);         // VS: AHCI 1.3
+        ahciPortReset(0);
+    }
+
+    private void ahciPortReset(port) { // warp
+        _b = Operators.math("floor", (256 + port * 128) / 4) + 1;
+        X.ahci.set(_b + 9, 0x00000101);     // PxSIG: an ATA drive on this port
+        X.ahci.set(_b + 10, 0x00000123);    // PxSSTS: device present, active
+        X.ahci.set(_b + 8, 0x00000050);     // PxTFD: ready
+        X.ahci.set(_b + 0, 0);              // PxCLB
+        X.ahci.set(_b + 1, 0);
+        X.ahci.set(_b + 2, 0);              // PxFB
+        X.ahci.set(_b + 3, 0);
+        X.ahci.set(_b + 11, 0);             // PxSCTL
+        X.ahci.set(_b + 12, 0);             // PxSERR
+        X.ahci.set(_b + 13, 0);             // PxSACT
+        X.ahci.set(_b + 14, 0);             // PxCI
+    }
+
+    private void ahciReg(offset) { // warp
+        v = X.ahci.get(Operators.math("floor", offset / 4) + 1) + 0;
+    }
+
+    private void ahciSet(offset, value) { // warp
+        X.ahci.set(Operators.math("floor", offset / 4) + 1, value % 4294967296);
+    }
+
+    /* A store landed on a register. GHC is the interesting one: bit 31 is the
+     * guest saying "I am an AHCI driver", and HBA reset has to put the ports
+     * back the way they were. */
+    private void ahciWrite(offset, value) { // warp
+        if (offset == 4) {
+            ahciReg(4);
+            _ghc = v;
+            if (value % 2 == 1) {              // HR: reset the ports
+                _p = 0;
+                while (_p < X.ahciPorts) {
+                    ahciPortReset(_p);
+                    _p += 1;
+                }
+                X.ahciIs = 0;
+            }
+            _p = 0;
+            while (_p < X.ahciPorts) {
+                _b = Operators.math("floor", (256 + _p * 128) / 4) + 1;
+                _cmd = X.ahci.get(_b + 6) + 0;
+                if (value % 2 == 1) { _cmd = 0; }
+                X.ahci.set(_b + 6, _cmd);
+                _p += 1;
+            }
+            return;
+        }
+        /* PxCI: the guest named the slots it wants run. */
+        if (offset >= 0x138 && offset < 0x138 + X.ahciPorts * 128) {
+            _o = offset - 0x138;
+            if (_o % 128 == 0) {
+                ahciStart(Operators.math("floor", _o / 128));
+            }
+        }
+    }
+
+    /* Run every slot the guest set in PxCI. The command header points at a
+     * command table, the table starts with a Register H2D FIS, and the FIS is
+     * where the opcode and the LBA live -- the same command set the port file
+     * speaks, wrapped in DMA. */
+    private void ahciStart(port) { // warp
+        _b = Operators.math("floor", (256 + port * 128) / 4) + 1;
+        _ci = X.ahci.get(_b + 14) + 0;
+        if (_ci % 4294967296 == 0) { return; }
+        _clb = X.ahci.get(_b + 0) + 0;
+        _slot = 0;
+        while (_slot < 32) {
+            if (Operators.math("floor", _ci / X.pow2.get(_slot + 1)) % 2 == 1) {
+                ahciSlot(port, _slot, _clb);
+            }
+            _slot += 1;
+        }
+        X.ahci.set(_b + 14, 0);                // the slots are done
+        X.ahci.set(_b + 4, 0x40000000);        // PxIS: a D2H FIS arrived
+        X.ahciIs = 1;
+    }
+
+    private void ahciSlot(port, slot, clb) { // warp
+        _hdr = clb + slot * 32;
+        rdd(_hdr);        _cfl = (v % 32) * 4;      // command FIS length, bytes
+        rdw(_hdr + 2);    _prdtl = v;
+        rdd(_hdr + 4);    _ctba = v;
+        /* The FIS: byte 2 is the command, bytes 4..6 the LBA, 12..13 the count */
+        rdb(_ctba + 2);   _cmd = v;
+        rdb(_ctba + 4);   _l0 = v;
+        rdb(_ctba + 5);   _l1 = v;
+        rdb(_ctba + 6);   _l2 = v;
+        rdb(_ctba + 8);   _l3 = v;
+        rdb(_ctba + 9);   _l4 = v;
+        rdb(_ctba + 10);  _l5 = v;
+        rdb(_ctba + 12);  _cnt = v;
+        _lba = _l0 + _l1 * 256 + _l2 * 65536 + _l3 * 16777216 + _l4 * 4294967296;
+        X.ataLba = _lba;
+        _b = Operators.math("floor", (256 + port * 128) / 4) + 1;
+        if (_lba >= X.ataSectors && _cmd != 236) {
+            X.ahci.set(_b + 8, 0x00000051);    // ready, and an error
+            X.ahci.set(_b + 4, 0x40000000);
+            X.ahciIs = 1;
+            return;
+        }
+        /* Where the data goes: the first PRDT entry. A driver that scatters one
+         * sector is the case worth supporting, and a probe only reads one. */
+        _dba = 0;
+        _bytes = 0;
+        if (_prdtl > 0) {
+            rdd(_ctba + 128); _dba = v;
+            rdd(_ctba + 132); _bytes = v % 65536;
+        }
+        /* The loop counters are deliberately not `_i`: wrb keeps its own index
+         * in `_i`, so a DMA loop that counts in the same temp runs exactly one
+         * byte and stops. One byte out of 512 looks like a drive that answered
+         * with zeroes. */
+        if (_cmd == 236) {
+            _idx = 0;
+            while (_idx < 512 && _idx < _bytes) {
+                _hw = ident.get(Operators.math("floor", _idx / 2) + 1) + 0;
+                _byte = _hw % 256;
+                if (_idx % 2 == 1) { _byte = Operators.math("floor", _hw / 256) % 256; }
+                wrb(_dba + _idx, _byte);
+                _idx += 1;
+            }
+        } else {
+            _done = 0;
+            _sec = _lba;
+            _n = _cnt;
+            if (_n < 1) { _n = 1; }
+            while (_done < _n) {
+                _k = 0;
+                while (_k < 512) {
+                    _at = _sec * 512 + _k;
+                    _dw = 0;
+                    if (Operators.math("floor", _at / 4) < X.disk.length()) {
+                        _dw = X.disk.get(Operators.math("floor", _at / 4) + 1) + 0;
+                    }
+                    _byte = Operators.math("floor", _dw / X.bw.get(_at % 4 + 1)) % 256;
+                    wrb(_dba + _done * 512 + _k, _byte);
+                    _k += 1;
+                }
+                _sec += 1;
+                _done += 1;
+            }
+        }
+        X.ahci.set(_b + 8, 0x00000050);        // PxTFD: ready, no error
+    }
+
+    /* One dword out of guest memory: two words, low half first. The low half
+     * needs a temp of its own -- `_lo` belongs to rdw, and borrowing it means
+     * the second call overwrites the first half before it can be added back,
+     * which reads every dword as zero. */
+    private void rdd(a) { // warp
+        rdw(a);        _dwLo = v;
+        rdw(a + 2);    v = _dwLo + v * 65536;
+    }
+
     /* ---- the ATA channel ------------------------------------------------- *
      * Status is a register, not a suggestion: DRDY means the drive is there,
      * DRQ means it is holding a word for you, BSY means it is thinking, and a
@@ -1554,6 +1875,9 @@ class Cpu {
         if (p == X.hwHddLoPort) { v = X.hddRpm % 256; return; }
         if (p == X.hwHddHiPort) { v = Operators.math("floor", X.hddRpm / 256) % 256; return; }
         if (p == X.hwHoursPort) { v = Operators.math("floor", X.powerOnSecs / 3600) % 256; return; }
+        if (p == X.scsiDataPort) { scsiData(); return; }
+        if (p == X.scsiStatPort) { v = X.scsiStatus; return; }
+        if (p == X.scsiSensePort) { v = X.scsiSense; return; }
         if (p == X.ataErrPort) { v = X.ataErr; return; }
         if (p == X.ataCntPort) { v = X.ataCount; return; }
         if (p == X.ataLoPort) { v = X.ataLbaLo; return; }
@@ -1602,6 +1926,17 @@ class Cpu {
             X.keyRepeat = _oV * 10;
             return;
         }
+        if (p == X.scsiCmdPort) { scsiCommand(_oV); return; }
+        if (p == X.scsiLbaLoPort) { X.scsiLba = X.scsiLba - X.scsiLba % 256 + _oV; return; }
+        if (p == X.scsiLbaMidPort) {
+            X.scsiLba = X.scsiLba - X.scsiLba % 65536 + _oV * 256 + X.scsiLba % 256;
+            return;
+        }
+        if (p == X.scsiLbaHiPort) {
+            X.scsiLba = _oV * 65536 + X.scsiLba % 65536;
+            return;
+        }
+        if (p == X.scsiLenPort) { X.scsiLen = _oV; return; }
         if (p == X.ataDataPort) { ataOut(_oV); return; }
         if (p == X.ataErrPort) { X.ataFeat = _oV; return; }
         if (p == X.ataCntPort) { X.ataCount = _oV; return; }
@@ -2681,6 +3016,7 @@ class Cpu {
                  * data register hands over a whole word and stepping it twice
                  * would half every sector. */
                 if (_p == X.ataDataPort) { ataIn(); putReg16(0, v); return; }
+                if (_p == X.scsiDataPort) { scsiData(); putReg16(0, v); return; }
                 portIn(_p); putReg16(0, v);
                 return;
             }

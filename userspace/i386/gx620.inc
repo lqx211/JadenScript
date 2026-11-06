@@ -980,8 +980,8 @@ gxDrive:
     sub     di, 26
     shl     di, 1
     add     di, DRV_MODEL
-    mov     [es:di], al
-    mov     [es:di + 1], ah
+    mov     [es:di], ah                 ; ATA puts the first character in the
+    mov     [es:di + 1], al             ; high byte of the word
 .serial:
     ; serial: words 10..19, 0-based 9..18
     cmp     bx, 9
@@ -992,8 +992,8 @@ gxDrive:
     sub     di, 9
     shl     di, 1
     add     di, DRV_SERIAL
-    mov     [es:di], al
-    mov     [es:di + 1], ah
+    mov     [es:di], ah                 ; ATA puts the first character in the
+    mov     [es:di + 1], al             ; high byte of the word
 .firmware:
     ; firmware: words 23..26, 0-based 22..25
     cmp     bx, 22
@@ -1004,8 +1004,8 @@ gxDrive:
     sub     di, 22
     shl     di, 1
     add     di, DRV_FW
-    mov     [es:di], al
-    mov     [es:di + 1], ah
+    mov     [es:di], ah                 ; ATA puts the first character in the
+    mov     [es:di + 1], al             ; high byte of the word
 .capacity:
     ; capacity: word 60, 0-based 59
     cmp     bx, 59

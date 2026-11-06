@@ -45,10 +45,10 @@ DISK_AT = 0x000C_0000
 #: the one a setup utility reads the model name out of. The checksum in the last
 #: word makes the block sum to zero, which is what a strict driver checks.
 ATA_IDENT = [
-    0x0040, 0x0080, 0x0000, 0x0004, 0x0000, 0x0000, 0x003F, 0x0000, 0x0000, 0x534A,
-    0x3257, 0x3230, 0x4134, 0x3030, 0x3030, 0x2031, 0x2020, 0x2020, 0x2020, 0x0000,
-    0x0000, 0x0000, 0x3041, 0x2037, 0x2020, 0x2020, 0x534A, 0x2057, 0x4956, 0x5452,
-    0x4155, 0x204C, 0x4944, 0x4B53, 0x3120, 0x3832, 0x204D, 0x2020, 0x2020, 0x2020,
+    0x0040, 0x0080, 0x0000, 0x0004, 0x0000, 0x0000, 0x003F, 0x0000, 0x0000, 0x4A53,
+    0x5732, 0x3032, 0x3441, 0x3030, 0x3030, 0x3120, 0x2020, 0x2020, 0x2020, 0x0000,
+    0x0000, 0x0000, 0x4130, 0x3720, 0x2020, 0x2020, 0x4A53, 0x5720, 0x5649, 0x5254,
+    0x5541, 0x4C20, 0x4449, 0x534B, 0x2031, 0x3238, 0x4D20, 0x2020, 0x2020, 0x2020,
     0x2020, 0x2020, 0x2020, 0x2020, 0x2020, 0x2020, 0x8000, 0x0000, 0x0200, 0x0000,
     0x0000, 0x0000, 0x0001, 0x0080, 0x0004, 0x003F, 0x0080, 0x0000, 0x0000, 0x0080,
     0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
@@ -70,11 +70,18 @@ ATA_IDENT = [
     0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
     0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
     0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
-    0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0xD23B
+    0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0xFB13
 ]
 
 #: the five SMART attributes, in the order both boards report them
 ATA_SMART_IDS = [5, 9, 12, 194, 197]
+
+#: where the AHCI controller's registers live, and how big the window is
+AHCI_BASE = 0x000D_0000
+AHCI_WORDS = 2048
+
+#: a standard INQUIRY answer: direct-access device, JSW, VIRTUAL DISK, 1.0
+SCSI_INQUIRY = [0x0000, 0x0205, 0x001F, 0x0000, 0x534A, 0x2057, 0x2020, 0x2020, 0x4956, 0x5452, 0x4155, 0x204C, 0x4944, 0x4B53, 0x2020, 0x2020, 0x2E31, 0x2030]
 
 SECTOR = 512
 
@@ -462,6 +469,21 @@ class Machine:
         self.ata_drv = 0
         self.ata_smart_on = 0
         self.ata_sectors = 128
+        # ---- AHCI ------------------------------------------------------
+        # A register file the guest reaches with ordinary stores, and a
+        # command list it builds in RAM: the SATA controller is memory, not
+        # ports.
+        self.ahci = [0] * AHCI_WORDS
+        self.ahci_ports = 1
+        self._ahci_init()
+        # ---- SCSI ------------------------------------------------------
+        self.scsi_buf = [0] * 256
+        self.scsi_pos = 0
+        self.scsi_status = 0
+        self.scsi_sense = 0
+        self.scsi_lba = 0
+        self.scsi_len = 1
+        self.scsi_cmd = 0
         self.thermal_done = 0.0      # emulated seconds already integrated
         self.hw_ticks = 0
         self.smart_sel = 1
@@ -761,6 +783,125 @@ class Machine:
         self.ata_err = 0x04
         self.ata_status = 0x41
 
+    # ---- AHCI --------------------------------------------------------
+
+    def _ahci_init(self) -> None:
+        self.ahci[0] = 0x00141F00          # CAP: 32 slots (bits 8-12), one port
+        self.ahci[3] = self.ahci_ports     # PI
+        self.ahci[4] = 0x00010300          # VS: AHCI 1.3
+        self.ahci_port_reset(0)
+
+    def ahci_port_reset(self, port: int) -> None:
+        b = (256 + port * 128) // 4
+        self.ahci[b + 9] = 0x00000101      # PxSIG: an ATA drive here
+        self.ahci[b + 10] = 0x00000123     # PxSSTS: present and active
+        self.ahci[b + 8] = 0x00000050      # PxTFD: ready
+        self.ahci[b + 14] = 0               # PxCI
+
+    def ahci_read(self, addr: int, size: int) -> int:
+        off = addr - AHCI_BASE
+        if off < 0 or off + size > AHCI_WORDS * 4:
+            return MASK[size]
+        value = 0
+        for i in range(size):
+            o = off + i
+            word = self.ahci[o // 4]
+            value |= ((word >> (8 * (o % 4))) & 0xFF) << (8 * i)
+        return value
+
+    def ahci_write(self, addr: int, value: int, size: int) -> None:
+        off = addr - AHCI_BASE
+        if off < 0 or off + size > AHCI_WORDS * 4:
+            return
+        for i in range(size):
+            o = off + i
+            sh = 8 * (o % 4)
+            old = self.ahci[o // 4]
+            byte = (value >> (8 * i)) & 0xFF
+            self.ahci[o // 4] = (old & ~(0xFF << sh)) | (byte << sh)
+        if off == 4:
+            if value & 1:                  # HR: reset the ports
+                self.ahci_port_reset(0)
+            self.ahci[(256 + 0) // 4 + 6] = 0
+        if off == 0x138:                   # PxCI: run the slots named
+            self.ahci_start(0)
+
+    def ahci_start(self, port: int) -> None:
+        b = (256 + port * 128) // 4
+        ci = self.ahci[b + 14]
+        if not ci:
+            return
+        clb = self.ahci[b + 0]
+        for slot in range(32):
+            if ci & (1 << slot):
+                self.ahci_slot(port, slot, clb)
+        self.ahci[b + 14] = 0
+        self.ahci[b + 4] = 0x40000000
+
+    def ahci_slot(self, port: int, slot: int, clb: int) -> None:
+        hdr = clb + slot * 32
+        ctba = self.read(hdr + 4, 4)
+        prdtl = self.read(hdr + 2, 2)
+        cmd = self.read(ctba + 2, 1)
+        lba = (self.read(ctba + 4, 3) | (self.read(ctba + 8, 3) << 24))
+        count = self.read(ctba + 12, 1)
+        b = (256 + port * 128) // 4
+        if lba >= self.ata_sectors and cmd != 0xEC:
+            self.ahci[b + 8] = 0x00000051
+            return
+        dba = self.read(ctba + 128, 4) if prdtl else 0
+        if cmd == 0xEC:
+            for i in range(256):
+                self.write(dba + i * 2, ATA_IDENT[i], 2)
+        else:
+            n = count or 1
+            for s in range(n):
+                start = DISK_AT + (lba + s) * 512
+                self.ram[dba + s * 512:dba + s * 512 + 512] = self.ram[start:start + 512]
+        self.ahci[b + 8] = 0x00000050
+
+    # ---- SCSI --------------------------------------------------------
+
+    def scsi_command(self, op: int) -> None:
+        self.scsi_cmd = op
+        self.scsi_pos = 0
+        self.scsi_status = 0
+        self.scsi_sense = 0
+        self.scsi_buf = [0] * 256
+        if op == 0x00:
+            return
+        if op == 0x12:
+            self.scsi_buf[:18] = SCSI_INQUIRY
+            return
+        if op == 0x25:
+            # READ CAPACITY(10): the last LBA and the block size, both
+            # big-endian, packed into 16-bit words the way the machine packs
+            # them -- first byte in the low half.
+            last = self.ata_sectors - 1
+            self.scsi_buf[0] = ((last >> 24) & 0xFF) | (((last >> 16) & 0xFF) << 8)
+            self.scsi_buf[1] = ((last >> 8) & 0xFF) | ((last & 0xFF) << 8)
+            self.scsi_buf[2] = 0
+            self.scsi_buf[3] = 2                      # 0x0000_0200: 512
+            return
+        if op == 0x28:
+            if self.scsi_lba >= self.ata_sectors:
+                self.scsi_status = 1
+                self.scsi_sense = 0x21
+                return
+            start = DISK_AT + self.scsi_lba * 512
+            blob = self.ram[start:start + 512]
+            self.scsi_buf[:256] = [blob[i] | (blob[i + 1] << 8) for i in range(0, 512, 2)]
+            return
+        self.scsi_status = 1
+        self.scsi_sense = 0x20
+
+    def scsi_data(self) -> int:
+        value = 0
+        if self.scsi_pos < 256:
+            value = self.scsi_buf[self.scsi_pos]
+            self.scsi_pos += 1
+        return value
+
     def port_in(self, port, size):
         if 0x40 <= port <= 0x42:
             return self.pit.read(port - 0x40)
@@ -776,6 +917,12 @@ class Machine:
             return self.pic2.imr
         if port == 0x61:                  # the speaker port: timer 2's gate
             return self.ports.get(0x61, 0)
+        if port == 0x310:
+            return self.scsi_data()
+        if port == 0x316:
+            return self.scsi_status
+        if port == 0x317:
+            return self.scsi_sense
         if port == 0x1F0:
             return self.ata_in()
         if port == 0x1F1:
@@ -896,6 +1043,22 @@ class Machine:
             return
         if port == 0x5AA:                 # key repeat, in units of 10 ms
             self.key_repeat = (value & 0xFF) * 10
+            return
+        if port == 0x311:
+            self.scsi_command(value & 0xFF)
+            return
+        if port == 0x312:
+            self.scsi_lba = self.scsi_lba - self.scsi_lba % 256 + (value & 0xFF)
+            return
+        if port == 0x313:
+            self.scsi_lba = (self.scsi_lba - self.scsi_lba % 65536
+                             + (value & 0xFF) * 256 + self.scsi_lba % 256)
+            return
+        if port == 0x314:
+            self.scsi_lba = (value & 0xFF) * 65536 + self.scsi_lba % 65536
+            return
+        if port == 0x315:
+            self.scsi_len = value & 0xFF
             return
         if port == 0x1F0:
             self.ata_pos += 1             # the image is read-only: nothing latches

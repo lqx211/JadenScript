@@ -1168,8 +1168,9 @@ class I386DriveTests(unittest.TestCase):
 
     @staticmethod
     def text(words, first: int, count: int) -> str:
-        """ATA word numbers are one-based; the list is not."""
-        return "".join(chr(w & 0xFF) + chr(w >> 8)
+        """ATA word numbers are one-based and strings put the first character
+        in the high byte -- which is why every driver swabs them."""
+        return "".join(chr(w >> 8) + chr(w & 0xFF)
                        for w in words[first - 1:first - 1 + count]).strip()
 
     def test_identify_answers_like_a_drive(self) -> None:
@@ -1317,6 +1318,228 @@ class I386DriveTests(unittest.TestCase):
         self.assertIn("0xEC", source, "IDENTIFY DEVICE is what it sends")
         self.assertIn("GX_LIVEDRV", source, "the page is live, not a ROM table")
         self.assertIn("drvStr", source, "and the buffer needs its own data segment")
+
+
+class I386AhciTests(unittest.TestCase):
+    """SATA is not a register file behind ports, it is memory.
+
+    The driver builds a command list in RAM, writes a slot number to PxCI, and
+    the controller fetches the header, follows it to a command table, reads the
+    Register H2D FIS and DMAs the result into the buffer the PRDT names. That
+    whole path is worth emulating because that is what `ahci` does on probe.
+    """
+
+    CLB, CTBA, BUF = 0x2000, 0x2100, 0x3000
+
+    def ref(self):
+        mach = rv.Machine()
+        mach.ram[:] = i386_image.build()
+        return mach
+
+    def program(self, mach, port: int, cmd: int, slot: int = 0,
+                lba: int = 0, count: int = 1, prdt_bytes: int = 512) -> None:
+        mach.ahci_write(rv.AHCI_BASE + 0x100 + port * 0x80, self.CLB, 4)
+        hdr = self.CLB + slot * 32
+        mach.write(hdr, 5, 1)                       # FIS length, dwords
+        mach.write(hdr + 2, 1, 2)                   # one PRDT entry
+        mach.write(hdr + 4, self.CTBA, 4)
+        mach.write(self.CTBA, 0x8027, 2)            # Register H2D FIS, C=1
+        mach.write(self.CTBA + 2, cmd, 1)
+        mach.write(self.CTBA + 4, lba & 0xFF, 1)
+        mach.write(self.CTBA + 5, (lba >> 8) & 0xFF, 1)
+        mach.write(self.CTBA + 6, (lba >> 16) & 0xFF, 1)
+        mach.write(self.CTBA + 12, count, 1)
+        mach.write(self.CTBA + 128, self.BUF, 4)
+        mach.write(self.CTBA + 134, prdt_bytes >> 8, 1)
+        mach.write(self.CTBA + 132, prdt_bytes & 0xFF, 1)
+
+    def run_slot(self, mach, port: int = 0, slot: int = 0) -> None:
+        mach.ahci_write(rv.AHCI_BASE + 0x138 + port * 0x80, 1 << slot, 4)
+
+    @staticmethod
+    def at(mach, offset: int, count: int) -> bytes:
+        return bytes(mach.ram[offset:offset + count])
+
+    def test_the_hba_comes_up_the_way_a_driver_expects(self) -> None:
+        mach = self.ref()
+        cap = mach.ahci_read(rv.AHCI_BASE + 0x00, 4)
+        self.assertEqual(cap & 0x1F, 0, "one port, numbered from zero")
+        self.assertEqual((cap >> 8) & 0x1F, 31, "32 command slots")
+        self.assertEqual(mach.ahci_read(rv.AHCI_BASE + 0x0C, 4), 1, "PI: port 0")
+        self.assertEqual(mach.ahci_read(rv.AHCI_BASE + 0x124, 4), 0x00000101,
+                         "PxSIG: an ATA drive on this port")
+        self.assertEqual(mach.ahci_read(rv.AHCI_BASE + 0x128, 4) & 0x0F, 3,
+                         "PxSSTS: a device is present")
+
+    def test_identify_arrives_by_dma(self) -> None:
+        mach = self.ref()
+        self.program(mach, 0, 0xEC)
+        self.run_slot(mach)
+        blob = self.at(mach, self.BUF, 512)
+        raw = blob[52:92]
+        model = bytes(b"".join(raw[i + 1:i + 2] + raw[i:i + 1]
+                               for i in range(0, 40, 2))).decode().strip()
+        self.assertEqual(model, "JSW VIRTUAL DISK 128M")
+        self.assertEqual(sum(int.from_bytes(blob[i:i + 2], "little")
+                             for i in range(0, 512, 2)) & 0xFFFF, 0,
+                         "the block still checksums to zero")
+
+    def test_read_dma_puts_the_sector_where_the_prdt_said(self) -> None:
+        mach = self.ref()
+        self.program(mach, 0, 0x25, lba=1)
+        self.run_slot(mach)
+        self.assertTrue(self.at(mach, self.BUF, 7).startswith(b"STAGE2"),
+                        "sector 1 is the payload")
+
+    def test_a_command_past_the_end_sets_an_error(self) -> None:
+        mach = self.ref()
+        self.program(mach, 0, 0x25, lba=200)
+        self.run_slot(mach)
+        tfd = mach.ahci_read(rv.AHCI_BASE + 0x100 + 0x20, 4)
+        self.assertTrue(tfd & 0x01, "ERR in PxTFD")
+        self.assertFalse(tfd & 0x08, "and no data was offered")
+
+    def test_the_slot_is_cleared_and_the_interrupt_reported(self) -> None:
+        mach = self.ref()
+        self.program(mach, 0, 0xEC)
+        self.run_slot(mach)
+        self.assertEqual(mach.ahci_read(rv.AHCI_BASE + 0x138, 4), 0,
+                         "PxCI is cleared when the slot is done")
+        self.assertTrue(mach.ahci_read(rv.AHCI_BASE + 0x110, 4) & 0x40000000,
+                        "PxIS: a D2H FIS arrived")
+
+    def test_hba_reset_puts_the_port_back(self) -> None:
+        mach = self.ref()
+        self.program(mach, 0, 0xEC)
+        self.run_slot(mach)
+        mach.ahci_write(rv.AHCI_BASE + 0x04, 1, 4)      # GHC.HR
+        self.assertEqual(mach.ahci_read(rv.AHCI_BASE + 0x138, 4), 0)
+        self.assertEqual(mach.ahci_read(rv.AHCI_BASE + 0x120, 4), 0x50,
+                         "PxTFD back to ready")
+
+    def test_the_scratch_machine_speaks_the_same_protocol(self) -> None:
+        import json
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "m.sb3"
+            back = Path(tmp) / "m.jsw"
+            subprocess.run([sys.executable, "-m", "jswc", "build",
+                            str(RVDIR / "i386.jsw"), "-o", str(out)],
+                           cwd=ROOT, check=True, capture_output=True)
+            subprocess.run([sys.executable, "-m", "jswc", "decompile", str(out),
+                            "-o", str(back), "--skip-assets"],
+                           cwd=ROOT, check=True, capture_output=True)
+            source = back.read_text()
+
+        env = jsw_sim.Env()
+        classes = jsw_sim.parse_program(source, env)
+        cpu = classes["Cpu"].procs
+        env.procs = cpu
+        env.threads.append({})
+        env.current = 0
+        for name, asset in (("disk", "disk"), ("rom", "bios"), ("ident", "ident")):
+            env.lists[name] = json.loads((RVDIR / "assets" / "lists" / f"{asset}.jsa").read_text())
+        env.vars["X.cores"] = 1
+        gen = jsw_sim.call(env, cpu["powerOn"], [])
+        try:
+            while True:
+                next(gen)
+        except StopIteration:
+            pass
+
+        def call(name, *args):
+            g = jsw_sim.call(env, cpu[name], list(args))
+            try:
+                while True:
+                    next(g)
+            except StopIteration:
+                pass
+
+        def store(addr, value, size):
+            for k in range(size):
+                call("wrb", addr + k, (value >> (8 * k)) & 0xFF)
+
+        base = int(env.vars["X.ahciBase"])
+        store(base + 0x100, self.CLB, 4)
+        hdr = self.CLB
+        store(hdr, 5, 1)
+        store(hdr + 2, 1, 2)
+        store(hdr + 4, self.CTBA, 4)
+        store(self.CTBA, 0x8027, 2)
+        store(self.CTBA + 2, 0xEC, 1)
+        store(self.CTBA + 12, 1, 1)
+        store(self.CTBA + 128, self.BUF, 4)
+        store(self.CTBA + 133, 2, 1)
+        call("wrb", base + 0x138, 1)
+        blob = bytearray()
+        for i in range(512):
+            call("rdb", self.BUF + i)
+            blob.append(int(jsw_sim.Env.num(env.vars["v"])) & 0xFF)
+        raw = bytes(blob[52:92])
+        model = bytes(b"".join(raw[i + 1:i + 2] + raw[i:i + 1]
+                               for i in range(0, 40, 2))).decode().strip()
+        self.assertEqual(model, "JSW VIRTUAL DISK 128M",
+                         "the Scratch machine DMAs the same block")
+        self.assertEqual(int(env.vars["X.ahciIs"]), 1, "and says so")
+
+
+class I386ScsiTests(unittest.TestCase):
+    """The third way to ask the same drive the same questions."""
+
+    def ref(self):
+        mach = rv.Machine()
+        mach.ram[:] = i386_image.build()
+        return mach
+
+    @staticmethod
+    def words(mach, count: int) -> bytes:
+        return b"".join(mach.scsi_data().to_bytes(2, "little") for _ in range(count))
+
+    def test_inquiry_names_the_device(self) -> None:
+        mach = self.ref()
+        mach.port_out(0x311, 0x12, 1)
+        blob = self.words(mach, 18)
+        self.assertEqual(blob[0] & 0x1F, 0x00, "a direct-access device")
+        self.assertEqual(blob[8:16].decode().strip(), "JSW")
+        self.assertEqual(blob[16:32].decode().strip(), "VIRTUAL DISK")
+        self.assertEqual(mach.port_in(0x316, 1), 0, "no sense key")
+
+    def test_read_capacity_is_big_endian(self) -> None:
+        mach = self.ref()
+        mach.port_out(0x311, 0x25, 1)
+        blob = self.words(mach, 4)
+        self.assertEqual(int.from_bytes(blob[0:4], "big") + 1, 128, "128 sectors")
+        self.assertEqual(int.from_bytes(blob[4:8], "big"), 512, "512-byte blocks")
+
+    def test_read_ten_returns_the_sector(self) -> None:
+        mach = self.ref()
+        mach.port_out(0x312, 0, 1)
+        mach.port_out(0x313, 0, 1)
+        mach.port_out(0x311, 0x28, 1)
+        blob = self.words(mach, 256)
+        self.assertEqual(blob[510:512], b"\x55\xaa")
+
+    def test_a_read_past_the_end_is_a_check_condition(self) -> None:
+        mach = self.ref()
+        mach.port_out(0x311, 0x28, 1)
+        mach.scsi_lba = 900
+        mach.scsi_command(0x28)
+        self.assertEqual(mach.port_in(0x316, 1), 1, "check condition")
+        self.assertEqual(mach.port_in(0x317, 1), 0x21, "LBA out of range")
+
+    def test_an_unknown_opcode_is_rejected(self) -> None:
+        mach = self.ref()
+        mach.port_out(0x311, 0x55, 1)
+        self.assertEqual(mach.port_in(0x316, 1), 1)
+        self.assertEqual(mach.port_in(0x317, 1), 0x20, "invalid command")
+
+    def test_test_unit_ready_is_quiet(self) -> None:
+        mach = self.ref()
+        mach.port_out(0x311, 0x00, 1)
+        self.assertEqual(mach.port_in(0x316, 1), 0)
+        self.assertEqual(self.words(mach, 1), b"\x00\x00",
+                         "TEST UNIT READY has no data phase")
 
 
 class I386MemoryMapTests(unittest.TestCase):
