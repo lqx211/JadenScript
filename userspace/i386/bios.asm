@@ -992,6 +992,8 @@ int15:
     push    es
     cmp     ah, 0xE8
     je      .e820
+    cmp     ah, 0x53                ; the firmware's own: CPU control
+    je      .smp
     cmp     ah, 0x88                ; the old question: how much, in KiB
     jne     .bad
     mov     al, 0x17
@@ -1002,6 +1004,15 @@ int15:
     mov     bh, al
     mov     ax, bx
     and     word [ss:bp + 6], 0xFFFE
+    jmp     .out
+.smp:
+    ; the flags live in the slot BP was pushed into, so the implementation is
+    ; handed a pointer to it rather than left to guess
+    push    bp
+    mov     bp, sp
+    add     bp, 6                   ; [bp + 6]: inside int 15h's own frame
+    call    int15Smp
+    pop     bp
     jmp     .out
 .bad:
     or      word [ss:bp + 6], 1     ; carry: not supported
@@ -1082,6 +1093,64 @@ int15:
     iret
 
 ; a zeroed twenty-byte entry at es:di, so every field not written is zero
+; ---------------------------------------------------------------------------
+; int 15h, AH=53h -- CPI: the firmware's own CPU-control interrupts.
+;
+;   AL=00h   online cores -> EAX, EBX
+;   AL=01h   set them to EBX, if the chipset can take it
+;   AL=02h   this core's number -> EAX
+;
+; A setup utility can write CMOS, but a chipset register that starts a thread is
+; not CMOS. This is the one door in: 0x5AE already means "set the core count",
+; and the ROM spends one register to expose it as a call.
+;
+; bp points at the caller's FLAGS. Carry means "no".
+; ---------------------------------------------------------------------------
+int15Smp:
+    push    ax
+    push    bx
+    push    cx
+    push    dx
+    cmp     al, 0x00
+    je      .online
+    cmp     al, 0x01
+    je      .set
+    cmp     al, 0x02
+    je      .id
+    jmp     .bad
+.online:
+    mov     ax, [es:BDA_CORES]
+    xor     ah, ah
+    mov     bx, ax
+    jmp     .ok
+.set:
+    cmp     bx, 1
+    jb      .bad
+    cmp     bx, 16
+    ja      .bad
+    mov     dx, 0x5AE
+    mov     ax, bx
+    out     dx, al
+    mov     [es:BDA_CORES], bl
+    jmp     .ok
+.id:
+    mov     dx, 0x5A2
+    in      al, dx
+    xor     ah, ah
+    jmp     .ok
+.bad:
+    or      word [ss:bp + 6], 1
+    mov     ah, 0x86
+    jmp     .out
+.ok:
+    and     word [ss:bp + 6], 0xFFFE
+.out:
+    pop     dx
+    pop     cx
+    pop     bx
+    pop     ax
+    iret
+
 e820_clear:
     mov     dword [es:di], 0
     mov     dword [es:di + 4], 0

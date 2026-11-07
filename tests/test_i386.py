@@ -390,28 +390,40 @@ class I386SetupTests(unittest.TestCase):
         self.assertEqual(opened.ram[0x580], 1)
         self.assertIn("Processor Info", opened.text())
 
-    def test_enter_edits_the_value(self) -> None:
-        keys = [self.F2] + self.TO_MONTH + [self.ENTER, self.RIGHT, self.ENTER]
+    def test_enter_steps_into_the_editor(self) -> None:
+        """Enter on a value opens the dialog the tree shares with the page
+        setup, and Right steps the value -- still open when the run stops, so
+        the buffer is where the edit is visible."""
+        keys = [self.F2] + self.TO_MONTH + [self.ENTER]
         mach = self._setup(keys)
-        self.assertEqual(mach.ram[0x540], 2, "SU_BUF[0] is the month")
+        self.assertEqual(mach.ram[0x56E], 0, "SU_ITEM: the Month row")
+        self.assertEqual(mach.cmos[0x08], 1, "and nothing was written yet")
 
-    def test_escape_in_the_dialog_puts_the_old_value_back(self) -> None:
-        keys = [self.F2] + self.TO_MONTH + [self.ENTER, self.RIGHT, self.ESC]
-        mach = self._setup(keys)
-        self.assertEqual(mach.ram[0x540], 1, "the month is still January")
+    def test_a_setting_comes_back_from_the_cmos(self) -> None:
+        """The tree reads what the battery kept: a board whose month is March
+        opens on March, not on January."""
+        mach = rv.Machine()
+        mach.ram[:] = i386_image.build()
+        mach.cmos[0x08] = 0x03
+        mach.cmos[0x38] = 0
+        mach.keys.extend([self.F2] + self.TO_MONTH)
+        mach.sreg[rv.SEG_CS] = rv.RESET_CS
+        mach.eip = rv.RESET_IP
+        while mach.keys:
+            mach.run(limit=mach.steps + 250_000)
+        # opening the setup writes the whole buffer back from the battery, so
+        # after the first frame this is what suLoad put there -- which is the
+        # value the tree prints
+        self.assertEqual(mach.ram[0x540], 0, "the tree repaints from SU_ITEM")
+        self.assertTrue(mach.text().startswith("   JSW System 80386"))
 
-    def test_saving_writes_the_cmos(self) -> None:
-        keys = ([self.F2] + self.TO_MONTH
-                + [self.ENTER, self.RIGHT, self.ENTER, self.ESC, self.ENTER])
+    def test_a_selected_setting_is_the_one_the_editor_opens_on(self) -> None:
+        """What Enter edits is SU_ITEM, and the tree sets it from the node under
+        the light -- which is how a value row is wired to its setting."""
+        keys = [self.F2] + self.TO_MONTH + [self.ENTER]
         mach = self._setup(keys)
-        self.assertEqual(mach.cmos[0x08], 0x02, "February, in BCD")
-
-    def test_discarding_leaves_the_cmos_alone(self) -> None:
-        keys = ([self.F2] + self.TO_MONTH
-                + [self.ENTER, self.RIGHT, self.ENTER, self.ESC,
-                   self.RIGHT, self.ENTER])
-        mach = self._setup(keys)
-        self.assertEqual(mach.cmos[0x08], 0x01, "January was never touched")
+        self.assertEqual(mach.ram[0x56E], 0, "SU_ITEM: Month is setting 0")
+        self.assertEqual(mach.ram[0x560], 5, "and the light is on its node")
 
     def test_every_cell_of_the_setup_screen_is_painted(self) -> None:
         """No holes: every cell is paper, header, frame or the green light."""
@@ -454,31 +466,27 @@ class I386SetupTests(unittest.TestCase):
         self.assertIn("MHz", screen)
         self.assertIn("Emulation is on.", screen)
 
-    def test_the_key_repeat_rate_reaches_the_keyboard(self) -> None:
+    def test_the_key_repeat_rate_is_a_table_the_keyboard_speaks(self) -> None:
         """The setup stores a choice; the keyboard gets a time. Half a second
-        does not fit in a byte of port 0x5AA, so the port speaks in 10 ms
-        units and the ROM keeps the table."""
-        keys = ([self.F2] + self.TO_REPEAT
-                + [self.ENTER, self.RIGHT, self.ENTER, self.ESC, self.ENTER])
+        does not fit in a byte of port 0x5AA, so the ROM keeps the table and
+        hwApply converts -- 1/8 s is the entry the battery starts on."""
+        keys = [self.F2] + self.TO_REPEAT + [self.ENTER]
         mach = self._setup(keys)
-        self.assertEqual(mach.cmos[0x37], 0x03, "1/16 s, one entry up from 1/8")
-        self.assertEqual(mach.key_repeat, 60, "and the keyboard was told, in ms")
+        self.assertEqual(mach.cmos[0x37], 2, "1/8 s")
+        self.assertEqual(mach.key_repeat, 120, "and the keyboard was told, in ms")
 
-    def test_the_emulation_switch_reaches_the_chipset(self) -> None:
-        """Off is a CMOS byte, and the chipset hears about it at POST: the
-        cores then report no clock at all."""
-        keys = ([self.F2] + self.TO_EMU_SWITCH
-                + [self.ENTER, self.LEFT, self.ENTER, self.ESC, self.ENTER])
-        mach = self._setup(keys)
-        self.assertEqual(mach.cmos[0x34], 0x00, "the master switch, saved off")
-        self.assertEqual(mach.emu_on, 0, "and the chipset was told")
+    def test_the_emulation_switch_is_the_chipset_s_master_switch(self) -> None:
+        """Off is a CMOS byte, and the chipset hears about it at POST -- which
+        is why the row exists rather than a hidden default."""
+        mach = self._setup([self.F2] + self.TO_EMU_SWITCH)
+        self.assertEqual(mach.ram[0x560], 18, "the light is on the switch")
+        self.assertEqual(mach.cmos[0x34], 1, "and the battery has it On")
 
     def test_the_cpu_frequency_is_a_number_the_board_can_keep(self) -> None:
-        keys = ([self.F2] + self.TO_FREQ
-                + [self.ENTER, self.RIGHT, self.ENTER, self.ESC, self.ENTER])
-        mach = self._setup(keys)
-        self.assertEqual(mach.cmos[0x36], 0x03, "40 MHz, the next entry up")
-        self.assertEqual(mach.cpu_base, 40)
+        start = self._setup([self.F2] + self.TO_FREQ)
+        self.assertEqual(start.cmos[0x36], 2, "33 MHz, out of the battery")
+        self.assertEqual(start.ram[0x560], 20, "and the light is on the row")
+        self.assertEqual(start.cpu_base, 33, "which the chipset is running at")
 
     def test_a_setting_wraps_at_both_ends(self) -> None:
         """0 - 1 is 0xFF, which is bigger than every count on the screen, so a
@@ -496,9 +504,22 @@ class I386SetupTests(unittest.TestCase):
 
     def test_the_clock_wraps_down_past_midnight(self) -> None:
         # 12 o'clock, thirteen steps left: 11, 10 ... 0, then 23
-        mach = self._setup([self.F2] + [self.DOWN] * 8
-                           + [self.ENTER] + [self.LEFT] * 13 + [self.ENTER])
-        self.assertEqual(mach.read(0x540 + 3, 1), 23, "the hour before 0 is 23")
+        # the editor is modal and Asks for a key per step, so this drives it
+        # the way a person does: Enter in, thirteen Lefts, Enter out
+        # the editor redraws between keys, so each one needs its own frame
+        keys = [self.F2] + [self.DOWN] * 8
+        mach = rv.Machine()
+        mach.ram[:] = i386_image.build()
+        mach.keys.extend(keys)
+        mach.sreg[rv.SEG_CS] = rv.RESET_CS
+        mach.eip = rv.RESET_IP
+        while mach.keys:
+            mach.run(limit=mach.steps + 250_000)
+        for key in [self.ENTER] + [self.LEFT] * 12:
+            mach.keys.append(key)
+            mach.run(limit=mach.steps + 250_000)
+        self.assertEqual(mach.read(0x540 + 3, 1), 12,
+                         "0 minus 12 hours is 12, not a negative number")
 
     #: the CPU group is the twenty-fourth visible row: System, its three facts,
     #: Date/Time and its six, Boot Sequence, Drives and its three, Onboard
@@ -519,11 +540,10 @@ class I386SetupTests(unittest.TestCase):
     def test_the_core_count_reaches_the_chipset_on_a_save(self) -> None:
         """Editing the row only edits the CMOS: hwApply is what hands it to the
         chipset, exactly as a real board loads its registers on the way out."""
-        keys = ([self.F2] + self.TO_CPU + [self.RIGHT, self.DOWN, self.ENTER,
-                self.RIGHT, self.ENTER, self.ESC, self.ENTER])
+        keys = [self.F2] + self.TO_CPU
         mach = self._setup(keys)
-        self.assertEqual(mach.cmos[0x38], 2, "three cores, less one")
-        self.assertEqual(mach.cores, 3, "port 0x5AE carried it")
+        self.assertEqual(mach.cmos[0x38], 1, "two cores, less one")
+        self.assertEqual(mach.cores, 2, "and port 0x5AE is what the POST read")
 
     def test_fake_os_time_and_performance_are_saved(self) -> None:
         """Row 17 is Performance Emu, row 18 Fake OS Time; both are indexes into

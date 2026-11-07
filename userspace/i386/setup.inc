@@ -26,15 +26,30 @@
 ; place you go, not a key you press: the Exit page is the only way out.
 ; ---------------------------------------------------------------------------
 
-SU_BUF   equ 0x540                  ; the working copy: 24 bytes in the data area
-SU_ITEM  equ 0x558                  ; which row is selected
+SU_BUF   equ 0x540                  ; the working copy: 45 bytes in the data area
+SU_MN    equ 11                     ; how many rows the memory page has
+SU_ITEM  equ 0x56E                  ; which row is selected
 ; these moved twice: once out of the buffer when it grew past eleven rows, and
-; once clear of the boot menu's own scratch bytes (0x511..0x51C) when it grew
-; past sixteen. Nothing else lives between 0x534 and 0x5A0.
-SU_TAB   equ 0x559                  ; which page: 0 Main, 1 Info, 2 Exit
-SU_OLD   equ 0x55A                  ; the value before an edit, for Esc
-SU_OPT   equ 0x55B                  ; which button the exit prompt has lit
+; again when the memory page made the buffer forty-five bytes long. They sit
+; below the GX tree's own state on purpose -- the tree and the pages share one
+; screen and one buffer, and 0x511..0x51C is the boot menu's scratch.
+SU_TAB   equ 0x56F                  ; which page: 0 Main, 1 Info, 2 Exit, 3 Memory
+SU_OLD   equ 0x570                  ; the value before an edit, for Esc
+SU_OPT   equ 0x571                  ; which button the exit prompt has lit
+SU_AUTO_N equ 0x572                 ; the socket count auto-alloc is using
+SU_AUTO_MB equ 0x573                ; ... and the megabytes it has left (a word)
 SU_N     equ 11                     ; how many rows (the last is read-only)
+; the memory panel's own layout inside SU_BUF: rows 0..3, then eight sockets
+; whose size, kind and form live at +20, +28 and +36, and the total at 44
+SU_M_ROWS  equ 0
+SU_M_COUNT equ 4                    ; "Avail Slots"
+SU_M_MODE  equ 5                    ; "Mode"
+SU_M_AUTO  equ 6                    ; "Auto Alloc"
+SU_M_S0    equ 7                    ; socket 0 .. socket 7
+SU_M_SIZE  equ 20
+SU_M_KIND  equ 28
+SU_M_FORM  equ 36
+SU_M_TOTAL equ 44
 
 ; attribute bytes. White on blue, not grey on blue: a 720 x 400 screen that is
 ; scaled up in the player has had every pixel line smeared, and grey text turns
@@ -332,6 +347,178 @@ suLoad:
     xor     al, al                  ; 100%: the guest's clock keeps real time
 .rate_ok:
     mov     [es:SU_BUF + 18], al
+    call    suMemLoad               ; and the memory panel, on its own page
+    ret
+
+; suMemLoad -- the panel's rows out of the CMOS, with blank-battery defaults:
+; four sockets, extended memory on, and 128 MiB in the first one, which is the
+; board this machine has been booting with all along.
+suMemLoad:
+    push    ax
+    push    bx
+    push    cx
+    push    dx
+    push    si
+    push    di
+    xor     di, di
+.blank:
+    mov     byte [es:SU_BUF + SU_M_ROWS + di], 0
+    inc     di
+    cmp     di, 45
+    jb      .blank
+    mov     al, 0x3C
+    call    cmos_read
+    cmp     al, 1
+    jae     .count_ok
+    mov     al, 4
+.count_ok:
+    cmp     al, 8
+    jbe     .count_max
+    mov     al, 8
+.count_max:
+    mov     [es:SU_BUF + SU_M_COUNT], al
+    mov     al, 0x34                ; the emulation master: 0/1 is "on"
+    call    cmos_read
+    cmp     al, 1
+    jbe     .mode_ok
+    mov     al, 1
+.mode_ok:
+    mov     [es:SU_BUF + SU_M_MODE], al
+    xor     bl, bl
+.slot:
+    mov     di, bx
+    mov     al, bl
+    add     al, 0x40
+    call    cmos_read
+    cmp     al, 8
+    jbe     .size_ok
+    xor     al, al
+.size_ok:
+    mov     [es:SU_BUF + SU_M_SIZE + di], al
+    mov     al, bl
+    add     al, 0x48
+    call    cmos_read
+    cmp     al, 3
+    jbe     .kind_ok
+    xor     al, al
+.kind_ok:
+    mov     [es:SU_BUF + SU_M_KIND + di], al
+    mov     al, bl
+    add     al, 0x50
+    call    cmos_read
+    cmp     al, 1
+    jbe     .form_ok
+    xor     al, al
+.form_ok:
+    mov     [es:SU_BUF + SU_M_FORM + di], al
+    inc     bl
+    cmp     bl, 8
+    jb      .slot
+    ; a board with nothing recorded gets the one this build has always had
+    mov     al, [es:SU_BUF + SU_M_TOTAL]
+    or      al, al
+    jnz     .total_ok
+    cmp     byte [es:SU_BUF + SU_M_COUNT], 0
+    jne     .total_ok
+    mov     byte [es:SU_BUF + SU_M_COUNT], 4
+    mov     byte [es:SU_BUF + SU_M_MODE], 1
+    mov     byte [es:SU_BUF + SU_M_SIZE], 8    ; 128 MiB in socket 0
+    call    suMemTotal
+    jmp     .done
+.total_ok:
+    call    suMemTotal
+.done:
+    pop     di
+    pop     si
+    pop     dx
+    pop     cx
+    pop     bx
+    pop     ax
+    ret
+
+; suMemDiffers -- did the memory the panel asks for differ from the one that is
+; running? al = 1 if so.
+;
+; The running board's settings came from the CMOS at power-on, so comparing the
+; panel against the CMOS is comparing it against the machine -- and it is the
+; only comparison that matters, because anything that differs now is something
+; that needs a reboot and anything that does not need one must not cause one.
+suMemDiffers:
+    push    bx
+    push    cx
+    push    dx
+    push    di
+    mov     al, 0x3C
+    call    cmos_read
+    cmp     al, [es:SU_BUF + SU_M_COUNT]
+    jne     .yes
+    mov     al, 0x34
+    call    cmos_read
+    cmp     al, [es:SU_BUF + SU_M_MODE]
+    je      .slots
+    cmp     byte [es:SU_BUF + SU_M_COUNT], 0
+    je      .slots                  ; no sockets: the mode changes nothing
+    jmp     .yes
+.slots:
+    xor     di, di
+.slot:
+    mov     ax, di
+    add     al, 0x40
+    call    cmos_read
+    mov     si, di
+    add     si, SU_BUF + SU_M_SIZE
+    cmp     al, [es:si]
+    jne     .yes
+    mov     ax, di
+    add     al, 0x48
+    call    cmos_read
+    mov     si, di
+    add     si, SU_BUF + SU_M_KIND
+    cmp     al, [es:si]
+    mov     si, di
+    add     si, SU_BUF + SU_M_KIND
+    cmp     al, [es:si]
+    jne     .yes
+    mov     ax, di
+    add     al, 0x50
+    call    cmos_read
+    mov     si, di
+    add     si, SU_BUF + SU_M_FORM
+    cmp     al, [es:si]
+    mov     si, di
+    add     si, SU_BUF + SU_M_FORM
+    cmp     al, [es:si]
+    jne     .yes
+    inc     di
+    cmp     di, 8
+    jb      .slot
+    xor     al, al
+    jmp     .out
+.yes:
+    mov     al, 1
+.out:
+    pop     di
+    pop     dx
+    pop     cx
+    pop     bx
+    ret
+
+; suReboot -- ask the machine to restart, and wait for it to do so.
+;
+; The reset comes from the chipset: a write to 0x64 asks for it, and the
+; emulator answers by reloading its registers and heading for the reset vector.
+; That is not this firmware's to do from inside an interrupt handler, so the
+; request is staged at 0x4F4 and picked up by the board's own main loop, which
+; is where a real chipset's reset would be.
+suReboot:
+    push    ax
+    push    es
+    xor     ax, ax
+    mov     es, ax
+    mov     byte [es:0x4F2], 1      ; the board is restarting: the boot goes ahead
+    mov     byte [es:0x4F4], 1      ; and the emulator may do it now
+    pop     es
+    pop     ax
     ret
 
 suSave:
@@ -429,6 +616,50 @@ suSave:
     mov     cl, al
     mov     al, 0x3B
     call    cmos_write
+    ; the memory panel: how many slots are fitted, then each slot's size, its
+    ; kind and its form. The chipset works out the extended total from these
+    ; at power-on, and E820 reads that total back -- so the setup decides how
+    ; much memory the next boot has without the firmware ever multiplying.
+    mov     al, [es:SU_BUF + SU_M_COUNT]
+    mov     cl, al
+    mov     al, 0x3C
+    call    cmos_write
+    mov     bl, 0
+.memslot:
+    mov     al, bl
+    add     al, 0x40                ; slot sizes start at 0x40
+    mov     di, bx
+    add     di, SU_M_SIZE           ; ... and live at SU_BUF + SU_M_SIZE + slot
+    mov     cl, [es:SU_BUF + di]
+    call    cmos_write
+    mov     al, bl
+    add     al, 0x48                ; slot kinds at 0x48
+    mov     cl, [es:SU_BUF + di + SU_M_KIND - SU_M_SIZE]
+    call    cmos_write
+    mov     al, bl
+    add     al, 0x50                ; forms at 0x50
+    mov     cl, [es:SU_BUF + di + SU_M_FORM - SU_M_SIZE]
+    call    cmos_write
+    inc     bl
+    cmp     bl, 8
+    jb      .memslot
+    ; and the total, which the chipset's own registers will agree with
+    mov     al, [es:SU_BUF + SU_M_TOTAL]    ; extended memory, in megabytes
+    mov     cl, al
+    mov     al, 0x17                ; low byte: E820 and int 15h AH=88 read this
+    call    cmos_write
+    mov     al, [es:SU_BUF + SU_M_TOTAL]
+    shr     al, 1
+    shr     al, 1
+    shr     al, 1
+    shr     al, 1
+    shr     al, 1
+    shr     al, 1
+    shr     al, 1
+    shr     al, 1
+    mov     cl, al
+    mov     al, 0x18
+    call    cmos_write
     ; a checksum a real board keeps, so the battery can be declared good
     mov     al, 0x31
     mov     cl, 0xA5
@@ -513,8 +744,14 @@ suPrint:
 ; suBar: dl/dh = the start, cx = the width, al = the character
 suBar:
     push    cx
+    push    dx
+    push    ax
+    push    bx
     call    suGoto
     call    suFill
+    pop     bx
+    pop     ax
+    pop     dx
     pop     cx
     ret
 
@@ -729,7 +966,7 @@ suEnter:
     mov     al, [es:SU_TAB]
     test    al, al
     jnz     .leftdec
-    mov     al, 3
+    mov     al, 4
 .leftdec:
     dec     al
     mov     [es:SU_TAB], al
@@ -740,7 +977,7 @@ suEnter:
 .right:
     mov     al, [es:SU_TAB]
     inc     al
-    cmp     al, 3
+    cmp     al, 4
     jb      .rightset
     xor     al, al
 .rightset:
@@ -755,7 +992,17 @@ suEnter:
     jz      .edit
     cmp     al, 2
     je      .exitpage
+    cmp     al, 3
+    je      .mempage
     jmp     .key                    ; the information page has no actions
+.mempage:
+    cmp     byte [es:SU_ITEM], 4
+    jne     .key                    ; the size row: edit it like any other
+    mov     al, [es:SU_BUF + SU_M_COUNT]
+    mov     cx, [es:SU_AUTO_MB]
+    call    suAutoAlloc
+    call    pageMemory
+    jmp     .key
 .exitpage:
     cmp     byte [es:SU_ITEM], 0
     jne     .leave                  ; "discard and exit"
@@ -776,6 +1023,14 @@ suEnter:
     jmp     .key
 .save:
     call    suSave
+    ; a save that changed the memory can only take effect at a reboot, and a
+    ; board that quietly kept the old memory would be lying about its own
+    ; setup. The chipset applies the rest at POST either way.
+    call    suMemDiffers
+    test    al, al
+    jz      .leave
+    call    suReboot
+    jmp     .leave
 .leave:
     mov     byte [es:CON_ATTR], 0x07
     push    ax
@@ -1231,6 +1486,11 @@ tabItems:
     mov     bl, SU_N
     jmp     .out
 .notmain:
+    cmp     al, 3
+    jne     .notmem
+    mov     bl, SU_MN
+    jmp     .out
+.notmem:
     cmp     al, 2
     jne     .out
     mov     bl, 2
@@ -1273,7 +1533,12 @@ drawSetup:
     jz      .mainpage
     cmp     al, 1
     je      .infopage
+    cmp     al, 3
+    je      .mempage
     call    pageExit
+    jmp     .done
+.mempage:
+    call    pageMemory
     jmp     .done
 .mainpage:
     call    pageMain
@@ -1299,69 +1564,235 @@ drawTabs:
     push    cx
     push    dx
     push    si
-    ; Main
+    push    di
+    xor     di, di                  ; which tab is being drawn
     mov     dl, 2
-    mov     dh, SU_TABS
-    mov     cx, 6
-    mov     al, ' '
+.tab:
+    ; the role of the band decides the ink for both halves of the tab
     mov     bl, SU_PAPER
-    cmp     byte [es:SU_TAB], 0
-    jne     .m0
+    mov     al, [es:SU_TAB]
+    cmp     di, ax
+    jne     .ink
     mov     bl, SU_SEL
-.m0:
+.ink:
+    push    bx
+    mov     dh, SU_TABS
+    mov     cx, 8
+    mov     al, ' '
     call    suBar
-    mov     dl, 3
     mov     dh, SU_TABS
     call    suGoto
-    mov     si, msg_tab_main
-    mov     bl, SU_PAPER
-    cmp     byte [es:SU_TAB], 0
-    jne     .m1
-    mov     bl, SU_SEL
-.m1:
+    pop     bx
+    add     di, di
+    mov     si, [cs:tab_names + di]
+    shr     di, 1
     call    suPrint
-    ; Info
-    mov     dl, 10
-    mov     dh, SU_TABS
-    mov     cx, 6
-    mov     al, ' '
-    mov     bl, SU_PAPER
-    cmp     byte [es:SU_TAB], 1
-    jne     .i0
-    mov     bl, SU_SEL
-.i0:
-    call    suBar
-    mov     dl, 11
-    mov     dh, SU_TABS
+    inc     di
+    add     dl, 10
+    cmp     dl, 42
+    jb      .tab
+    pop     di
+    pop     si
+    pop     dx
+    pop     cx
+    pop     bx
+    pop     ax
+    ret
+
+tab_names:
+    dw msg_tab_main, msg_tab_info, msg_tab_memory, msg_tab_exit
+
+; pageMemory -- the RAM.
+;
+; A real board's setup has a memory page because the memory is modules: how many
+; sockets, what is in each, and whether the total is what you paid for. The
+; rows mirror that, and eight of them are one socket each.
+;
+; Like every other page this one writes nothing: the CMOS is the board's memory
+; and it changes on Save. What Save does with these rows is the interesting
+; part -- it stores the modules *and* the total they add up to, and the chipset
+; reads that total at power-on to decide how much extended memory exists, which
+; is what E820 then reports to a kernel.
+; ---------------------------------------------------------------------------
+pageMemory:
+    push    ax
+    push    bx
+    push    cx
+    push    dx
+    push    si
+    mov     dl, 2
+    mov     dh, SU_ROW0 - 1
     call    suGoto
-    mov     si, msg_tab_info
-    mov     bl, SU_PAPER
-    cmp     byte [es:SU_TAB], 1
-    jne     .i1
-    mov     bl, SU_SEL
-.i1:
+    mov     si, msg_su_memory
+    mov     bl, SU_HEAD
     call    suPrint
-    ; Exit
-    mov     dl, 18
-    mov     dh, SU_TABS
-    mov     cx, 6
-    mov     al, ' '
-    mov     bl, SU_PAPER
-    cmp     byte [es:SU_TAB], 2
-    jne     .e0
-    mov     bl, SU_SEL
-.e0:
-    call    suBar
-    mov     dl, 19
-    mov     dh, SU_TABS
+    xor     al, al
+.paint:
+    push    ax
+    call    suDrawRow
+    pop     ax
+    inc     al
+    cmp     al, SU_MN
+    jb      .paint
+    mov     al, [es:SU_ITEM]
+    call    suMemoryHint
+    pop     si
+    pop     dx
+    pop     cx
+    pop     bx
+    pop     ax
+    ret
+
+suMemoryHint:
+    push    ax
+    push    bx
+    push    dx
+    push    si
+    mov     dl, SU_SPLIT
+    mov     dh, SU_ROW0 - 1
     call    suGoto
-    mov     si, msg_tab_exit
-    mov     bl, SU_PAPER
-    cmp     byte [es:SU_TAB], 2
-    jne     .e1
-    mov     bl, SU_SEL
-.e1:
+    mov     si, msg_su_memhlp
+    mov     bl, SU_HEAD
     call    suPrint
+    mov     dl, SU_SPLIT
+    mov     dh, SU_ROW0
+    call    suGoto
+    xor     ah, ah
+    add     ax, ax
+    mov     si, ax
+    mov     si, [cs:su_mem_help + si]
+    mov     bl, SU_PAPER
+    call    suPrint
+    mov     dl, SU_SPLIT
+    mov     dh, SU_ROW0 + 2
+    call    suGoto
+    mov     al, [es:SU_ITEM]
+    xor     ah, ah
+    add     ax, ax
+    mov     si, ax
+    mov     si, [cs:su_mem_help2 + si]
+    mov     bl, SU_PAPER
+    call    suPrint
+    pop     si
+    pop     dx
+    pop     bx
+    pop     ax
+    ret
+
+; suAutoAlloc -- fill the sockets with the largest modules that fit.
+;
+; "Auto" means what it means on a real board: take the total you asked for, and
+; populate sockets with the biggest module each can hold until it is used up.
+; Four sockets of 128 MB is half a gigabyte; 96 MB gives one 64 and one 32, in
+; that order, and leaves the rest empty.
+;
+; al = how many sockets are fitted, cx = megabytes wanted
+suAutoAlloc:
+    push    ax
+    push    bx
+    push    cx
+    push    dx
+    push    si
+    push    di
+    mov     [es:SU_AUTO_N], al
+    mov     [es:SU_AUTO_MB], cl
+    mov     [es:SU_AUTO_MB + 1], ch
+    xor     di, di
+.blank:
+    mov     byte [es:SU_BUF + SU_M_SIZE + di], 0
+    inc     di
+    cmp     di, 8
+    jb      .blank
+    xor     di, di                  ; di = the socket being filled
+.fill:
+    mov     al, [es:SU_AUTO_N]
+    xor     ah, ah
+    cmp     di, ax
+    jae     .total
+    mov     cx, [es:SU_AUTO_MB]
+    or      ch, ch
+    jnz     .have
+    or      cl, cl
+    jz      .total                  ; nothing left to give
+.have:
+    ; the largest entry of the size table that fits what is left
+    mov     bl, 7                   ; index: 1 MB, 2, 4 ... 128
+.try:
+    mov     al, bl
+    xor     ah, ah
+    add     ax, ax
+    mov     si, ax
+    mov     si, [cs:su_ramsizes + si]   ; a word: the megabytes it holds
+    mov     cx, [es:SU_AUTO_MB]
+    cmp     si, cx
+    jbe     .fits
+    dec     bl
+    jnz     .try
+    jmp     .total                  ; under a megabyte: nothing sensible fits
+.fits:
+    mov     si, di
+    add     si, SU_BUF + SU_M_SIZE
+    mov     [es:si], bl             ; the size index, which is what CMOS wants
+    ; and take it off the total
+    mov     al, bl
+    xor     ah, ah
+    add     ax, ax
+    mov     si, ax
+    mov     si, [cs:su_ramsizes + si]
+    mov     cx, [es:SU_AUTO_MB]
+    sub     cx, si
+    mov     [es:SU_AUTO_MB], cl
+    mov     [es:SU_AUTO_MB + 1], ch
+    inc     di
+    jmp     .fill
+.total:
+    call    suMemTotal
+    mov     di, [es:SU_AUTO_N]
+.blank2:
+    cmp     di, 8
+    jae     .done
+    mov     byte [es:SU_BUF + SU_M_SIZE + di], 0
+    inc     di
+    jmp     .blank2
+.done:
+    pop     di
+    pop     si
+    pop     dx
+    pop     cx
+    pop     bx
+    pop     ax
+    ret
+
+; suMemTotal -- add up the fitted modules into SU_BUF + SU_M_TOTAL, in megabytes
+suMemTotal:
+    push    ax
+    push    bx
+    push    cx
+    push    dx
+    push    si
+    mov     cx, 0
+    xor     bx, bx
+.sum:
+    mov     al, [es:SU_BUF + SU_M_COUNT]
+    xor     ah, ah
+    cmp     bx, ax
+    jae     .store
+    mov     si, bx
+    add     si, SU_BUF + SU_M_SIZE
+    mov     al, [es:si]
+    xor     ah, ah
+    add     ax, ax
+    mov     si, ax
+    mov     si, [cs:su_ramsizes + si]
+    add     cx, si
+    inc     bx
+    jmp     .sum
+.store:
+    cmp     cx, 255
+    jbe     .fits
+    mov     cx, 255                 ; the CMOS byte is the limit, not the idea
+.fits:
+    mov     [es:SU_BUF + SU_M_TOTAL], cl
     pop     si
     pop     dx
     pop     cx
@@ -2063,7 +2494,13 @@ suDrawRow:
     jne     .value
     mov     bl, SU_SEL
 .value:
+    cmp     byte [es:SU_TAB], 3
+    je      .memval
     call    suValue
+    jmp     .valued
+.memval:
+    call    suMemValue
+.valued:
     pop     di
     pop     si
     pop     dx
@@ -2076,6 +2513,93 @@ suDrawRow:
 ; suValue: print row al's value. Every number is two digits or four, and the
 ; three "type" rows print a name out of a table.
 ; ---------------------------------------------------------------------------
+; suMemValue -- print the value of memory row al into bl's ink.
+suMemValue:
+    push    ax
+    push    bx
+    push    cx
+    push    dx
+    push    si
+    push    di
+    mov     [es:SU_INK], bl
+    xor     ah, ah
+    mov     si, ax
+    cmp     si, SU_M_COUNT
+    je      .count
+    cmp     si, SU_M_MODE
+    je      .mode
+    cmp     si, SU_M_AUTO
+    je      .auto
+    jmp     .slot
+.count:
+    mov     al, [es:SU_BUF + SU_M_COUNT]
+    xor     ah, ah
+    mov     si, ax
+    mov     si, [cs:su_slotcount + si]
+    jmp     .print
+.mode:
+    mov     al, [es:SU_BUF + SU_M_MODE]
+    xor     ah, ah
+    add     ax, ax
+    mov     si, ax
+    mov     si, [cs:su_mem_mode + si]
+    jmp     .print
+.auto:
+    mov     si, msg_su_autoval
+    jmp     .print
+.slot:
+    sub     si, SU_M_S0
+    mov     di, si                  ; the socket number
+    ; its size, as a name
+    mov     si, di
+    add     si, SU_BUF + SU_M_SIZE
+    mov     al, [es:si]
+    xor     ah, ah
+    add     ax, ax
+    mov     si, ax
+    mov     si, [cs:su_ramsize_names + si]
+    mov     bl, [es:SU_INK]
+    call    suPrint
+    ; and what is in it: a generation and a form
+    mov     si, di
+    add     si, SU_BUF + SU_M_SIZE
+    cmp     byte [es:si], 0
+    je      .done                   ; an empty socket has no kind
+    mov     si, msg_su_comma
+    mov     bl, [es:SU_INK]
+    call    suPrint
+    mov     si, di
+    add     si, SU_BUF + SU_M_KIND
+    mov     al, [es:si]
+    xor     ah, ah
+    add     ax, ax
+    mov     si, ax
+    mov     si, [cs:su_kdnames + si]
+    mov     bl, [es:SU_INK]
+    call    suPrint
+    mov     si, di
+    add     si, SU_BUF + SU_M_FORM
+    mov     al, [es:si]
+    xor     ah, ah
+    add     ax, ax
+    mov     si, ax
+    mov     si, [cs:su_formnames + si]
+    mov     bl, [es:SU_INK]
+    call    suPrint
+.done:
+    jmp     .out
+.print:
+    mov     bl, [es:SU_INK]
+    call    suPrint
+.out:
+    pop     di
+    pop     si
+    pop     dx
+    pop     cx
+    pop     bx
+    pop     ax
+    ret
+
 suValue:
     push    ax
     push    bx
@@ -2307,6 +2831,7 @@ msg_su_clock:   db "Clock: ", 0
 msg_su_keys:    db "^/v select   </> page   Enter edit   Esc exit", 0
 
 ; the pages, on the top border
+msg_tab_memory: db "Memory", 0
 msg_tab_main:   db "Main", 0
 msg_tab_info:   db "Info", 0
 msg_tab_exit:   db "Exit", 0
@@ -2325,6 +2850,85 @@ msg_su_tabhelp: db "< > switches pages", 0
 
 ; the exit page
 msg_su_exithead: db "Exit", 0
+msg_su_memory:  db "Memory", 0
+msg_su_memhlp:  db "Memory Configuration", 0
+
+msg_su_autoval: db "Auto", 0
+msg_su_comma:   db ", ", 0
+
+su_sc_0: db "1", 0
+su_sc_1: db "2", 0
+su_sc_2: db "3", 0
+su_sc_3: db "4", 0
+su_sc_4: db "5", 0
+su_sc_5: db "6", 0
+su_sc_6: db "7", 0
+su_sc_7: db "8", 0
+su_slotcount:
+    dw su_sc_0, su_sc_1, su_sc_2, su_sc_3, su_sc_4, su_sc_5, su_sc_6, su_sc_7
+
+su_h_mem_count: db "How many sockets this board has, 1 to 8.", 0
+su_h_mem_mode:  db "Use internal or extended memory. Extended", 0
+su_h_mem_mode2: db "needs the module; both take a reboot.", 0
+su_h_mem_auto:  db "Auto Alloc fills the sockets: give it a size", 0
+su_h_mem_auto2: db "and it fits the largest modules that add up.", 0
+su_h_mem_slot:  db "Socket. Size is this module; kind is its DDR", 0
+su_h_mem_slot2: db "generation, form is DIMM or SODIMM.", 0
+su_mem_help:
+    dw su_h_mem_count, su_h_mem_mode, su_h_mem_auto
+    dw su_h_mem_slot, su_h_mem_slot, su_h_mem_slot, su_h_mem_slot
+    dw su_h_mem_slot, su_h_mem_slot, su_h_mem_slot, su_h_mem_slot
+su_mem_help2:
+    dw su_h_mem_count, su_h_mem_mode2, su_h_mem_auto2
+    dw su_h_mem_slot2, su_h_mem_slot2, su_h_mem_slot2, su_h_mem_slot2
+    dw su_h_mem_slot2, su_h_mem_slot2, su_h_mem_slot2, su_h_mem_slot2
+
+su_ms_0: db "none", 0
+su_ms_1: db "1 MB", 0
+su_ms_2: db "2 MB", 0
+su_ms_3: db "4 MB", 0
+su_ms_4: db "8 MB", 0
+su_ms_5: db "16 MB", 0
+su_ms_6: db "32 MB", 0
+su_ms_7: db "64 MB", 0
+su_ms_8: db "128 MB", 0
+su_ramsize_names:
+    dw su_ms_0, su_ms_1, su_ms_2, su_ms_3, su_ms_4
+    dw su_ms_5, su_ms_6, su_ms_7, su_ms_8
+
+su_kd_0: db "DDR2", 0
+su_kd_1: db "DDR3", 0
+su_kd_2: db "DDR4", 0
+su_kdnames:
+    dw su_kd_0, su_kd_1, su_kd_2
+
+su_fm_0: db "DIMM", 0
+su_fm_1: db "SODIMM", 0
+su_formnames:
+    dw su_fm_0, su_fm_1
+
+su_mi_0: db "Internal (list)", 0
+su_mi_1: db "Extended (module)", 0
+su_mem_mode:
+    dw su_mi_0, su_mi_1
+
+su_row_memcount: db "Avail Slots", 0
+su_row_memmode:  db "Mode", 0
+su_row_memauto:  db "Auto Alloc", 0
+su_row_slot0:    db "Slot 0", 0
+su_row_slot1:    db "Slot 1", 0
+su_row_slot2:    db "Slot 2", 0
+su_row_slot3:    db "Slot 3", 0
+su_row_slot4:    db "Slot 4", 0
+su_row_slot5:    db "Slot 5", 0
+su_row_slot6:    db "Slot 6", 0
+su_row_slot7:    db "Slot 7", 0
+
+su_mem_labels:
+    dw su_row_memcount, su_row_memmode, su_row_memauto
+    dw su_row_slot0, su_row_slot1, su_row_slot2, su_row_slot3
+    dw su_row_slot4, su_row_slot5, su_row_slot6, su_row_slot7
+
 msg_su_save:    db "Save and exit", 0
 msg_su_discard: db "Discard and exit", 0
 msg_su_savehelp: db "Write these settings to CMOS", 0
@@ -2535,6 +3139,9 @@ su_tm_4:  db "10% (10x faster)", 0
 su_tm_5:  db "5% (20x faster)", 0
 su_time:
     dw su_tm_0, su_tm_1, su_tm_2, su_tm_3, su_tm_4, su_tm_5
+
+su_ramsizes:
+    dw 0, 1, 2, 4, 8, 16, 32, 64, 128
 
 su_hwtabs:
     dw su_cores, su_threads, su_perf, su_time

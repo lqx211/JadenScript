@@ -75,6 +75,34 @@ public X.bw = [1, 256, 65536, 16777216];
 public X.fbit = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192];
 /* decode slots, refilled once per instruction */
 public X.mem = [];                       // RAM, one 32-bit word an item
+/* ---- which RAM ------------------------------------------------------------------
+ * A Scratch list and a browser typed array are different machines: one is a
+ * hash map of objects, the other a byte buffer, and a machine that never
+ * installed modules should not read one. The storage is picked once, at
+ * power-on, and every access asks `X.extOn` -- one comparison, on the path that
+ * runs more than any other. That is the price of a setup screen that can
+ * change it: a reboot loads the other one and the cost of the choice is paid
+ * once instead of being paid by the wrong machine for ever.
+ *
+ * Base memory is a list on both sides, because the first megabyte is fetched
+ * from and the extension is an indirect call. Extended memory is the
+ * extension's own buffer when it is installed, and a list when it is not.
+ */
+public X.extOn = 0;                      // 1: `Ram` holds the memory above 1 MiB
+public X.extBytes = 0;                   // what `alloc` actually granted
+public X.reboot = 0;                     // 1: asked to restart
+public X.rebootExt = -1;                 // -1: keep what this boot loaded
+public X.reboots = 0;
+public X.slotExtMb = 0;                  // what the memory panel installed
+public X.slotCount = 0;
+public X.slotSize = [];
+public X.slotKind = [];
+public X.slotForm = [];
+public X.device = [];
+public X.memWords4 = 0;                  // base memory in bytes
+public X.ramBlk = [];                    // a block in flight for Ram.load/save
+public X.nullA = [];
+public X.nullB = [];
 public X.bios = [];                      // the ROM
 public X.disk = [];                      // the staged disk image
 /* ---- the network drive ---------------------------------------------- *
@@ -571,6 +599,47 @@ class Cpu {
         mainLoop();
     }
 
+    /* The reset button, from above.
+     *
+     * The input sprite runs in its own thread and cannot call into this class,
+     * so the request arrives as a variable and is picked up here, between
+     * batches -- once per frame at most, which is far more often than a machine
+     * needs to notice a button.
+     *
+     * A reset that did nothing but jump to the ROM would keep the memory it was
+     * asked to leave behind: the panel's whole purpose is that the next boot
+     * has different RAM. So the memory travels first -- the 640 KiB into the
+     * extension's buffer, or back out of it -- and then the registers go to
+     * their reset values and the CPU starts at the reset vector, which is the
+     * same path a cold boot takes. The cores are released again by POST, which
+     * is why they are dropped here first.
+     */
+    private void rebootApply() { // warp
+        X.reboot = 0;
+        X.reboots += 1;
+        _wantExt = 0;
+#ifndef TURBOWARP
+        _wantExt = 0;                    // no modules on a list board
+#else
+        _wantExt = X.rebootExt;
+#endif
+        if (_wantExt != X.extOn) { ramTransfer(_wantExt); }
+        slotScan();
+        if (X.slotExtMb <= 0) { X.extOn = 0; }
+#ifdef TURBOWARP
+        if (_wantExt == 1 && X.slotExtMb > 0) { X.extOn = 1; }
+#endif
+        _i = 1;
+        while (_i <= 16) {
+            X.coreRun.set(_i, 0);        // POST releases whichever cores exist now
+            _i += 1;
+        }
+        X.spawned = 1;
+        powerOn();
+        X.powerOns += 1;
+        X.dispReq = 1;                   // the card clears itself for the new POST
+    }
+
     /* The chipset can be told to keep more cores than the machine started with,
      * so the clones are made on demand rather than all at power-on. A clone
      * parks on its own `coreRun` byte until the firmware releases it, so one
@@ -639,16 +708,39 @@ class Cpu {
         trace.clear();
 
 #ifdef TURBOWARP
-        /* Ask for 128 MiB and take what the browser gives back: a loaded
-         * machine may refuse, and a board that lies about its memory is worse
-         * than one that reports less. The extension is only the memory *above*
-         * 1 MiB -- base memory stays in the list, because that is the hot path
-         * and an extension call, however cheap, is still a call. */
-        _i = Ram.alloc(134217728);
+        /* Ask for more than the modules hold and take what comes back: a
+         * machine that never installed any should not reserve a browser's
+         * worth of memory. */
+        /* The reporter has to be read: a bare call to a block that only
+         * returns a number is not a command, and the compiler says so. */
+        X.extBytes = Ram.alloc(134217728);
         X.extWords = Operators.math("floor", Ram.size / 4);
 #else
         X.extWords = 0;                  // a Scratch list is base memory only
 #endif
+        /* ---- what the memory panel installed ---------------------------------
+         * The setup writes the slots to CMOS; this is where they become
+         * memory. `extOn` is on when the board has the extension *and* the
+         * panel put modules in it -- so a build that can use extended memory
+         * but was never asked to falls back to the list, and behaves exactly
+         * as it did before the panel existed.
+         */
+        X.memWords4 = X.memWords * 4;
+        slotScan();
+        X.extOn = 0;
+#ifdef TURBOWARP
+        if (X.slotExtMb > 0) { X.extOn = 1; }
+#endif
+        _slotId = 0;
+        while (_slotId < 8) {
+            portOut(112, 0x48 + _slotId);
+            portIn(113);
+            X.slotKind.set(_slotId + 1, v % 8);
+            portOut(112, 0x50 + _slotId);
+            portIn(113);
+            X.slotForm.set(_slotId + 1, v % 8);
+            _slotId += 1;
+        }
         /* The ATA transfer buffer is a sector: 256 words, sized here because a
          * Scratch list does not grow when you `set` past its end -- the write
          * is simply dropped, and a drive that answers every read with zeros is
@@ -810,6 +902,9 @@ class Cpu {
             X.frames += 1;
             if (X.maxFrames > 0 && X.frames > X.maxFrames) {
                 return;
+            }
+            if (coreId == 1 && X.reboot == 1) {
+                rebootApply();
             }
             if (coreId == 1) {
                 X.monSteps = steps;
@@ -1022,6 +1117,66 @@ class Cpu {
      * is 128 MiB and covers all of them, so a decoder that tested RAM first
      * would answer every access to the text buffer, the ROM and the disk out of
      * the wrong thing -- the failure looks like a screen that never changes. */
+    /* ---- moving a machine from one kind of RAM to the other -------------- *
+     * This is the reboot the memory panel needs: the memory that survives a
+     * reboot on a real board is the memory that is in the modules, so the
+     * 640 KiB in the list goes into the extension's buffer and the disk and
+     * the text plane follow it. Nothing else is touched -- the ROM is read
+     * from its asset every boot either way.
+     *
+     * Written as a copy of the *words* the list holds, because that is the
+     * shape both sides understand, and in blocks of a hundred so a browser
+     * that would rather do something else still can.
+     */
+    private void ramTransfer(toExt) { // warp
+#ifdef TURBOWARP
+        _t = 0;
+        while (_t < X.memWords) {
+            _block = 100;
+            if (_t + _block > X.memWords) { _block = X.memWords - _t; }
+            if (toExt == 1) {
+                _k = 1;
+                while (_k <= _block) {
+                    X.ramBlk.set(_k, X.mem.get(_t + _k) + 0);
+                    _k += 1;
+                }
+                Ram.load(_t * 4, _block * 4, X.ramBlk);
+            } else {
+                Ram.save(_t * 4, _block * 4, X.ramBlk);
+                _k = 1;
+                while (_k <= _block) {
+                    X.mem.set(_t + _k, Ram.read32((_t + _k - 1) * 4) + 0);
+                    _k += 1;
+                }
+            }
+            _t += _block;
+        }
+        X.extOn = toExt;
+#endif
+    }
+
+    /* The memory panel, read back the way the chipset will use it. Sizes are
+     * indices into a table of powers of two, so 1 means 8 MiB and 3 means
+     * 128 MiB; a slot that is empty is size 0. */
+    private void slotScan() { // warp
+        X.slotExtMb = 0;
+        portOut(112, 0x3C);
+        portIn(113);
+        X.slotCount = v % 256;
+        if (X.slotCount > 8) { X.slotCount = 8; }
+        _i = 0;
+        while (_i < 8) {
+            portOut(112, 0x40 + _i);
+            portIn(113);
+            _sz = v % 256;
+            X.slotSize.set(_i, _sz);
+            if (_i < X.slotCount && _sz > 0) {
+                X.slotExtMb = X.slotExtMb + X.pow2.get(_sz + 1);
+            }
+            _i += 1;
+        }
+    }
+
     private void rdb(a) { // warp
         v = 0xFF;                      // an open bus reads as all ones
         /* The chipset forwards the last megabyte of the four-gigabyte space to
@@ -1035,6 +1190,16 @@ class Cpu {
             v = Operators.math("floor", _w / X.bw.get(_pA % 4 + 1)) % 256;
             return;
         }
+#ifdef TURBOWARP
+        /* The memory panel may have put base memory in the extension's buffer
+         * as well, and a reboot is what moves it there. Two conditional blocks
+         * instead of one branch: this is the most executed test in the machine,
+         * and a list read is two blocks, not three. */
+        if (X.extOn == 1 && _pA < X.memWords4) {
+            v = Ram.read8(_pA);
+            return;
+        }
+#endif
         if (_pA >= X.textBase && _pA < X.textBase + X.textWords * 4) {
             _w = X.text.get(Operators.math("floor", (_pA - X.textBase) / 4) + 1) + 0;
             v = Operators.math("floor", _w / X.bw.get((_pA - X.textBase) % 4 + 1)) % 256;
@@ -1070,6 +1235,12 @@ class Cpu {
         _wv = val % 256;
         _pA = a;
         if (_pA >= 4293918720) { _pA = _pA - 4293918720 + 983040; }
+#ifdef TURBOWARP
+        if (X.extOn == 1 && _pA < X.memWords4) {
+            Ram.write8(_pA, _wv);
+            return;
+        }
+#endif
         if (_pA < X.holeEnd) {         // hot path, and the same one comparison
             _i = Operators.math("floor", _pA / 4) + 1;
             _sh = X.bw.get(_pA % 4 + 1);
