@@ -79,7 +79,15 @@ public X.holeEnd = 655360;               // 0xA_0000: RAM stops at the video hol
 public X.diskBase = 786432;              // 0xC_0000: the disk window
 public X.diskWords = 16384;              // 64 KiB = 128 sectors
 public X.textBase = 753664;              // 0xB_8000
-public X.textWords = 1200;               // 4800 bytes, 2400 cells
+/* The text plane is as big as the widest card this machine will ever be shown
+ * on: 160 columns by 60 rows of 8 x 16 cells is 1280 x 960 pixels, which is
+ * every stage TurboWarp offers and then some. The *visible* width and height
+ * are what the card reports (X.dispCols/X.dispRows), and the stride is the
+ * visible width, because a guest writes cell (row * width + col) and the two
+ * have to agree. */
+public X.textWords = 4800;               // 19200 bytes, 9600 cells
+public X.dispMaxCols = 160;
+public X.dispMaxRows = 60;
 public X.romBase = 983040;               // 0xF_0000
 public X.romWords = 16384;               // 64 KiB
 

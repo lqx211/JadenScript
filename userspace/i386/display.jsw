@@ -120,14 +120,21 @@ class Display {
         /* rounding up must not hang the screen over the edge of the stage */
         while (_cols * X.dispCellW > _w && _cols > 1) { _cols -= 1; }
         while (_rows * X.dispCellH > _h && _rows > 1) { _rows -= 1; }
+        /* The card follows the stage: a wider stage is a wider text plane, the
+         * way a VGA card offers more columns at a higher dot clock. The plane
+         * in memory has a ceiling -- X.dispMaxCols by X.dispMaxRows -- and the
+         * stride is the visible width, because that is what a guest writes
+         * through. */
+        if (_cols > X.dispMaxCols) { _cols = X.dispMaxCols; }
+        if (_rows > X.dispMaxRows) { _rows = X.dispMaxRows; }
+        X.dispCols = _cols;
+        X.dispRows = _rows;
+        X.dispViewCols = _cols;
+        X.dispViewRows = _rows;
         _w = _cols * X.dispCellW;
         _h = _rows * X.dispCellH;
         X.stageW = _w;
         X.stageH = _h;
-        X.dispViewCols = _cols;
-        X.dispViewRows = _rows;
-        if (X.dispViewCols > X.dispCols) { X.dispViewCols = X.dispCols; }
-        if (X.dispViewRows > X.dispRows) { X.dispViewRows = X.dispRows; }
         X.dispOffX = (_w - X.dispCols * X.dispCellW) / 2;
         X.dispOffY = (_h - X.dispRows * X.dispCellH) / 2;
         if (X.dispOffX < 0) { X.dispOffX = 0; }

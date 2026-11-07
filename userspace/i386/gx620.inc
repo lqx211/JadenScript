@@ -75,6 +75,9 @@ GX_M_HINT equ 0x5B6                 ; ... the hint box's top row, or 0 for none
 GX_M_LM1  equ 0x5B7                 ; ... and one row above the bottom border
 GX_M_COLS equ 0x5B8                 ; ... the card's width in cells
 
+GX_RR_MAX  equ 118                  ; the frame stops growing before the card
+                                    ; does, so a very wide stage still has a
+                                    ; margin instead of a wall of frame
 KIND_GROUP equ 0x40
 KIND_EDIT  equ 0x80
 
@@ -108,9 +111,9 @@ gxLayout:
 .narrow:
     mov     [es:GX_M_COLS], al
     sub     al, 2                   ; the frame's own borders cost a column
-    cmp     al, GX_RR               ; a card wide enough keeps the pane's width
-    jb      .fit
-    mov     al, GX_RR
+    cmp     al, GX_RR_MAX           ; a wide card gets a wide frame: the right
+    jb      .fit                    ; pane simply has more room in it
+    mov     al, GX_RR_MAX
 .fit:
     mov     [es:GX_M_RR], al
     mov     bl, al

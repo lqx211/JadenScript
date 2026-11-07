@@ -35,8 +35,10 @@ org 0
 
 TEXT_SEG        equ 0xB800
 DISK_SEG        equ 0xC000          ; the staged disk image, 128 sectors
-COLS            equ 80
+COLS            equ 80                  ; the default card, and the splash's art
 ROWS            equ 30
+MAXCOLS         equ 160                 ; the widest plane the card can present,
+MAXROWS         equ 60                  ; matching X.dispMaxCols/Rows
 
 BDA_CURSOR_COL  equ 0x450
 BDA_CURSOR_ROW  equ 0x451
@@ -400,9 +402,9 @@ cardGeometry:
     jnz     .havecols
     mov     al, COLS
 .havecols:
-    cmp     al, COLS
+    cmp     al, MAXCOLS
     jbe     .colok
-    mov     al, COLS
+    mov     al, MAXCOLS
 .colok:
     mov     [es:BDA_VIDCOLS], al
     mov     [es:CON_W], al
@@ -412,9 +414,9 @@ cardGeometry:
     jnz     .haverows
     mov     al, ROWS
 .haverows:
-    cmp     al, ROWS
+    cmp     al, MAXROWS
     jbe     .rowok
-    mov     al, ROWS
+    mov     al, MAXROWS
 .rowok:
     mov     [es:BDA_VIDROWS], al
     dec     al

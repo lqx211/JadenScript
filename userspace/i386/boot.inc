@@ -545,51 +545,35 @@ gxSplashShow:
     push    di
     push    ds
     push    es
-; The artwork is eighty by thirty. A card smaller than that is a window on
-; the picture, not a reason to draw nothing, and the window is anchored at
-; the bottom: the logo lives in the last two rows, so the rows trimmed are the
-; ones above, where the picture is only a gradient. The width is not cropped --
-; a narrow card simply cannot see the right margin -- because cutting a row
-; through the artwork is how "TurboWarp" lost its last letter.
+; The artwork is eighty by thirty cells, drawn for a card exactly that size. A
+; card of any other size gets the same picture the artwork is mostly made of --
+; blue paper -- and the two logo lines at their own size, centred, on its last
+; two rows. Blitting the artwork at another stride is a different picture (the
+; curve shears), and cropping it cuts the logo in half.
     xor     ax, ax
     mov     es, ax
+    mov     al, [es:BDA_VIDCOLS]
+    cmp     al, COLS
+    jne     .plain
     mov     al, [es:BDA_VIDROWS]
     cmp     al, ROWS
-    jbe     .rows
-    mov     al, ROWS
-.rows:
-    mov     bl, al                     ; bl = rows the card can show
-    mov     al, ROWS
-    sub     al, bl
-    mov     bh, al                     ; bh = rows of the picture to skip
-    mov     al, bl                     ; words to copy: rows * 80, built from
-    mov     ah, 0                      ; *64 and *16 because the 8086 has no
-    mov     cx, ax                     ; multiply worth using here
-    shl     ax, 6
-    shl     cx, 4
-    add     ax, cx
-    mov     cx, ax
-    mov     al, bh
-    mov     ah, 0
-    mov     bx, ax
-    shl     ax, 6
-    shl     bx, 4
-    add     ax, bx                     ; cells to skip
-    shl     ax, 1                      ; two bytes a cell
-    mov     byte [es:BDA_CURSOR_COL], 0
-    mov     byte [es:BDA_CURSOR_ROW], 0
-    mov     byte [es:BDA_SPLASH], 1
-    push    ax
+    jne     .plain
     mov     ax, cs
     mov     ds, ax
-    pop     ax
     mov     si, splash_cells
-    add     si, ax
     mov     ax, TEXT_SEG
     mov     es, ax
     xor     di, di
+    mov     cx, COLS * ROWS
     cld
     rep     movsw
+    jmp     .flag
+.plain:
+    call    splashPlain
+.flag:
+    mov     byte [es:BDA_CURSOR_COL], 0
+    mov     byte [es:BDA_CURSOR_ROW], 0
+    mov     byte [es:BDA_SPLASH], 1
     pop     es
     pop     ds
     pop     di
@@ -599,6 +583,83 @@ gxSplashShow:
     pop     bx
     pop     ax
     ret
+
+; ---------------------------------------------------------------------------
+; splashPlain -- the card as the picture would have it, without the picture.
+;
+; A space on blue everywhere the card can show, then "TurboWarp" and the
+; firmware line centred on the last two rows. It goes through the console, so
+; it is the same code at any stride and any width: the console is the one thing
+; on this machine that already knows how wide the card is.
+; ---------------------------------------------------------------------------
+splashPlain:
+    push    ax
+    push    bx
+    push    cx
+    push    dx
+    push    di
+    push    si
+    push    es
+    xor     ax, ax
+    mov     es, ax
+    mov     al, [es:BDA_VIDCOLS]
+    mov     [es:SPL_W], al
+    mov     al, [es:BDA_VIDROWS]
+    mov     [es:SPL_H], al
+    ; words = columns * rows / 2
+    xor     ah, ah
+    mov     si, ax                      ; rows
+    mov     al, [es:SPL_W]
+    xor     ah, ah
+    mul     si                          ; ax = cols * rows
+    shr     ax, 1
+    mov     cx, ax
+    mov     ax, TEXT_SEG
+    mov     es, ax
+    mov     ax, 0x1F20                  ; a space on blue
+    mov     di, 0
+    cld
+    rep     stosw
+    pop     es
+    xor     ax, ax
+    mov     es, ax
+    mov     byte [es:CON_ATTR], 0x1F
+    ; "TurboWarp" is nine cells, on the second row from the bottom
+    mov     al, [es:SPL_W]
+    sub     al, 9
+    shr     al, 1
+    mov     dl, al
+    mov     al, [es:SPL_H]
+    sub     al, 2
+    mov     dh, al
+    call    suGoto
+    mov     si, msg_splash_top
+    call    puts
+    ; and the firmware line is nineteen, on the last row
+    mov     al, [es:SPL_W]
+    sub     al, 19
+    shr     al, 1
+    mov     dl, al
+    mov     al, [es:SPL_H]
+    sub     al, 1
+    mov     dh, al
+    call    suGoto
+    mov     si, msg_splash_bottom
+    call    puts
+    mov     byte [es:CON_ATTR], 0x07
+    pop     si
+    pop     di
+    pop     dx
+    pop     cx
+    pop     bx
+    pop     ax
+    ret
+
+SPL_W       equ 0x680               ; cells across, while the splash is drawn
+SPL_H       equ 0x681               ; and down
+
+msg_splash_top:    db "TurboWarp", 0
+msg_splash_bottom: db "JSW 80386 BIOS  A07", 0
 
 ; ---------------------------------------------------------------------------
 ; gxSplashHide -- the splash stays on screen and the cursor goes home.
