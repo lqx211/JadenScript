@@ -770,6 +770,26 @@ class I386BootMenuTests(unittest.TestCase):
         mach.run(limit=mach.steps + 900_000)
         return mach
 
+    def test_the_splash_is_a_window_anchored_at_the_logo(self) -> None:
+        """The power-on picture is 80 x 30. Scratch's stage is 60 x 22, and the
+        logo is in the last two rows of the artwork -- so a narrow card shows
+        the bottom of the picture, and the rows it trims are the ones above."""
+        def post(cols: int, rows: int):
+            mach = rv.Machine()
+            mach.view_cols, mach.view_rows = cols, rows
+            mach.ram[:] = i386_image.build()
+            mach.sreg[rv.SEG_CS] = rv.RESET_CS
+            mach.eip = rv.RESET_IP
+            mach.run(limit=1_600_000)
+            return mach.text().splitlines()
+
+        small = post(60, 22)
+        self.assertIn("TurboWarp", small[20], "the logo sits on the last rows")
+        self.assertIn("JSW 80386 BIOS", small[21])
+        self.assertNotIn("TurboWarp", small[0], "and nowhere else")
+        wide = post(80, 30)
+        self.assertIn("TurboWarp", wide[28])
+
     def test_the_panel_centres_itself_on_the_card(self) -> None:
         """Forty cells of panel on an eighty-cell card sit at column twenty, and
         on Scratch's sixty-cell stage at column ten -- not half off the side."""

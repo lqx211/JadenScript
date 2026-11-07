@@ -538,27 +538,65 @@ SPLASH_STEP_ATTR equ 0x1E           ; yellow on blue, like the notice below it
 ; ---------------------------------------------------------------------------
 gxSplashShow:
     push    ax
+    push    bx
     push    cx
+    push    dx
     push    si
     push    di
     push    ds
     push    es
+; The artwork is eighty by thirty. A card smaller than that is a window on
+; the picture, not a reason to draw nothing, and the window is anchored at
+; the bottom: the logo lives in the last two rows, so the rows trimmed are the
+; ones above, where the picture is only a gradient. The width is not cropped --
+; a narrow card simply cannot see the right margin -- because cutting a row
+; through the artwork is how "TurboWarp" lost its last letter.
+    xor     ax, ax
+    mov     es, ax
+    mov     al, [es:BDA_VIDROWS]
+    cmp     al, ROWS
+    jbe     .rows
+    mov     al, ROWS
+.rows:
+    mov     bl, al                     ; bl = rows the card can show
+    mov     al, ROWS
+    sub     al, bl
+    mov     bh, al                     ; bh = rows of the picture to skip
+    mov     al, bl                     ; words to copy: rows * 80, built from
+    mov     ah, 0                      ; *64 and *16 because the 8086 has no
+    mov     cx, ax                     ; multiply worth using here
+    shl     ax, 6
+    shl     cx, 4
+    add     ax, cx
+    mov     cx, ax
+    mov     al, bh
+    mov     ah, 0
+    mov     bx, ax
+    shl     ax, 6
+    shl     bx, 4
+    add     ax, bx                     ; cells to skip
+    shl     ax, 1                      ; two bytes a cell
     mov     byte [es:BDA_CURSOR_COL], 0
     mov     byte [es:BDA_CURSOR_ROW], 0
     mov     byte [es:BDA_SPLASH], 1
+    push    ax
     mov     ax, cs
     mov     ds, ax
+    pop     ax
     mov     si, splash_cells
+    add     si, ax
     mov     ax, TEXT_SEG
     mov     es, ax
     xor     di, di
-    mov     cx, COLS * ROWS
+    cld
     rep     movsw
     pop     es
     pop     ds
     pop     di
     pop     si
+    pop     dx
     pop     cx
+    pop     bx
     pop     ax
     ret
 

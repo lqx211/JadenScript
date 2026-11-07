@@ -233,10 +233,12 @@ start:
     ; a heap of fragments on Scratch's own 480 x 360 stage.
     mov     byte [es:BDA_CLIP], 1
 
-    ; the splash goes up first, unless the stage is too small to hold it
-    cmp     byte [es:BDA_VIDCOLS], COLS
+    ; the splash goes up first. A card smaller than the artwork is a window on
+    ; it -- the picture is anchored at its bottom, where the logo is -- so the
+    ; only stage that gets no splash is one too small to hold the logo at all.
+    cmp     byte [es:BDA_VIDCOLS], 20
     jb      .nosplash
-    cmp     byte [es:BDA_VIDROWS], ROWS
+    cmp     byte [es:BDA_VIDROWS], 8
     jb      .nosplash
     call    gxSplashShow
 .nosplash:

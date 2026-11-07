@@ -71,6 +71,19 @@ def _free_port() -> int:
         return probe.getsockname()[1]
 
 
+def _closed_port() -> int:
+    """A port nothing is listening on, checked rather than assumed: the number
+    a closed socket leaves behind can be taken by anything before it is used,
+    and a test that races its own fixtures fails for the wrong reason."""
+    for _ in range(8):
+        port = _free_port()
+        with socket.socket() as probe:
+            probe.settimeout(0.5)
+            if probe.connect_ex(("127.0.0.1", port)) != 0:
+                return port
+    raise AssertionError("could not find a closed port")
+
+
 class PacketTests(unittest.TestCase):
     def test_a_checksum_makes_the_sum_come_out_zero(self) -> None:
         header = struct.pack(">BBHHHBBH4s4s", 0x45, 0, 40, 7, 0, 64, 6, 0,
@@ -384,7 +397,7 @@ class TcpNatTests(unittest.TestCase):
         self.assertEqual(self.seen["second"], b"")
 
     def test_a_port_nobody_listens_on_is_a_reset(self) -> None:
-        dead = _free_port()
+        dead = _closed_port()
         out = self.nat.from_guest(_tcp_frame(40023, dead, 77, 0, net.TCP_SYN))
         for _ in range(100):
             if any(net.dissect(f).flags & net.TCP_RST for f in out):
