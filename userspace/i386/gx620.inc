@@ -26,20 +26,24 @@
 ; this BIOS has always used. Nothing here invents state.
 ; ---------------------------------------------------------------------------
 
-GX_SEL   equ 0x560                  ; which visible row is selected
-GX_TOP   equ 0x561                  ; the first visible row shown
-GX_NVIS  equ 0x562                  ; how many rows the open tree has
-GX_HIDE  equ 0x563                  ; while walking: the depth folded away
-GX_NODE  equ 0x564                  ; the node the drawing loops are on
-GX_ROW   equ 0x565                  ; ... and the screen row
-GX_COL   equ 0x566                  ; ... and the column
-GX_LINE  equ 0x567                  ; ... and the line of a detail being printed
+; 0x560..0x56C is the setup buffer's own memory, forty-five bytes of it, so the
+; tree's eight bytes of state start above it: they used to sit at 0x560 and the
+; redraw walked straight through the socket kinds and the first four forms.
+GX_SEL   equ 0x578                  ; which visible row is selected
+GX_TOP   equ 0x579                  ; the first visible row shown
+GX_NVIS  equ 0x57A                  ; how many rows the open tree has
+GX_HIDE  equ 0x57B                  ; while walking: the depth folded away
+GX_NODE  equ 0x57C                  ; the node the drawing loops are on
+GX_ROW   equ 0x57D                  ; ... and the screen row
+GX_COL   equ 0x57E                  ; ... and the column
+GX_LINE  equ 0x57F                  ; ... and the line of a detail being printed
 GX_EXP   equ 0x580                  ; one byte per node: a group is open at 1
 GX_VIS   equ 0x5C0                  ; 64 bytes: the node index of each visible row
-GX_NODES equ 38
+GX_NODES equ 48
 GX_LIVE  equ 0xFFFE                 ; a page that reads the hardware, not the ROM
 GX_LIVEDRV equ 0xFFFD               ; ... the drive's identity, which it answers
 GX_LIVEPCI equ 0xFFFC               ; ... the PCI bus, which it walks
+GX_LIVEMEM equ 0xFFFB               ; ... the memory the panel installed
 
 GX_TOP_I equ 1                      ; the outer frame's first row inside
 GX_BOT_I equ 22                     ; ... and its bottom border
@@ -136,6 +140,12 @@ gxEnter:
     jmp     .out
 .save:
     call    suSave
+    ; a save that changed the memory only takes effect at a reboot, and a board
+    ; that quietly kept the old memory would be lying about its own setup
+    call    suMemDiffers
+    test    al, al
+    jz      .out
+    call    suReboot
     jmp     .out
 .stay:
     call    gxDraw
@@ -833,6 +843,159 @@ gxPci:
 ; 0x5A6 and its clock on 0x5A7 -- which is the same door a real board's hardware
 ; monitor chip would be behind.
 ; ---------------------------------------------------------------------------
+; ---------------------------------------------------------------------------
+; gxMemory -- the memory page, read out of the board rather than the ROM.
+;
+; Three numbers matter and all three come from the CMOS the setup wrote: how
+; much base memory there is, how much the sockets add up to, and which storage
+; that memory is held in. A page of fixed text that says "640 KB" on a board
+; with sockets in it is worse than no page at all.
+; ---------------------------------------------------------------------------
+gxMemory:
+    push    ax
+    push    bx
+    push    cx
+    push    dx
+    push    si
+    mov     byte [es:CON_ATTR], SU_PAPER
+    mov     si, msg_gx_mem
+    call    gxStrLen
+    mov     dl, GX_RR
+    sub     dl, al
+    dec     dl
+    mov     dh, GX_FIRST
+    call    suGoto
+    mov     si, msg_gx_mem
+    mov     bl, SU_HEAD
+    call    suPrint
+    mov     dh, GX_FIRST + 1
+    mov     dl, GX_TX
+    mov     cx, GX_TW
+    mov     al, G_HBAR
+    mov     bl, SU_SEL
+    call    suBar
+    ; ---- base memory
+    mov     dl, GX_TX
+    mov     dh, GX_FIRST + 2
+    call    suGoto
+    mov     si, msg_me_base
+    mov     bl, SU_PAPER
+    call    suPrint
+    mov     ax, [es:BDA_MEMK]
+    call    putn
+    mov     si, msg_me_kb
+    call    suPrint
+    ; ---- extended, out of the battery
+    mov     dl, GX_TX
+    mov     dh, GX_FIRST + 3
+    call    suGoto
+    mov     si, msg_me_ext
+    mov     bl, SU_PAPER
+    call    suPrint
+    mov     al, 0x17
+    call    cmos_read
+    mov     bl, al
+    mov     al, 0x18
+    call    cmos_read
+    mov     bh, al
+    mov     ax, bx
+    or      ax, ax
+    jz      .none
+    call    putn
+    mov     si, msg_me_kb
+    call    suPrint
+    jmp     .mode
+.none:
+    mov     si, msg_me_none
+    mov     bl, SU_PAPER
+    call    suPrint
+.mode:
+    ; ---- and where it is held
+    mov     dl, GX_TX
+    mov     dh, GX_FIRST + 4
+    call    suGoto
+    mov     si, msg_me_mode
+    mov     bl, SU_PAPER
+    call    suPrint
+    mov     al, 0x3D
+    call    cmos_read
+    cmp     al, 1
+    jne     .internal
+    mov     si, msg_me_ext2
+    jmp     .printmode
+.internal:
+    mov     si, msg_me_int2
+.printmode:
+    mov     bl, SU_PAPER
+    call    suPrint
+    ; ---- the sockets, one a line
+    mov     byte [es:GX_ROW], GX_FIRST + 6
+    xor     cx, cx                      ; the socket being printed
+.slot:
+    cmp     cx, 8
+    jae     .out
+    mov     dl, GX_TX
+    mov     dh, [es:GX_ROW]
+    call    suGoto
+    mov     si, msg_me_slot
+    mov     bl, SU_PAPER
+    call    suPrint
+    mov     ax, cx
+    add     al, '0'
+    call    putc
+    mov     si, msg_me_arrow
+    call    suPrint
+    push    cx
+    mov     al, cl
+    add     al, 0x40                    ; this socket's size, from the battery
+    call    cmos_read
+    pop     cx
+    cmp     al, 0
+    jne     .fitted
+    mov     si, msg_me_empty
+    mov     bl, SU_PAPER
+    call    suPrint
+    jmp     .next
+.fitted:
+    ; "128 MB DDR4 SODIMM": the size is a table of powers of two
+    push    cx
+    xor     ah, ah
+    mov     si, ax
+    add     si, si
+    mov     si, [cs:su_ramsize_names + si]
+    mov     bl, SU_PAPER
+    call    suPrint
+    pop     cx
+    mov     al, cl
+    add     al, 0x48
+    call    cmos_read
+    xor     ah, ah
+    add     ax, ax
+    mov     si, ax
+    mov     si, [cs:su_kdnames + si]
+    mov     bl, SU_PAPER
+    call    suPrint
+    mov     al, cl
+    add     al, 0x50
+    call    cmos_read
+    xor     ah, ah
+    add     ax, ax
+    mov     si, ax
+    mov     si, [cs:su_formnames + si]
+    mov     bl, SU_PAPER
+    call    suPrint
+.next:
+    inc     byte [es:GX_ROW]
+    inc     cx
+    jmp     .slot
+.out:
+    pop     si
+    pop     dx
+    pop     cx
+    pop     bx
+    pop     ax
+    ret
+
 gxMonitor:
     push    ax
     push    bx
@@ -1295,7 +1458,12 @@ gxDrawRight:
     je      .drive
     cmp     ax, GX_LIVEPCI
     je      .pci
+    cmp     ax, GX_LIVEMEM
+    je      .memory
     jmp     .static
+.memory:
+    call    gxMemory
+    jmp     .out
 .monitor:
     call    gxMonitor
     jmp     .out
@@ -1448,6 +1616,17 @@ gx_nodes:
     NODE 2, KIND_EDIT | 17,         msg_gx_perfe,    gx_d_perfe
     NODE 1, KIND_GROUP,             msg_gx_clockg,   gx_d_clockg
     NODE 2, KIND_EDIT | 18,         msg_gx_faketime, gx_d_faketime
+    NODE 1, KIND_GROUP,             msg_gx_memg,     gx_d_memg
+    NODE 2, KIND_EDIT | 19,         msg_gx_slots,    gx_d_slots
+    NODE 2, KIND_EDIT | 20,         msg_gx_memmode,  gx_d_memmode
+    NODE 2, KIND_EDIT | 21,         msg_gx_slot0,    gx_d_slot
+    NODE 2, KIND_EDIT | 22,         msg_gx_slot1,    gx_d_slot
+    NODE 2, KIND_EDIT | 23,         msg_gx_slot2,    gx_d_slot
+    NODE 2, KIND_EDIT | 24,         msg_gx_slot3,    gx_d_slot
+    NODE 2, KIND_EDIT | 25,         msg_gx_slot4,    gx_d_slot
+    NODE 2, KIND_EDIT | 26,         msg_gx_slot5,    gx_d_slot
+    NODE 2, KIND_EDIT | 27,         msg_gx_slot6,    gx_d_slot
+    NODE 2, KIND_EDIT | 28,         msg_gx_slot7,    gx_d_slot
     NODE 0, 0,                      msg_gx_video,    gx_d_video
     NODE 0, 0,      msg_gx_pci,      gx_d_pci
     NODE 0, 0,                      msg_gx_perf,     gx_d_perf
@@ -1462,7 +1641,7 @@ gx_nodes:
 gx_d_system:    dw msg_gx_system, l_sys1, 0
 gx_d_sysinfo:   dw msg_gx_sysinfo, l_sys1, l_blank, l_si2, l_si3, l_si4, l_si5, l_blank, l_fixed, 0
 gx_d_cpu:       dw msg_gx_cpu, l_cpu1, l_cpu2, l_cpu3, l_cpu4, l_cpu5, l_blank, l_fixed, 0
-gx_d_mem:       dw msg_gx_mem, l_mem1, l_mem2, l_mem3, l_mem4, l_blank, l_fixed, 0
+gx_d_mem:       dw msg_gx_mem, GX_LIVEMEM, 0
 gx_d_datetime:  dw msg_gx_datetime, l_dt1, l_dt2, l_blank, l_dt3, l_dt4, 0
 gx_d_month:     dw msg_gx_month, l_mo1, l_blank, l_edit, 0
 gx_d_day:       dw msg_gx_day, l_dy1, l_blank, l_edit, 0
@@ -1493,6 +1672,10 @@ gx_d_clockg:    dw msg_gx_clockg, l_ck1, l_ck2, l_blank, l_ck3, 0
 gx_d_faketime:  dw msg_gx_faketime, l_ft1, l_ft2, l_ft3, l_blank, l_edit, 0
 gx_d_video:     dw msg_gx_video, l_vd1, l_vd2, l_vd3, l_blank, l_fixed, 0
 gx_d_perf:      dw msg_gx_perf, l_pf1, l_blank, l_fixed, 0
+gx_d_memg:      dw msg_gx_memg, l_mg1, l_mg2, l_mg3, l_blank, l_mg4, 0
+gx_d_slots:     dw msg_gx_slots, l_ms1, l_ms2, l_blank, l_mg5, 0
+gx_d_memmode:   dw msg_gx_memmode, l_mm1, l_mm2, l_blank, l_mg5, 0
+gx_d_slot:      dw msg_gx_slot, l_msl1, l_msl2, l_blank, l_mg5, 0
 gx_d_security:  dw msg_gx_security, l_se1, l_se2, l_blank, l_fixed, 0
 gx_d_power:     dw msg_gx_power, l_pw1, l_blank, l_fixed, 0
 gx_d_maint:     dw msg_gx_maint, l_mt1, l_mt2, l_blank, l_fixed, 0
@@ -1561,6 +1744,28 @@ msg_gx_drive1:     db "Drive 1: SATA-1", 0
 msg_gx_onboard:    db "Onboard Devices", 0
 msg_gx_serial:     db "Serial Port", 0
 msg_gx_audio:      db "Audio Controller", 0
+msg_me_base:       db "Base memory        = ", 0
+msg_me_ext:        db "Extended memory    = ", 0
+msg_me_kb:         db " KB", 13, 10, 0
+msg_me_none:       db "none fitted", 0
+msg_me_mode:       db "Storage            = ", 0
+msg_me_int2:       db "internal (the board's own list)", 0
+msg_me_ext2:       db "extended (the memory module)", 0
+msg_me_slot:       db "Slot ", 0
+msg_me_arrow:      db "  ", 0
+msg_me_empty:      db "empty", 0
+msg_gx_memg:       db "Memory", 0
+msg_gx_slots:      db "Available Slots", 0
+msg_gx_memmode:    db "Mode", 0
+msg_gx_slot0:      db "Slot 0", 0
+msg_gx_slot1:      db "Slot 1", 0
+msg_gx_slot2:      db "Slot 2", 0
+msg_gx_slot3:      db "Slot 3", 0
+msg_gx_slot4:      db "Slot 4", 0
+msg_gx_slot5:      db "Slot 5", 0
+msg_gx_slot6:      db "Slot 6", 0
+msg_gx_slot7:      db "Slot 7", 0
+msg_gx_slot:       db "Memory Slot", 0
 msg_gx_video:      db "Video", 0
 msg_gx_perf:       db "Performance", 0
 msg_gx_security:   db "Security", 0
@@ -1652,6 +1857,17 @@ l_ob1:    db "The devices soldered to the board.", 0
 l_sr1:    db "Serial Port        = COM1, 0x3F8, IRQ4", 0
 l_sr2:    db "The port a terminal or a debug cable would use.", 0
 l_au1:    db "Audio Controller   = not fitted", 0
+l_mg1:    db "The sockets this board has, and what", 0
+l_mg2:    db "is in each of them. A change here is", 0
+l_mg3:    db "a change to the machine, so saving it", 0
+l_mg4:    db "restarts the board.", 0
+l_ms1:    db "How many sockets are fitted, 1 to 8.", 0
+l_ms2:    db "Nothing is counted past this number.", 0
+l_mm1:    db "Internal keeps memory in the board's own", 0
+l_mm2:    db "list; Extended uses the memory module.", 0
+l_msl1:   db "One module. Size is what is fitted; the", 0
+l_msl2:   db "generation and form are what it says it is.", 0
+l_mg5:    db "Saving this restarts the board.", 0
 l_vd1:    db "Video Controller   = JSW VGA", 0
 l_vd2:    db "Video Memory       = 4 KB of text plane", 0
 l_vd3:    db "Mode               = 03h text, 13h, 12h", 0

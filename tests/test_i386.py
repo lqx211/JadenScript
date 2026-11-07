@@ -369,11 +369,11 @@ class I386SetupTests(unittest.TestCase):
 
     def test_the_light_starts_on_the_first_row(self) -> None:
         mach = self._setup([self.F2])
-        self.assertEqual(mach.ram[0x560], 0, "GX_SEL")
+        self.assertEqual(mach.ram[0x578], 0, "GX_SEL")
 
     def test_the_down_arrow_walks_the_tree(self) -> None:
         mach = self._setup([self.F2] + self.TO_MONTH)
-        self.assertEqual(mach.ram[0x560], 5)
+        self.assertEqual(mach.ram[0x578], 5)
         self.assertIn("The month, as a number from 1 to 12.", mach.text())
 
     def test_the_green_bar_is_on_the_selected_row_only(self) -> None:
@@ -423,7 +423,7 @@ class I386SetupTests(unittest.TestCase):
         keys = [self.F2] + self.TO_MONTH + [self.ENTER]
         mach = self._setup(keys)
         self.assertEqual(mach.ram[0x56E], 0, "SU_ITEM: Month is setting 0")
-        self.assertEqual(mach.ram[0x560], 5, "and the light is on its node")
+        self.assertEqual(mach.ram[0x578], 5, "and the light is on its node")
 
     def test_every_cell_of_the_setup_screen_is_painted(self) -> None:
         """No holes: every cell is paper, header, frame or the green light."""
@@ -479,13 +479,13 @@ class I386SetupTests(unittest.TestCase):
         """Off is a CMOS byte, and the chipset hears about it at POST -- which
         is why the row exists rather than a hidden default."""
         mach = self._setup([self.F2] + self.TO_EMU_SWITCH)
-        self.assertEqual(mach.ram[0x560], 18, "the light is on the switch")
+        self.assertEqual(mach.ram[0x578], 18, "the light is on the switch")
         self.assertEqual(mach.cmos[0x34], 1, "and the battery has it On")
 
     def test_the_cpu_frequency_is_a_number_the_board_can_keep(self) -> None:
         start = self._setup([self.F2] + self.TO_FREQ)
         self.assertEqual(start.cmos[0x36], 2, "33 MHz, out of the battery")
-        self.assertEqual(start.ram[0x560], 20, "and the light is on the row")
+        self.assertEqual(start.ram[0x578], 20, "and the light is on the row")
         self.assertEqual(start.cpu_base, 33, "which the chipset is running at")
 
     def test_a_setting_wraps_at_both_ends(self) -> None:
@@ -568,6 +568,92 @@ class I386SetupTests(unittest.TestCase):
         mach = self._setup(keys)
         self.assertEqual(mach.cmos[0x39], 1, "two per core")
         self.assertEqual(mach.threads, 2)
+
+    #: System through Drives, Onboard Devices, HW Emulation and its five
+    #: children, then the CPU and Clock groups: Memory is the twenty-sixth row
+    TO_MEMORY = [0x50] * 25
+    TO_SLOT0 = TO_MEMORY + [0x4D, 0x50, 0x50, 0x50]   # open it, three rows in
+
+    def test_the_memory_group_opens_onto_the_sockets(self) -> None:
+        keys = [self.F2] + self.TO_MEMORY + [self.RIGHT, self.DOWN, self.DOWN,
+                                             self.DOWN]
+        screen = self._setup(keys).text()
+        self.assertIn("Available Slots", screen)
+        self.assertIn("Memory Slot", screen, "three rows in, a socket's page")
+
+    def test_the_panel_shows_the_modules_the_battery_has_in_it(self) -> None:
+        """The buffer is the tree's copy: four sockets, 128 MB of DDR4 DIMM in
+        the first one, which is the board this machine has always booted."""
+        mach = self._setup([self.F2] + self.TO_MEMORY)
+        self.assertEqual(mach.read(0x540 + 4, 1), 4, "SU_M_COUNT")
+        self.assertEqual(mach.read(0x540 + 5, 1), 1, "SU_M_MODE: the module")
+        self.assertEqual(mach.read(0x540 + 20, 1), 8, "SU_M_SIZE+0: index 8")
+        self.assertEqual(mach.read(0x540 + 28, 1), 2, "SU_M_KIND+0: DDR4")
+        self.assertEqual(mach.read(0x540 + 44, 1), 128, "SU_M_TOTAL, in MB")
+
+    def test_the_tree_s_own_state_stays_out_of_the_panel_s_buffer(self) -> None:
+        """The tree's eight bytes of cursor state used to sit at 0x560, which is
+        inside the forty-five byte buffer: every redraw wrote the node it was
+        drawing through the socket kinds and the forms."""
+        mach = self._setup([self.F2] + self.TO_MEMORY + [self.RIGHT]
+                           + [self.DOWN] * 10)
+        self.assertEqual(mach.read(0x540 + 28, 8), 2,
+                         "SU_M_KIND is still the battery's: DDR4 in socket 0")
+        self.assertEqual(mach.read(0x540 + 36, 8), 0,
+                         "SU_M_FORM is still the battery's: DIMM in socket 0")
+
+    def test_a_slot_edit_is_saved_with_the_total_it_adds_up_to(self) -> None:
+        """Left on socket 0 takes 128 MB off the board and puts 64 on it, and
+        the total follows -- 0x17 is what E820 and int 15h AH=88 read."""
+        keys = ([self.F2] + self.TO_SLOT0
+                + [self.ENTER, self.LEFT, self.ENTER]
+                + [self.ESC, self.ENTER])
+        mach = self._setup(keys)
+        self.assertEqual(mach.cmos[0x40], 7, "socket 0: index 7 = 64 MB")
+        self.assertEqual(mach.cmos[0x17], 64, "and the total came with it")
+        self.assertEqual(mach.cmos[0x58], 0xA5, "the map is recorded")
+        self.assertEqual(mach.ram[0x4F5], 1, "and the board was asked to restart")
+
+    def test_the_editor_names_the_row_it_is_editing(self) -> None:
+        mach = self._setup([self.F2] + self.TO_SLOT0 + [self.ENTER])
+        screen = mach.text()
+        self.assertIn("Slot 0", screen)
+        self.assertIn("128 MB, DDR4 DIMM", screen,
+                      "the whole value fits the field between the arrows")
+
+    def test_a_blank_battery_comes_up_as_the_board_this_machine_is(self):
+        mach = rv.Machine()
+        mach.ram[:] = i386_image.build()
+        mach.cmos[0x3C] = 0                 # no sockets recorded
+        mach.cmos[0x40] = 0
+        mach.cmos[0x58] = 0                 # ... and no setup has ever saved
+        mach.keys.extend([self.F2] + self.TO_MEMORY)
+        mach.sreg[rv.SEG_CS] = rv.RESET_CS
+        mach.eip = rv.RESET_IP
+        while mach.keys:
+            mach.run(limit=mach.steps + 250_000)
+        self.assertEqual(mach.read(0x540 + 4, 1), 4, "four sockets")
+        self.assertEqual(mach.read(0x540 + 20, 1), 8, "128 MB in the first")
+        self.assertEqual(mach.read(0x540 + 44, 1), 128, "and that is the total")
+
+    def test_a_board_emptied_on_purpose_stays_empty(self) -> None:
+        """The blank-battery default must not come back: an operator who took
+        every module out gets a board with no extended memory, not one that
+        silently fills socket 0 again on the next boot."""
+        mach = rv.Machine()
+        mach.ram[:] = i386_image.build()
+        for slot in range(8):
+            mach.cmos[0x40 + slot] = 0      # every socket empty
+        mach.cmos[0x17] = 0
+        mach.cmos[0x58] = 0xA5              # but the setup did record it
+        mach.keys.extend([self.F2] + self.TO_MEMORY)
+        mach.sreg[rv.SEG_CS] = rv.RESET_CS
+        mach.eip = rv.RESET_IP
+        while mach.keys:
+            mach.run(limit=mach.steps + 250_000)
+        self.assertEqual(mach.read(0x540 + 4, 1), 4, "four sockets fitted")
+        self.assertEqual(mach.read(0x540 + 20, 1), 0, "and not one module")
+        self.assertEqual(mach.read(0x540 + 44, 1), 0, "so no extended memory")
 
     def test_the_dialog_is_a_panel_with_a_shadow(self) -> None:
         mach = self._setup([self.F2] + self.TO_MONTH + [self.ENTER])
@@ -1014,7 +1100,9 @@ class I386PciTests(unittest.TestCase):
         mach = self._machine()
         mach.sreg[rv.SEG_CS] = rv.RESET_CS
         mach.eip = rv.RESET_IP
-        mach.keys.extend([0x3C] + [0x50] * 26)      # F2, down to PCI Devices
+        # F2, then down past the ten memory rows that sit between Clock and
+        # Video: the tree grew, so the count has to say so
+        mach.keys.extend([0x3C] + [0x50] * 27)
         while mach.keys:
             mach.run(limit=mach.steps + 250_000)
         mach.run(limit=mach.steps + 900_000)
@@ -2775,7 +2863,7 @@ class I386FirmwareApiTests(unittest.TestCase):
 
     BIN = ROOT / "userspace/i386/apiprobe.bin"
 
-    def boot(self, extended_kb: int = 0, disk: bytes | None = None) -> rv.Machine:
+    def boot(self, extended_mb: int = 0, disk: bytes | None = None) -> rv.Machine:
         # the firmware's own sector 1 is where `apiprobe` reads from, so its
         # sector 0 is put in place: int 19h reads sector 0 through int 13h
         image = bytearray(i386_image.build(disk))
@@ -2784,8 +2872,11 @@ class I386FirmwareApiTests(unittest.TestCase):
             image[i386_image.DISK_AT + 512:i386_image.DISK_AT + 1024] = disk[512:1024]
         mach = rv.Machine()
         mach.ram[:] = bytes(image)
-        mach.cmos[0x17] = extended_kb & 0xFF        # extended memory, KiB
-        mach.cmos[0x18] = (extended_kb >> 8) & 0xFF
+        # the battery keeps extended memory in megabytes: a word of kilobytes
+        # cannot say more than 64 MB, and this board has sockets of 128
+        mach.cmos[0x17] = extended_mb & 0xFF
+        mach.cmos[0x18] = (extended_mb >> 8) & 0xFF
+        mach.cmos[0x3C] = 1                         # one socket, so it is real
         mach.keys.append(0x39)                      # skip the countdown
         mach.sreg[rv.SEG_CS] = rv.RESET_CS
         mach.eip = rv.RESET_IP
@@ -2809,7 +2900,7 @@ class I386FirmwareApiTests(unittest.TestCase):
     def test_e820_reports_extended_memory_when_there_is_some(self) -> None:
         """A board with 16 MiB of extended memory says so, in bytes, from
         0x10_0000 -- and the map ends after it."""
-        mach = self.boot(extended_kb=0x4000)
+        mach = self.boot(extended_mb=16)
         self.assertEqual(self.entries(mach)[-1], (0x0010_0000, 0x0100_0000, 1))
 
     def test_e820_says_when_it_has_no_more(self) -> None:
@@ -2950,6 +3041,8 @@ class I386VideoTests(unittest.TestCase):
         filled = sum(1 for byte in mach.ram[0xA0000:0xB0000] if byte == 0x41)
         self.assertGreaterEqual(filled, 0x1000,
                                 "rep stosb wrote the sector's 64 KiB, not one byte")
+        self.assertEqual(bytes(mach.ram[0x3000:0x3002]), b"\xa5Z",
+                         "and the sector's own code ran to the end")
 
     def test_the_mode_is_readable_through_the_firmware(self) -> None:
         """AH=0Fh is the question every VESA-era program asks before it draws.
@@ -2959,8 +3052,10 @@ class I386VideoTests(unittest.TestCase):
         reports the wrong one is a card a program will draw on wrongly.
         """
         mach = self.boot(self.BIN.read_bytes())
-        self.assertEqual(mach.ram[0x449], 0x13,
-                         "the data area keeps the mode int 10h set")
+        self.assertEqual(mach.ram[0x449], 0x03, "the probe set text back")
+        self.assertEqual(mach.ram[0x3002], 0x13,
+                         "AH=0Fh answered with the mode it had just set")
+        self.assertEqual(mach.ram[0x3003], 80, "and with the columns")
 
     def test_the_card_reads_its_mode_from_the_data_area(self) -> None:
         """One byte is the whole handshake: the firmware writes it, the machine

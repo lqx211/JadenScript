@@ -59,7 +59,10 @@ SU_HEAD  equ 0x1E                   ; blue paper, yellow ink
 SU_SEL   equ 0x70                   ; light grey paper, black ink
 SU_GREEN equ 0x20                   ; green paper, black ink: the Dell light
 SU_SHADOW equ 0x00                  ; black on black: the drop shadow
-SU_INK   equ 0x4F5                  ; the ink of the row being drawn
+SU_INK   equ 0x575                  ; the ink of the row being drawn. It cannot
+                                    ; share 0x4F5 with BDA_RESET: every redraw
+                                    ; would clear the board's reboot request.
+SU_INBOX equ 0x576                  ; 1 while the modal editor owns the screen
 SU_DLG_L equ 0x4F6                  ; a dialog's left column, while it draws
 SU_DLG_T equ 0x4F7                  ; its top row
 SU_DLG_W equ 0x4F8                  ; its width
@@ -118,14 +121,15 @@ suWindow:
     sub     al, 3
     mov     byte [es:CON_T], al
     mov     byte [es:CON_B], al
-    mov     byte [es:CON_W], COLS
+    mov     dh, al                  ; under the artwork, above its labels
+    mov     al, [es:BDA_VIDCOLS]    ; the card's width, not the plane's: a narrow
+    mov     byte [es:CON_W], al     ; card keeps the notice on one row
     mov     byte [es:CON_ATTR], 0x07   ; a plain black line, if there is no splash
     cmp     byte [es:BDA_SPLASH], 0
     je      .attr
     mov     byte [es:CON_ATTR], 0x1E   ; yellow on the splash's blue
 .attr:
-    mov     dh, al                  ; under the artwork, above its labels
-    mov     dl, 3
+    mov     dl, 1                   ; hard against the left edge of the card
     call    suGoto
     mov     si, msg_press_del
     call    puts
@@ -377,14 +381,15 @@ suMemLoad:
     mov     al, 8
 .count_max:
     mov     [es:SU_BUF + SU_M_COUNT], al
-    mov     al, 0x34                ; the emulation master: 0/1 is "on"
+    mov     al, 0x3D                ; internal memory or the module
     call    cmos_read
     cmp     al, 1
     jbe     .mode_ok
-    mov     al, 1
+    mov     al, 1                   ; a blank battery takes the module
 .mode_ok:
     mov     [es:SU_BUF + SU_M_MODE], al
-    xor     bl, bl
+    xor     bx, bx
+    xor     bh, bh                  ; bl counts the sockets, bh must not be in di
 .slot:
     mov     di, bx
     mov     al, bl
@@ -414,12 +419,13 @@ suMemLoad:
     inc     bl
     cmp     bl, 8
     jb      .slot
-    ; a board with nothing recorded gets the one this build has always had
-    mov     al, [es:SU_BUF + SU_M_TOTAL]
-    or      al, al
-    jnz     .total_ok
-    cmp     byte [es:SU_BUF + SU_M_COUNT], 0
-    jne     .total_ok
+    ; a board with nothing recorded gets the one this build has always had.
+    ; The test is the mark suSave leaves at 0x58, not the total: a board whose
+    ; sockets were all emptied on purpose has a total of zero too.
+    mov     al, 0x58
+    call    cmos_read
+    cmp     al, 0xA5
+    je      .total_ok
     mov     byte [es:SU_BUF + SU_M_COUNT], 4
     mov     byte [es:SU_BUF + SU_M_MODE], 1
     mov     byte [es:SU_BUF + SU_M_SIZE], 8    ; 128 MiB in socket 0
@@ -515,8 +521,7 @@ suReboot:
     push    es
     xor     ax, ax
     mov     es, ax
-    mov     byte [es:0x4F2], 1      ; the board is restarting: the boot goes ahead
-    mov     byte [es:0x4F4], 1      ; and the emulator may do it now
+    mov     byte [es:BDA_RESET], 1  ; the chipset watches this byte and resets
     pop     es
     pop     ax
     ret
@@ -624,7 +629,12 @@ suSave:
     mov     cl, al
     mov     al, 0x3C
     call    cmos_write
+    mov     al, [es:SU_BUF + SU_M_MODE]
+    mov     cl, al
+    mov     al, 0x3D                ; internal or extended, for the next boot
+    call    cmos_write
     mov     bl, 0
+    xor     bh, bh                  ; bl counts the sockets, bh must not be in di
 .memslot:
     mov     al, bl
     add     al, 0x40                ; slot sizes start at 0x40
@@ -660,8 +670,9 @@ suSave:
     mov     cl, al
     mov     al, 0x18
     call    cmos_write
-    ; a checksum a real board keeps, so the battery can be declared good
-    mov     al, 0x31
+    ; the mark that says these sockets are the ones the operator chose, so a
+    ; blank battery can still be told from a board that was emptied on purpose
+    mov     al, 0x58
     mov     cl, 0xA5
     call    cmos_write
     ret
@@ -762,11 +773,17 @@ suAdjust:
     push    ax
     push    bx
     push    cx
+    push    si
     mov     al, [es:SU_ITEM]
-    mov     ah, al                  ; ah = the row, kept while we work
+    mov     ah, al                  ; ah = the setting, kept while we work
     xor     bx, bx
     mov     bl, al
-    mov     al, [es:SU_BUF + bx]    ; the value
+    mov     si, bx
+    add     si, si                  ; the table is words, the setting is a byte
+    mov     si, [si + su_bufof]     ; and si = the row it lives in
+    mov     al, [es:SU_BUF + si]    ; the value
+    cmp     bl, 19
+    jae     .memory
     cmp     bl, 0
     jne     .not_month
     call    suStep12                ; 1..12
@@ -822,14 +839,35 @@ suAdjust:
 .wrap:
     call    suStepN
 .store:
-    mov     bl, ah
-    mov     [es:SU_BUF + bx], al
+    mov     [es:SU_BUF + si], al
+    cmp     bl, 19
+    jb      .drawn
+    call    suMemTotal              ; the sockets just changed, so the total has
+.drawn:                             ; to change with them, in the buffer too
+    cmp     byte [es:SU_INBOX], 0
+    jne     .out                    ; the dialog repaints a field, not a page row
     mov     al, ah
     call    suDrawRow
+.out:
+    pop     si
     pop     cx
     pop     bx
     pop     ax
     ret
+
+; the memory panel's own three kinds of value: how many sockets, which storage,
+; and a socket's size -- nine entries, none of them a number the guest sees
+.memory:
+    mov     cl, 8                   ; the socket count, 1 to 8, less one
+    cmp     bl, 19
+    je      .mwrap
+    mov     cl, 2                   ; internal or extended
+    cmp     bl, 20
+    je      .mwrap
+    mov     cl, 9                   ; none, 1, 2, 4 ... 128 MB
+.mwrap:
+    call    suStepN
+    jmp     .store
 
 ; al/dx = the value and the step, cl = how many entries. Wraps at both ends.
 ;
@@ -1071,6 +1109,16 @@ suDialogGo:
     push    cx
     push    dx
     push    si
+    ; A dialog owns the whole screen while it is up. The tree leaves the console
+    ; window aimed at one of its panes -- twenty-eight columns wide, ending at
+    ; row 22 -- and printing a wider line through that window wraps and scrolls
+    ; the pane: that is what tore the title bar off this box.
+    mov     byte [es:CON_T], 0
+    mov     al, [es:BDA_VIDROWS]
+    dec     al
+    mov     byte [es:CON_B], al
+    mov     byte [es:CON_W], COLS
+    mov     byte [es:CON_ATTR], SU_PAPER
     push    bx
     mov     [es:SU_DLG_L], dl
     mov     [es:SU_DLG_T], dh
@@ -1242,10 +1290,13 @@ suEdit:
     mov     al, [es:SU_ITEM]
     xor     ah, ah
     mov     di, ax
+    add     di, di                  ; the table is words, the setting is a byte
+    mov     di, [di + su_bufof]     ; the row the setting lives in
     mov     al, [es:SU_BUF + di]
     mov     [es:SU_OLD], al
+    mov     byte [es:SU_INBOX], 1
+    call    suEditBox               ; the panel, once: a key changes a number
 .key:
-    call    suEditBox
     call    keyScan
     cmp     al, 0x4B                ; left
     je      .left
@@ -1261,16 +1312,67 @@ suEdit:
 .left:
     mov     dl, -1
     call    suAdjust
+    call    suEditValue
     jmp     .key
 .right:
     mov     dl, 1
     call    suAdjust
+    call    suEditValue
     jmp     .key
 .revert:
     mov     al, [es:SU_OLD]
     mov     [es:SU_BUF + di], al
+    call    suEditValue
 .done:
+    mov     byte [es:SU_INBOX], 0   ; the screen is the caller's again
     pop     di
+    pop     dx
+    pop     cx
+    pop     bx
+    pop     ax
+    ret
+
+; suMemSetting -- a setting number to the memory page's own row number.
+suMemSetting:
+    cmp     al, 19
+    jne     .notcount
+    mov     al, SU_M_COUNT
+    ret
+.notcount:
+    cmp     al, 20
+    jne     .notmode
+    mov     al, SU_M_MODE
+    ret
+.notmode:
+    sub     al, 21
+    add     al, SU_M_S0
+    ret
+
+; suEditValue -- just the number inside the dialog, redrawn on its own.
+;
+; The box is painted once when the dialog opens; a key only changes the value,
+; so only the value is repainted. Repainting the whole panel per keypress is
+; what made the title bar tear: the card paints cells it has seen change, and
+; the firmware was rewriting them faster than the card could follow.
+suEditValue:
+    push    ax
+    push    bx
+    push    cx
+    push    dx
+    push    si
+    mov     dl, 33                  ; the field, cleared so a shorter value
+    mov     dh, 13                  ; cannot leave the last one's tail behind
+    mov     cx, 20                  ; wide enough for "128 MB, DDR4 SODIMM"
+    mov     al, ' '
+    mov     bl, SU_SEL
+    call    suBar
+    mov     dl, 34
+    mov     dh, 13
+    call    suGoto
+    mov     al, [es:SU_ITEM]
+    mov     bl, SU_SEL
+    call    suValue
+    pop     si
     pop     dx
     pop     cx
     pop     bx
@@ -1292,8 +1394,8 @@ suEditBox:
     mov     si, [si + su_labels]
     mov     dl, 24
     mov     dh, 10
-    mov     cx, 33
-    call    suDialog
+    mov     cx, 37                  ; wide enough for an arrow either side of
+    call    suDialog                ; twenty columns of value
     ; the value, an arrow either side of it
     mov     dl, 30
     mov     dh, 13
@@ -1301,13 +1403,8 @@ suEditBox:
     mov     si, msg_su_lt
     mov     bl, SU_SEL
     call    suPrint
-    mov     dl, 34
-    mov     dh, 13
-    call    suGoto
-    mov     al, [es:SU_ITEM]
-    mov     bl, SU_SEL
-    call    suValue
-    mov     dl, 49
+    call    suEditValue
+    mov     dl, 54
     mov     dh, 13
     call    suGoto
     mov     si, msg_su_gt
@@ -2613,9 +2710,18 @@ suValue:
     mov     bl, al
     mov     si, bx                  ; si = the row, for the buffer and the tables
     mov     al, [es:SU_BUF + si]    ; the value, 0..99
-    cmp     ah, 18
-    jbe     .known
-    jmp     .done                   ; no such row
+    cmp     ah, 19
+    jb      .known
+    cmp     ah, 28
+    ja      .done                   ; no such setting
+    ; the memory panel's rows are drawn by the page that owns them, so the
+    ; dialog borrows that painter rather than growing a second copy of it
+    mov     al, ah
+    call    suMemSetting            ; setting -> the page's own row number
+    mov     bl, [es:SU_INK]
+    call    suMemValue
+    jmp     .done
+.known:
 .known:
     cmp     ah, 15
     jae     .hardware               ; the emulation's own four knobs
@@ -2896,9 +3002,9 @@ su_ramsize_names:
     dw su_ms_0, su_ms_1, su_ms_2, su_ms_3, su_ms_4
     dw su_ms_5, su_ms_6, su_ms_7, su_ms_8
 
-su_kd_0: db "DDR2", 0
-su_kd_1: db "DDR3", 0
-su_kd_2: db "DDR4", 0
+su_kd_0: db "DDR2 ", 0             ; the trailing space joins it to the form
+su_kd_1: db "DDR3 ", 0
+su_kd_2: db "DDR4 ", 0
 su_kdnames:
     dw su_kd_0, su_kd_1, su_kd_2
 
@@ -2967,6 +3073,9 @@ su_labels:
     dw su_row_sec, su_row_flop, su_row_disk, su_row_boot, su_row_mem
     dw su_row_cpu, su_row_emu, su_row_batt, su_row_freq, su_row_repeat
     dw su_row_cores, su_row_threads, su_row_perf, su_row_time
+    dw su_row_memcount, su_row_memmode
+    dw su_row_slot0, su_row_slot1, su_row_slot2, su_row_slot3
+    dw su_row_slot4, su_row_slot5, su_row_slot6, su_row_slot7
 
 ; the detail panel: two short lines per item, the way a setup utility explains
 ; the row that is selected
@@ -3139,6 +3248,15 @@ su_tm_4:  db "10% (10x faster)", 0
 su_tm_5:  db "5% (20x faster)", 0
 su_time:
     dw su_tm_0, su_tm_1, su_tm_2, su_tm_3, su_tm_4, su_tm_5
+
+; The setup edits *settings*, and a setting is not always the same as its row in
+; the working copy: the memory panel keeps its sockets where the page that shows
+; them wants them. This is the one place that knows both.
+su_bufof:                                       ; words, because both readers
+    dw 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18
+    dw SU_M_COUNT, SU_M_MODE                    ; 19, 20
+    dw SU_M_SIZE, SU_M_SIZE + 1, SU_M_SIZE + 2, SU_M_SIZE + 3
+    dw SU_M_SIZE + 4, SU_M_SIZE + 5, SU_M_SIZE + 6, SU_M_SIZE + 7
 
 su_ramsizes:
     dw 0, 1, 2, 4, 8, 16, 32, 64, 128

@@ -646,7 +646,11 @@ class Cpu {
             X.coreRun.set(_i, 0);        // POST releases whichever cores exist now
             _i += 1;
         }
-        X.spawned = 1;
+        /* `spawned` is *not* reset here. The cores this machine already made are
+         * parked in their own `whenClone` loop, and POST releases them by
+         * setting `coreRun` again -- forgetting them and spawning a second set
+         * leaves two interpreters stepping one register file, which is a CPU
+         * that walks the whole ROM instead of running POST. */
         powerOn();
         X.powerOns += 1;
         X.dispReq = 1;                   // the card clears itself for the new POST
@@ -741,7 +745,12 @@ class Cpu {
         slotScan();
         X.extOn = 0;
 #ifdef TURBOWARP
-        if (X.slotExtMb > 0) { X.extOn = 1; }
+        /* Mode is the panel's setting: Extended means the module holds the
+         * memory, Internal means the list does. A board with no modules in it
+         * has nothing for the module to hold, so it falls back to the list. */
+        portOut(112, 0x3D);
+        portIn(113);
+        if (v % 256 == 1 && X.slotExtMb > 0) { X.extOn = 1; }
 #endif
         _slotId = 0;
         while (_slotId < 8) {
@@ -916,6 +925,17 @@ class Cpu {
         X.cmos.set(21, 0x21);        // 0x14 equipment
         X.cmos.set(22, 0x80);        // 0x15 base memory low  (640 KiB)
         X.cmos.set(23, 0x02);        // 0x16 base memory high
+        /* The modules this board ships with: four sockets, 128 MB in the first
+         * one, held in the memory module. That is the machine as it has always
+         * been -- the panel exists to change it, not to switch it on. */
+        X.cmos.set(24, 0x80);        // 0x17 extended memory in megabytes, low
+        X.cmos.set(25, 0x00);        // 0x18 ... and high: 128 MB
+        X.cmos.set(61, 4);           // 0x3C how many sockets are fitted
+        X.cmos.set(62, 1);           // 0x3D storage: 1 = the module
+        X.cmos.set(65, 8);           // 0x40 slot 0: index 8 = 128 MB
+        X.cmos.set(73, 2);           // 0x48 slot 0 kind: DDR4
+        X.cmos.set(81, 0);           // 0x50 slot 0 form: DIMM
+        X.cmos.set(88, 0xA5);        // 0x58 the setup has recorded this map
         X.cmos.set(49, 0x00);        // 0x30 boot counter
         X.cmos.set(50, 0x00);        // 0x31 POST result
         X.cmos.set(51, 0x20);        // 0x32 century
@@ -958,6 +978,7 @@ class Cpu {
                     spawnCores();               // the setup utility raised the count
                 }
                 modePoll();                     // and the card follows int 10h
+                resetPoll();                    // and a save may have restarted it
             }
             /* A halted core is not a stopped machine: the clock still runs and
              * the next tick wakes it. Two things have to be true for that to
@@ -1199,9 +1220,27 @@ class Cpu {
     }
 
     /* The memory panel, read back the way the chipset will use it. Sizes are
-     * indices into a table of powers of two, so 1 means 8 MiB and 3 means
-     * 128 MiB; a slot that is empty is size 0. */
+     * indices into the setup's table: 0 is an empty socket, 1 is 1 MB and 8 is
+     * 128 MB -- the same nine names the panel prints. `X.pow2` is item 1 = 1, so
+     * the index is the size, not the size plus one; the extra one doubled every
+     * module on the board.
+     *
+     * The three mirror lists are sized before they are written: a Scratch list
+     * does not grow when you `set` past its end, so an empty one silently keeps
+     * nothing -- which is the same trap the ATA buffer fell into. */
     private void slotScan() { // warp
+        if (X.slotSize.length() < 8) {
+            X.slotSize.clear();
+            X.slotKind.clear();
+            X.slotForm.clear();
+            _i = 1;
+            while (_i <= 8) {
+                X.slotSize.add(0);
+                X.slotKind.add(0);
+                X.slotForm.add(0);
+                _i += 1;
+            }
+        }
         X.slotExtMb = 0;
         portOut(112, 0x3C);
         portIn(113);
@@ -1212,9 +1251,9 @@ class Cpu {
             portOut(112, 0x40 + _i);
             portIn(113);
             _sz = v % 256;
-            X.slotSize.set(_i, _sz);
-            if (_i < X.slotCount && _sz > 0) {
-                X.slotExtMb = X.slotExtMb + X.pow2.get(_sz + 1);
+            X.slotSize.set(_i + 1, _sz);
+            if (_i < X.slotCount && _sz > 0 && _sz < 9) {
+                X.slotExtMb = X.slotExtMb + X.pow2.get(_sz);
             }
             _i += 1;
         }
@@ -1237,6 +1276,32 @@ class Cpu {
      * the card reads it, and neither has to tell the other. One read a frame is
      * the whole cost of that agreement. It lives here rather than in the loop
      * so the loop's locals stay what they were. */
+    /* The reset button, from the firmware.
+     *
+     * A save that changes the memory can only take effect at a reboot, and the
+     * setup cannot reboot a machine from inside an interrupt handler. So it
+     * stages a byte and this picks it up, once a frame, and does what a real
+     * chipset's reset line would: the memory the panel asked for becomes the
+     * memory the next boot has, and the CPU starts again at the reset vector.
+     */
+    private void resetPoll() { // warp
+        rdb(0x4F5);
+        if (v % 256 == 0) { return; }
+        wrb(0x4F5, 0);                 // the request is taken
+        slotScan();
+#ifdef TURBOWARP
+        rdb(0x3D);
+        if (v % 256 == 1 && X.slotExtMb > 0) {
+            X.rebootExt = 1;
+        } else {
+            X.rebootExt = 0;
+        }
+#else
+        X.rebootExt = 0;
+#endif
+        X.reboot = 1;
+    }
+
     private void modePoll() { // warp
         rdb(0x449);
         if (v % 256 == 0x13) {

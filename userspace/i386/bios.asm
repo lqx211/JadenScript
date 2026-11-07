@@ -49,6 +49,7 @@ BDA_MEMK        equ 0x413
 BDA_VIDEO_MODE  equ 0x449             ; the mode int 10h last set
 BDA_ARG_AL      equ 0x4E4             ; int 10h's own copy of its arguments
 BDA_LAST_STATUS equ 0x4EE             ; int 13h's last status byte
+BDA_RESET       equ 0x4F5             ; the firmware asks the chipset to restart
 BDA_ARG_AH      equ 0x4E5
 ; scratch the console keeps between calls: free space in the data area, at an
 ; address that is RAM on every PC. It must *not* live in the ROM, which is
@@ -71,6 +72,7 @@ CON_W           equ 0x530          ; how wide it is, from column 0
 BDA_VIDCOLS     equ 0x531          ; how many of those columns the card can show
 BDA_VIDROWS     equ 0x532          ; ... and how many rows
 BDA_SPLASH      equ 0x533          ; 1 while the power-on picture is on screen
+BDA_CLIP        equ 0x534          ; 1 while the console clips instead of wrapping
 SU_ROWSAVE      equ 0x520
 
 ; ---------------------------------------------------------------------------
@@ -84,7 +86,12 @@ start:
     mov     ss, ax
     mov     sp, 0x7C00
     cld
-    sti
+    ; Interrupts stay off until the vectors are installed and the two chips
+    ; that raise them are programmed. A cold board cannot tell the difference
+    ; -- its 8259 is uninitialised and its 8254 is not counting -- but a warm
+    ; restart inherits both from the firmware that asked for it, so an IRQ0
+    ; lands on whatever vector happens to be there and the CPU walks off into
+    ; the ROM. `sti` is below, once every vector and both chips are set up.
 
     ; the text plane: 80 x 30 cells of (char, attribute)
     mov     ax, TEXT_SEG
@@ -107,6 +114,7 @@ start:
     mov     byte [es:BDA_VIDCOLS], COLS
     mov     byte [es:BDA_VIDROWS], ROWS
     mov     byte [es:BDA_SPLASH], 0
+    mov     byte [es:BDA_CLIP], 0
     ; until the menu says otherwise the machine boots the disk
     mov     byte [es:BDA_BOOTDEV], 0x80
     ; the keyboard ring the interrupt fills and int 16h drains starts empty
@@ -212,10 +220,18 @@ start:
     ; reads them back
     call    hwApply
 
+    ; everything that can interrupt now has somewhere to go
+    sti
+
     ; how much of the plane the card can actually show. On a 640 x 480 stage
     ; that is all of it; on Scratch's own 480 x 360 it is 60 x 22, and a BIOS
     ; that keeps printing at column 70 would be printing into the void.
     call    cardGeometry
+    ; A card narrower than the plane is a window on it, not a narrower plane:
+    ; a line that does not fit loses its tail rather than folding onto the next
+    ; row and writing over the row below. That fold is what turned the log into
+    ; a heap of fragments on Scratch's own 480 x 360 stage.
+    mov     byte [es:BDA_CLIP], 1
 
     ; the splash goes up first, unless the stage is too small to hold it
     cmp     byte [es:BDA_VIDCOLS], COLS
@@ -270,6 +286,28 @@ start:
     call    put3
     mov     si, msg_memk
     call    puts
+    ; and the memory above the megabyte, out of the same CMOS the setup wrote:
+    ; a board that only ever says "640K" looks like a board with no sockets,
+    ; which is exactly what the memory page exists to change
+    mov     al, 0x17
+    call    cmos_read
+    mov     bl, al
+    mov     al, 0x18
+    call    cmos_read
+    mov     bh, al
+    mov     si, msg_memx
+    call    puts
+    mov     ax, bx
+    or      ax, ax
+    jz      .noext
+    call    putn
+    mov     si, msg_memxk
+    call    puts
+    jmp     .afterext
+.noext:
+    mov     si, msg_memx0
+    call    puts
+.afterext:
     ; the card said how big it is, so the banner says so too
     mov     si, msg_video
     call    puts
@@ -664,6 +702,12 @@ tty:
     dec     byte [es:BDA_CURSOR_COL]
     jmp     .out
 .print:
+    cmp     byte [es:BDA_CLIP], 0
+    je      .wrap
+    mov     cl, [es:BDA_CURSOR_COL]
+    cmp     cl, [es:CON_W]
+    jae     .out                    ; the clip: the rest of the line is lost
+.wrap:
     mov     cl, [es:BDA_CURSOR_ROW]
     xor     ch, ch
     mov     dx, COLS
@@ -940,7 +984,15 @@ int15:
     mov     al, 0x18
     call    cmos_read
     mov     bh, al
-    mov     ax, bx
+    mov     ax, bx                  ; megabytes
+    mov     cx, 1024
+    mul     cx                      ; ... to the kilobytes AH=88 promises
+    shl     bx, 6                   ; the high half of megabytes * 1024
+    add     dx, bx
+    or      dx, dx
+    jz      .e88ok
+    mov     ax, 0xFFFF              ; more than a word can say: 64 MB is the cap
+.e88ok:
     and     word [ss:bp + 6], 0xFFFE
     jmp     .out
 .smp:
@@ -1005,10 +1057,10 @@ int15:
     jz      .e820end               ; no extended memory: the map ends here
     call    e820_clear
     mov     dword [es:di], 0x100000
-    mov     dx, bx                  ; kilobytes, zero-extended into a dword
+    mov     dx, bx                  ; megabytes, zero-extended into a dword
     xor     edx, edx
     mov     dx, bx
-    shl     edx, 10                 ; and bytes
+    shl     edx, 20                 ; and bytes
     mov     dword [es:di + 8], edx
     mov     dword [es:di + 16], 1
 .e820end:
@@ -1146,20 +1198,6 @@ key_wait:
 ; ---------------------------------------------------------------------------
 ; int 19h: boot
 ; ---------------------------------------------------------------------------
-int13dbg:
-    push    ax
-    push    dx
-    push    es
-    xor     ax, ax
-    mov     es, ax
-    mov     al, [es:0x7C00]
-    mov     [es:0x4EC], al
-    mov     al, [es:BDA_LAST_STATUS]
-    mov     [es:0x4ED], al
-    pop     es
-    pop     dx
-    pop     ax
-    ret
 int19:
     push    bp
     mov     bp, sp
@@ -1178,7 +1216,6 @@ int19:
     xor     dh, dh
     mov     dl, [es:BDA_BOOTDEV]
     int     0x13
-    call    int13dbg
     jc      .fail
     cmp     word [es:0x7C00 + 510], 0xAA55
     jne     .fail
@@ -1370,7 +1407,10 @@ msg_bootno: db "CMOS boot #", 0
 msg_crlf:   db 13, 10, 0
 msg_cpu:    db "CPU: 80386, real mode, 16-bit bus", 13, 10, 0
 msg_mem:    db "Memory: ", 0
-msg_memk:   db "K conventional", 13, 10, 0
+msg_memk:   db "K conventional, ", 0
+msg_memx:   db "", 0
+msg_memxk:  db " MB extended", 13, 10, 0
+msg_memx0:  db "no extended memory", 13, 10, 0
 msg_video:  db "Video: ", 0
 msg_video_tail: db " text, attribute 0x07", 13, 10, 0
 msg_boot:   db "Booting from device 0x80...", 13, 10, 0

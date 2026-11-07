@@ -143,8 +143,8 @@ CMOS_DEFAULTS = {
     0x14: 0x21,          # equipment: one diskette, 80x25, one serial
     0x15: 0x80,          # base memory, low byte: 640 KiB = 0x0280
     0x16: 0x02,          # base memory, high byte
-    0x17: 0x00,          # extended memory, low
-    0x18: 0x00,          # extended memory, high
+    0x17: 0x80,          # extended memory in megabytes, low: 128 MB
+    0x18: 0x00,          # ... and high
     0x19: 0x00,          # hard disk 0 type
     0x30: 0x00,          # our boot counter
     0x31: 0x00,          # our POST result
@@ -157,6 +157,12 @@ CMOS_DEFAULTS = {
     0x39: 0x00,          # threads per core
     0x3A: 0x00,          # Performance Emu: 1x
     0x3B: 0x00,          # Fake OS Time: 100%, real time
+    0x3C: 0x04,          # memory sockets fitted
+    0x3D: 0x01,          # storage: 1 = the module, 0 = the list
+    0x40: 0x08,          # slot 0: index 8 = 128 MB
+    0x48: 0x02,          # slot 0 kind: DDR4
+    0x50: 0x00,          # slot 0 form: DIMM
+    0x58: 0xA5,          # the setup has recorded this memory map
 }
 
 
