@@ -118,6 +118,7 @@ rv64-smode:
 i386:
 	cd userspace/i386 && nasm -f bin bios.asm -o bios.bin -l bios.lst
 	cd userspace/i386 && nasm -f bin mbr.asm -o mbr.bin -l mbr.lst
+	cd userspace/i386 && nasm -f bin meow.asm -o meow.bin -l meow.lst
 	$(PY) tools/i386_image.py --check
 	$(PY) -m jswc build userspace/i386/i386.jsw -o build/i386/i386.sb3 --target turbowarp
 

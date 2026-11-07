@@ -77,6 +77,19 @@ public X.fbit = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192];
 public X.mem = [];                       // RAM, one 32-bit word an item
 public X.bios = [];                      // the ROM
 public X.disk = [];                      // the staged disk image
+/* ---- the network drive ---------------------------------------------- *
+ * `X.netOut` is the outbound queue and `X.netOn` is whether there is a link at
+ * all; the disk sprite owns both. A machine with no server listening has
+ * `netOn` 0 and behaves exactly as it did before there was a network.
+ */
+public X.netOut = [];                    // messages waiting for the socket
+public X.netOn = 0;                      // 1 when a drive answered on the socket
+public X.netAcks = 0;                    // sectors the host took
+public X.netFails = 0;                   // sectors it refused
+public X.netLast = "";                   // what it said when it refused the last one
+public X.netIdent = "";                  // IDENTIFY DEVICE, as the host sent it
+public X.netDeferred = 0;                // a lost write the bus was too busy to report
+public X.ataWrote = [0];                 // sectors the guest has written this session
 public X.text = [];                      // the text plane
 public X.textDirty = [];                 // 1 = the card has not drawn this cell
 public X.textN = 0;
@@ -102,6 +115,37 @@ public X.port60 = 0;                     // the 8042's output buffer
 public X.port64 = 0;                     // status: 1 only while a byte waits
 public X.out = [];                       // serial 0x3F8, byte values
 public X.portLog = [];
+
+/* ---- the PCI bus ------------------------------------------------------ *
+ * A 440FX board with five functions on bus 0. A guest finds none of them by
+ * looking at fixed addresses: it reads configuration space through the pair of
+ * ports every PC has had since 1993, 0xCF8 (which dword) and 0xCFC (the dword),
+ * and learns what is there from what answers. That indirection is the whole
+ * point of PCI, and it is why an OS can be handed a different board and still
+ * boot.
+ *
+ * The table is the bus. One row per function: bus, device, function, vendor,
+ * device id, class (base<<16 | sub<<8 | prog-if), and five BARs. A read that
+ * matches no row answers 0xFFFFFFFF, which is how a driver decides a slot is
+ * empty.
+ */
+public X.pciAddr = 0;                    // the dword 0xCF8 selected last
+public X.pciAddrPort = 3320;             // 0xCF8, config address
+public X.pciDataPort = 3324;             // 0xCFC, config data
+public X.pciBus = [0, 0, 0, 0, 0];
+public X.pciDev = [0, 1, 1, 2, 3];
+public X.pciFn = [0, 0, 1, 0, 0];
+public X.pciVendor = [0x8086, 0x8086, 0x8086, 0x1234, 0x8086];
+public X.pciId = [0x1237, 0x7000, 0x7010, 0x1111, 0x2829];
+public X.pciClass = [0x060000, 0x068000, 0x010180, 0x030000, 0x010601];
+/* the header type in bits 16..23; bit 7 says the slot has more than one
+ * function, which is how a scan knows to look past function 0 */
+public X.pciHeader = [0, 0x80, 0, 0, 0];
+public X.pciBars = [0, 0, 0, 0, 0,
+                    0, 0, 0, 0, 0,
+                    497, 1013, 369, 885, 49153,
+                    3758096384, 0, 0, 0, 0,
+                    851968, 0, 0, 0, 0];
 
 /* ---- the board's clock and interrupt controller ------------------------ *
  * An 8254 counting down and an 8259 deciding who gets the CPU next. Both are
@@ -180,10 +224,33 @@ public K.ready = 0;
  * byte in `X.coreRun` until the firmware releases it through port 0x5A1, and
  * then starts where a real AP does -- CS = 0x0800, IP = 0.
  */
-public X.cores = 2;
-public X.coreRun = [1, 0, 0, 0, 0, 0, 0, 0];
+public X.cores = 2;              // 1..16. A clone is a core and they are cheap
+/* ---- what the box claims about itself -------------------------------- *
+ * Two knobs, and they are different kinds of lie on purpose.
+ *
+ * `perfFactor` is a multiplier on the clock the monitor reports. The machine
+ * retires instructions at whatever rate the browser gives it; a standard KIPS
+ * figure times this factor is what a period BIOS would print, so "Performance
+ * Emu = 4x" makes a 25 MHz board introduce itself as a 100 MHz one. It changes
+ * no timing at all.
+ *
+ * `timeRate` changes how fast the guest thinks time passes -- the RTC, and
+ * therefore everything that reads it. Below 100 the clock crawls while the CPU
+ * runs at full speed, which is how a machine can appear to have booted in less
+ * time than the wall clock says: the guest's own measurement of its boot is
+ * scaled, and nothing else is.
+ */
+public X.threads = 1;            // instruction budgets a core is given per frame
+public X.perfFactor = 1;         // the multiplier on the reported clock
+public X.timeRate = 100;         // per cent: how fast the guest's clock runs
+public X.threadsPort = 1451;     // 0x5AB, write: budget multiplier per core
+public X.perfPort = 1452;        // 0x5AC, write: performance multiplier
+public X.timePort = 1453;        // 0x5AD, write: guest clock rate, per cent
+public X.coreRun = [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+public X.spawned = 1;            // how many cores exist as clones right now
 public X.apCs = 2048;            // 0x0800: the vector a released core starts at
 public X.coreCountPort = 1440;   // 0x5A0, read: how many cores there are
+public X.coreSetPort = 1454;     // 0x5AE, write: how many there should be
 public X.coreReleasePort = 1441; // 0x5A1, write: the core to wake
 public X.coreIdPort = 1442;      // 0x5A2, read: which core is asking
 /* ---- the hardware monitor --------------------------------------------- *
@@ -207,8 +274,8 @@ public X.cpuBase = 33;
  * units of 10 ms, because a byte cannot hold half a second. */
 public X.keyRepeatPort = 1450;   // 0x5AA, write: repeat interval in 10 ms units
 public X.keyRepeat = 120;
-public X.coreUsage = [0, 0, 0, 0, 0, 0, 0, 0];
-public X.coreMHz = [0, 0, 0, 0, 0, 0, 0, 0];   // measured, updated twice a second
+public X.coreUsage = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+public X.coreMHz = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];   // measured, updated twice a second
 public X.core1Usage = 0;
 public X.core1MHz = 0;
 public X.core2Usage = 0;
@@ -267,6 +334,14 @@ public X.hwHoursPort = 1462;     // 0x5B6, read: power-on hours, low byte
 public X.hwSmartPort = 1463;     // 0x5B7, write: which SMART attribute to read
 public X.hwSmartValPort = 1464;  // 0x5B8, read: that attribute's current value
 public X.hwSmartWorstPort = 1465; // 0x5B9, read: ... and its worst ever
+/* The speaker, as a number a host can play. Channel 2's divisor behind the
+ * gate on port 0x61 *is* the tone, so nothing has to watch the PIT: read this
+ * pair and you have the pitch the machine is making right now. */
+public X.hwToneLoPort = 1466;    // 0x5BA, read: speaker Hz, low byte
+public X.hwToneHiPort = 1467;    // 0x5BB, read: speaker Hz, high byte
+public X.hwGatePort = 1468;      // 0x5BC, read: 3 while the gate is open
+public X.speakerGate = 0;
+public X.toneHz = 0;              // filled in by speakerTone
 public X.hwSmartSel = 1;
 public X.hwSmart = [100, 100, 100, 100, 100, 100, 100, 100, 100, 100];
 public X.hwSmartWorst = [100, 100, 100, 100, 100, 100, 100, 100, 100, 100];
@@ -394,6 +469,12 @@ import "assets/lists/ident.jsa" as ident;   // the drive's IDENTIFY DEVICE block
 // include "input.jsw"
 // include "display.jsw"
 // include "sensor.jsw"
+/* The network drive needs a socket, and a socket is the one thing scratch.mit.edu
+ * does not have. The Scratch build keeps the staged image and the write path;
+ * it simply has nothing on the other end of the wire. */
+#ifdef TURBOWARP
+// include "netdisk.jsw"
+#endif
 
 /*
  * Everything the CPU touches is one class, because a Scratch custom block
@@ -421,6 +502,7 @@ class Cpu {
     private v = 0;
     private ir = 0;
     private oz = 2;
+    private _tv = 0;
     private seg = 4;
     private rep = 0;
     private mmod = 0;
@@ -481,14 +563,27 @@ class Cpu {
         // one clone is one core. `coreId` is sprite-local, so setting it
         // before the clone is created is how the clone learns its own number.
         coreId = 1;
-        _spawn = 2;
+        X.spawned = 1;
+        spawnCores();
+        mainLoop();
+    }
+
+    /* The chipset can be told to keep more cores than the machine started with,
+     * so the clones are made on demand rather than all at power-on. A clone
+     * parks on its own `coreRun` byte until the firmware releases it, so one
+     * raised here costs a thread and nothing else until then. */
+    private void spawnCores() { // warp
+        if (X.spawned >= X.cores) {
+            return;
+        }
+        _spawn = X.spawned + 1;
         while (_spawn <= X.cores) {
             coreId = _spawn;
             Clone.create();
+            X.spawned = _spawn;
             _spawn += 1;
         }
         coreId = 1;
-        mainLoop();
     }
 
     /* A secondary core: wait for the firmware to release it, then start at the
@@ -691,6 +786,10 @@ class Cpu {
         X.cmos.set(54, 1);           // 0x35 battery: fitted
         X.cmos.set(55, 2);           // 0x36 CPU frequency: 33 MHz
         X.cmos.set(56, 2);           // 0x37 key repeat: 1/8 s
+        X.cmos.set(57, 1);           // 0x38 cores, less one: the board has two
+        X.cmos.set(58, 0);           // 0x39 threads per core: one
+        X.cmos.set(59, 0);           // 0x3A Performance Emu: 1x, honest
+        X.cmos.set(60, 0);           // 0x3B Fake OS Time: 100%, real time
         X.cmosReady = 1;
         X.rtcSeconds = 0;
     }
@@ -715,6 +814,9 @@ class Cpu {
                 X.monHalted = halted;
                 X.monErr = err;
                 X.monFrames = X.frames;
+                if (X.spawned < X.cores) {
+                    spawnCores();               // the setup utility raised the count
+                }
             }
             /* A halted core is not a stopped machine: the clock still runs and
              * the next tick wakes it. Two things have to be true for that to
@@ -843,9 +945,12 @@ class Cpu {
          * screen would show: tens of MHz, not fractions of one. */
         _mhz = 0;
         if (X.emuOn > 0) {
-            _mhz = Operators.math("round", _done / _dt / 100000);
-            if (_mhz > 255) {
-                _mhz = 255;
+            /* KIPS times a fixed factor: the machine measures what it really
+             * retires, and Performance Emu multiplies it. A 386 retires about a
+             * tenth of an instruction a clock, hence the 100000. */
+            _mhz = Operators.math("round", _done / _dt / 100000 * X.perfFactor);
+            if (_mhz > 4095) {
+                _mhz = 4095;               // the port carries sixteen bits
             }
         }
         X.coreMHz.set(coreId, _mhz);
@@ -882,7 +987,11 @@ class Cpu {
      * on the real chip, so the guest reads 0x12 for twelve o'clock. */
     private void tickClock() { // warp
         X.tickNo += 1;
-        X.rtcFrames += 1;
+        /* Fake OS Time: the guest's second is `timeRate` per cent of a frame
+         * second. At 100 nothing changes; below it the clock crawls while the
+         * CPU keeps running, so the guest believes the machine is faster than
+         * the wall clock it is running on. */
+        X.rtcFrames += X.timeRate / 100;
         if (X.rtcFrames < X.rtcRate) {
             return;
         }
@@ -1220,6 +1329,21 @@ class Cpu {
         r.set(_pR, _pOld - _pOld % 256 + _pV);
     }
 
+    /* The accumulator at the width the instruction asked for. A port I/O
+     * instruction has no fixed width: the operand size decides, and in a
+     * protected-mode code segment that is 32 unless a 66 prefix says otherwise.
+     * Everything the firmware does is 16-bit, everything a 32-bit kernel does is
+     * not, and both go through here. */
+    private void putPortReg(p, value) { // warp
+        if (oz == 4) { putReg32(0, value); return; }
+        putReg16(0, value);
+    }
+
+    private void getPortReg(p) { // warp
+        if (oz == 4) { getReg32(0); return; }
+        getReg16(0);
+    }
+
     private void getReg16(i) { // warp
         v = r.get(i + 1) + 0;
     }
@@ -1284,24 +1408,41 @@ class Cpu {
     private void getOp(size) { // warp
         if (mmod == 3) {
             if (size == 1) { getReg8(mrm); return; }
+            if (size == 4) { getReg32(mrm); return; }
             getReg16(mrm);
             return;
         }
         phys(eseg, ea);
         _gA = v;
         if (size == 1) { rdb(_gA); return; }
+        if (size == 4) {
+            /* a dword in memory is two words, low half first, and it has to be
+             * built before `rdw` overwrites its own temps */
+            rdw(_gA);
+            _gLo = v;
+            rdw(_gA + 2);
+            v = _gLo + v * 65536;
+            return;
+        }
         rdw(_gA);
     }
 
     private void putOp(size, val) { // warp
         if (mmod == 3) {
             if (size == 1) { putReg8(mrm, val); return; }
+            if (size == 4) { putReg32(mrm, val); return; }
             putReg16(mrm, val);
             return;
         }
         phys(eseg, ea);
         _uA = v;
         if (size == 1) { wrb(_uA, val); return; }
+        if (size == 4) {
+            _uV = val % 4294967296;
+            wrw(_uA, _uV % 65536);
+            wrw(_uA + 2, Operators.math("floor", _uV / 65536));
+            return;
+        }
         wrw(_uA, val);
     }
 
@@ -1332,6 +1473,10 @@ class Cpu {
         _zMask = 65535;
         _zSign = 32768;
         if (size == 1) { _zMask = 255; _zSign = 128; }
+        /* and the 32-bit width, which is where SF and ZF are decided for a
+         * kernel: a `test eax, eax` that only looked at the low half would
+         * report the wrong sign for every address above 2 GiB */
+        if (size == 4) { _zMask = 4294967295; _zSign = 2147483648; }
         _zR = value % (_zMask + 1);
         if (_zR < 0) { _zR = _zR + _zMask + 1; }
         _zSet = 0;
@@ -1354,13 +1499,19 @@ class Cpu {
 
     /* and/or/xor, a bit at a time: this dialect has no bitwise operators, and
      * sixteen rounds of divide-by-two is what that costs. */
-    private void bitOp(a, b, mode) { // warp
-        _bA = a % 65536;
-        _bB = b % 65536;
+    /* `width` is 16 or 32: the ALU calls it with the operand size, and a
+     * 32-bit AND that quietly dropped its top half was a machine that could not
+     * set bit 31 of anything. */
+    private void bitOp(a, b, mode, width) { // warp
+        _bW = 65536;
+        _bN = 16;
+        if (width > 16) { _bW = 4294967296; _bN = 32; }
+        _bA = a % _bW;
+        _bB = b % _bW;
         _bRes = 0;
         _bP = 1;
         _bK = 0;
-        while (_bK < 16) {
+        while (_bK < _bN) {
             _bX = _bA % 2;
             _bY = _bB % 2;
             _bBit = 0;
@@ -1387,6 +1538,10 @@ class Cpu {
         _aMask = 65535;
         _aSign = 32768;
         if (size == 1) { _aMask = 255; _aSign = 128; }
+        /* A 32-bit operation masks at 32 bits. Without this the mask stayed at
+         * 16 and every `or eax, 0x80000000` came back as zero, which is a
+         * machine that cannot build a PCI address. */
+        if (size == 4) { _aMask = 4294967295; _aSign = 2147483648; }
         _aA = a % (_aMask + 1);
         if (_aA < 0) { _aA = _aA + _aMask + 1; }
         _aB = b % (_aMask + 1);
@@ -1396,7 +1551,7 @@ class Cpu {
             _aMode = 0;
             if (op == 1) { _aMode = 1; }
             if (op == 6) { _aMode = 2; }
-            bitOp(_aA, _aB, _aMode);
+            bitOp(_aA, _aB, _aMode, size * 8);
             setFlagTo(0, 0);
             setFlagTo(11, 0);
             setFlagTo(4, 0);
@@ -1454,6 +1609,12 @@ class Cpu {
         if (size == 1) {
             _hMask = 255;
             _hTop = 128;
+        }
+        /* 32 bits, because `shr eax, 16` is how a dword is taken apart: half a
+         * dword's shift is a machine that cannot read its own PCI ids */
+        if (size == 4) {
+            _hMask = 4294967295;
+            _hTop = 2147483648;
         }
         _hV = val % (_hMask + 1);
         _hN = count % 32;
@@ -1824,6 +1985,12 @@ class Cpu {
         }
         X.ataPos = 0;
         X.ataStatus = 88;                 // ready, and data wanted (DRDY|DRQ|DSC)
+        if (X.netOn > 0) {
+            X.netOut.add(join("H ", X.ataLba));
+            if (X.netOut.length() > 64) {
+                X.netOut.delete(1);
+            }
+        }
     }
 
     private void ataIdentify() { // warp
@@ -1889,12 +2056,75 @@ class Cpu {
      * that writes a sector gets a floating bus instead of a drive that says no.
      */
     private void ataOut(val) { // warp
+        /* A write arrives the same way a read leaves: 256 words, two bytes at a
+         * time, packed into 128 list items of four bytes each. */
+        if (X.ataCmd == 48 || X.ataCmd == 52) {          // WRITE SECTORS
+            X.ataBuf.set(X.ataPos % 256 + 1, val % 65536);
+            X.ataPos += 1;
+            if (X.ataPos % 256 == 0) {
+                ataCommitSector();
+            }
+            return;
+        }
         X.ataPos += 1;
+    }
+
+    /* The drive took the sector. It goes into the image the machine boots from
+     * and, if there is a host listening, back out over the socket -- the list is
+     * the cache, the file on the host is the disk. */
+    private void ataCommitSector() { // warp
+        _base = X.ataLba * 128;
+        while (X.disk.length() <= _base + 127) {
+            X.disk.add(0);
+        }
+        _i = 0;
+        while (_i < 128) {
+            _lo = X.ataBuf.get(_i * 2 + 1) + 0;
+            _hi = X.ataBuf.get(_i * 2 + 2) + 0;
+            X.disk.set(_base + _i + 1, _lo + _hi * 65536);
+            _i += 1;
+        }
+        X.ataWrote.add(X.ataLba);
+        if (X.ataWrote.length() > 256) {
+            X.ataWrote.delete(1);
+        }
+        if (X.netOn > 0) {
+            _msg = join("WW ", X.ataLba);
+            _i = 0;
+            while (_i < 128) {
+                _msg = join(_msg, " ", X.disk.get(_base + _i + 1));
+                _i += 1;
+            }
+            X.netOut.add(_msg);
+            if (X.netOut.length() > 64) {
+                X.netOut.delete(1);
+            }
+        }
+        /* A command can name more than one sector, and the bus keeps handing
+         * over words without another command: DRQ stays up for the next one. */
+        if (X.ataCount > 1) {
+            X.ataCount -= 1;
+            X.ataLba += 1;
+            X.ataPos = 0;
+            X.ataStatus = 88;
+            return;
+        }
+        X.ataCount = 0;
+        X.ataStatus = 64;                     // ready: the cache has it
     }
 
     private void ataCommand(val) { // warp
         X.ataCmd = val;
         X.ataErr = 0;
+        if (X.netDeferred > 0) {
+            /* The host refused a sector that had already been acknowledged and
+             * the bus was busy at the time. A drive reports that on the next
+             * command it is given, and so does this one. */
+            X.netDeferred = 0;
+            X.ataErr = 64;
+            X.ataStatus = 65;
+            return;
+        }
         X.ataLba = X.ataLbaLo + X.ataLbaMid * 256 + X.ataLbaHi * 65536;
         if (X.ataLba >= X.ataSectors) {
             /* A sector that does not exist is an error, not a read of zeros:
@@ -1906,6 +2136,11 @@ class Cpu {
         if (val == 236) { ataIdentify(); return; }          // IDENTIFY DEVICE
         if (val == 32 || val == 36 || val == 33) {          // READ SECTORS
             ataLoadSector();
+            return;
+        }
+        if (val == 48 || val == 52) {                       // WRITE SECTORS
+            X.ataPos = 0;
+            X.ataStatus = 88;              // ready, and data wanted
             return;
         }
         if (val == 176) {                                   // SMART
@@ -1924,8 +2159,57 @@ class Cpu {
         X.ataStatus = 65;
     }
 
+    /* What the selected dword holds. Only the first sixteen registers exist;
+     * everything above is a capability list this board does not have. */
+    private void pciRegister(k, idx) { // warp
+        if (idx == 0) { v = X.pciVendor.get(k) + X.pciId.get(k) * 65536; return; }
+        if (idx == 1) { v = 33554432; return; }        // status 0x0200, command 0
+        if (idx == 2) { v = X.pciClass.get(k) * 256; return; }
+        if (idx >= 4 && idx <= 8) {
+            v = X.pciBars.get((k - 1) * 5 + (idx - 3)) + 0;
+            return;
+        }
+        if (idx == 3) { v = X.pciHeader.get(k) * 65536; return; }
+        if (idx == 11) { v = X.pciVendor.get(k) * 65536 + X.pciId.get(k); return; }
+        if (idx == 15) { v = 266 + X.pciDev.get(k); return; }   // INTA, and a line
+        v = 0;
+    }
+
+    private void pciLane(lane) { // warp
+        v = 0;
+        if (X.pciAddr < 2147483648) {
+            return;                                    // the enable bit is clear
+        }
+        _pb = Operators.math("floor", X.pciAddr / 65536) % 256;
+        _pd = Operators.math("floor", X.pciAddr / 2048) % 32;
+        _pf = Operators.math("floor", X.pciAddr / 256) % 8;
+        _pi = Operators.math("floor", X.pciAddr / 4) % 64;
+        v = 4294967295;                                // nothing answers there
+        _pk = 1;
+        while (_pk <= 5) {
+            if (X.pciBus.get(_pk) == _pb && X.pciDev.get(_pk) == _pd && X.pciFn.get(_pk) == _pf) {
+                pciRegister(_pk, _pi);
+            }
+            _pk += 1;
+        }
+        if (lane == 1) {
+            v = Operators.math("floor", v / 256) % 4294967296;
+        }
+        if (lane == 2) {
+            v = Operators.math("floor", v / 65536) % 4294967296;
+        }
+        if (lane == 3) {
+            v = Operators.math("floor", v / 16777216) % 4294967296;
+        }
+    }
+
     private void portIn(p) { // warp
         v = 255;
+        if (p == X.pciAddrPort) { v = X.pciAddr; return; }
+        if (p >= X.pciDataPort && p <= X.pciDataPort + 3) {
+            pciLane(p - X.pciDataPort);
+            return;
+        }
         if (p == 96) { v = X.port60; X.port64 = 0; return; }
         if (p == 100) { v = X.port64; return; }
         if (p == 112) { v = X.cmosIndex; return; }
@@ -1942,11 +2226,15 @@ class Cpu {
         if (p == X.dispViewPort) { v = X.dispViewCols; return; }
         if (p == X.dispRowsPort) { v = X.dispViewRows; return; }
         if (p == X.coreCountPort) { v = X.cores; return; }
+        if (p == X.coreSetPort) { v = X.cores; return; }
         if (p == X.coreIdPort) { v = coreId; return; }
         /* ---- the sensors ------------------------------------------------ *
          * A real board puts these behind a Super I/O chip's index/data pair.
          * Here they are one port each, because the guest that reads them is
          * our own firmware and a byte is all a setup screen needs. */
+        if (p == X.threadsPort) { v = X.threads; return; }
+        if (p == X.perfPort) { v = X.perfFactor; return; }
+        if (p == X.timePort) { v = X.timeRate; return; }
         if (p == X.hwTempPort) { v = Operators.math("round", X.cpuTemp); return; }
         if (p == X.hwFanLoPort) { v = X.fanRpm % 256; return; }
         if (p == X.hwFanHiPort) { v = Operators.math("floor", X.fanRpm / 256) % 256; return; }
@@ -1967,9 +2255,22 @@ class Cpu {
         if (p == X.ataCmdPort) { v = X.ataStatus; return; }
         if (p == X.hwSmartValPort) { v = X.hwSmart.get(X.hwSmartSel) + 0; return; }
         if (p == X.hwSmartWorstPort) { v = X.hwSmartWorst.get(X.hwSmartSel) + 0; return; }
+        if (p == X.hwGatePort) { v = X.speakerGate; return; }
+        if (p == X.hwToneLoPort) { speakerTone(); v = X.toneHz % 256; return; }
+        if (p == X.hwToneHiPort) { speakerTone(); v = Operators.math("floor", X.toneHz / 256) % 256; return; }
     }
 
     private void portOut(p, val) { // warp
+        /* PCI config is the one pair of ports that is 32 bits wide end to end:
+         * the address of a dword, then the dword. Truncating it to a byte the
+         * way every other port register here is would select the wrong device. */
+        if (p == X.pciAddrPort) {
+            X.pciAddr = val % 4294967296;
+            return;
+        }
+        if (p >= X.pciDataPort && p <= X.pciDataPort + 3) {
+            return;                                    // claims, not registers
+        }
         _oV = val % 256;
         if (p == 43) { pitControl(_oV); return; }
         if (p >= 64 && p <= 66) { pitWrite(p - 64, _oV); return; }
@@ -1994,6 +2295,19 @@ class Cpu {
             while (_i <= X.cores) {
                 X.coreMHz.set(_i, _oV);
                 _i += 1;
+            }
+            return;
+        }
+        if (p == X.coreSetPort) {
+            if (_oV >= 1 && _oV <= 16) {
+                X.cores = _oV;
+                _i = 1;
+                while (_i <= 16) {              // a core that goes away stops running
+                    if (_i > _oV) {
+                        X.coreRun.set(_i, 0);
+                    }
+                    _i += 1;
+                }
             }
             return;
         }
@@ -2028,10 +2342,23 @@ class Cpu {
             return;
         }
         if (p == X.ataCmdPort) { ataCommand(_oV); return; }
+        if (p == X.threadsPort) {
+            if (_oV >= 1 && _oV <= 4) { X.threads = _oV; X.batch = 240 * _oV; }
+            return;
+        }
+        if (p == X.perfPort) {
+            if (_oV >= 1 && _oV <= 16) { X.perfFactor = _oV; }
+            return;
+        }
+        if (p == X.timePort) {
+            if (_oV >= 1 && _oV <= 255) { X.timeRate = _oV; }
+            return;
+        }
         if (p == X.hwSmartPort) {
             if (_oV >= 1 && _oV <= 5) { X.hwSmartSel = _oV; }
             return;
         }
+        if (p == 97) { X.speakerGate = _oV; return; }
         if (p == X.coreReleasePort) {
             // wake core n: the device owns the flag, not the firmware
             if (_oV >= 1 && _oV <= X.cores) {
@@ -2077,6 +2404,17 @@ class Cpu {
      * the reload is written low byte, high byte or both, and the mode; the
      * channel port takes the reload. Reaching zero is what pulls the line.
      */
+    /* What the speaker sounds like. Both gate bits have to be up: bit 0 lets
+     * timer 2's output through, bit 1 enables the speaker behind it, which is
+     * why a guest that programs the divisor alone still hears nothing. */
+    private void speakerTone() { // warp
+        X.toneHz = 0;
+        if (X.speakerGate % 4 >= 3) {
+            _pv = X.pitReload.get(3) + 0;
+            if (_pv > 0) { X.toneHz = Operators.math("round", 1193182 / _pv); }
+        }
+    }
+
     private void pitControl(word) { // warp
         _ch = Operators.math("floor", word / 64);
         _acc = Operators.math("floor", word / 16) % 4;
@@ -2377,13 +2715,20 @@ class Cpu {
         serviceIrq();
         seg = 4;
         rep = 0;
-        oz = 2;
+        /* `dsz` is what an unprefixed instruction means here: 16 in real mode,
+         * 32 in a protected-mode code segment whose descriptor says so (a 386
+         * kernel's does), and the 66 prefix flips it. Real mode never sees the
+         * difference; a 32-bit kernel sees all of it. */
+        oz = dsz;
         _prefOn = 1;
         while (_prefOn == 1) {
             _prefOn = 0;
             f8();
             ir = v;
-            if (ir == 102) { oz = 4; _prefOn = 1; }
+            if (ir == 102) {
+                if (oz == 4) { oz = 2; } else { oz = 4; }
+                _prefOn = 1;
+            }
             if (ir == 103) { _prefOn = 1; }
             if (ir == 38) { seg = 1; _prefOn = 1; }
             if (ir == 46) { seg = 2; _prefOn = 1; }
@@ -2468,6 +2813,19 @@ class Cpu {
             if (_kind != 7) { putReg8(0, v); }
             return;
         }
+        /* `or eax, 0x80000000` and its siblings: the accumulator forms are the
+         * only ALU opcodes with a full-width immediate, and this machine spent a
+         * long time with only the 8- and 16-bit halves of them because the
+         * firmware never needed the other one. PCI does: an address with bit 31
+         * set is built with one. */
+        if (oz == 4) {
+            getReg32(0);
+            _x = v;
+            f32();
+            alu(_kind, _x, v, 4);
+            if (_kind != 7) { putReg32(0, v); }
+            return;
+        }
         getReg16(0);
         _x = v;
         f16();
@@ -2527,6 +2885,18 @@ class Cpu {
                 getSignedDisp8();
             } else {
                 f16();
+            }
+        }
+        if (size == 4) {
+            /* 0x83 sign-extends a byte into the operand width, so a 32-bit one
+             * has to sign-extend to 32 bits, not to 16 */
+            if (ir == 131) {
+                getSignedDisp8();
+                _gImm = v;
+                if (_gImm < 0) { _gImm = 4294967296 + _gImm; }
+                v = _gImm;
+            } else {
+                f32();
             }
         }
         alu(_gKind, _gLeft, v, size);
@@ -2973,7 +3343,7 @@ class Cpu {
         /* --- the groups --- */
         if (op == 128 || op == 129 || op == 130 || op == 131) {
             _sz = 1;
-            if (op == 129 || op == 131) { _sz = 2; }
+            if (op == 129 || op == 131) { _sz = oz; }
             modrm();
             group1(_sz);
             return;
@@ -3019,7 +3389,7 @@ class Cpu {
         }
         if (op == 192 || op == 193 || op == 208 || op == 209 || op == 210 || op == 211) {
             _sz = 1;
-            if (op == 193 || op == 209 || op == 211) { _sz = 2; }
+            if (op == 193 || op == 209 || op == 211) { _sz = oz; }
             modrm();
             getOp(_sz);
             _v0 = v;
@@ -3114,19 +3484,22 @@ class Cpu {
             _p = v;
             if (op == 228) { portIn(_p); putReg8(0, v); return; }
             if (op == 229) {
-                /* `in ax, dx` is one 16-bit read, not two byte reads: an ATA
+                /* `in eax, dx` is one 32-bit read, not two 16-bit ones: an ATA
                  * data register hands over a whole word and stepping it twice
-                 * would half every sector. */
-                if (_p == X.ataDataPort) { ataIn(); putReg16(0, v); return; }
-                if (_p == X.scsiDataPort) { scsiData(); putReg16(0, v); return; }
-                portIn(_p); putReg16(0, v);
+                 * would half every sector, and a PCI config register is only
+                 * coherent when it is read whole. */
+                if (_p == X.ataDataPort) { ataIn(); putPortReg(_p, v); return; }
+                if (_p == X.scsiDataPort) { scsiData(); putPortReg(_p, v); return; }
+                portIn(_p); putPortReg(_p, v);
+                return;
+            }
+            if (op == 231) {
+                getPortReg(_p);
+                if (_p == X.ataDataPort) { ataOut(v); return; }
+                portOut(_p, v);
                 return;
             }
             getReg8(0);
-            if (op == 231) {
-                getReg16(0);
-                if (_p == X.ataDataPort) { ataOut(v); return; }
-            }
             portOut(_p, v);
             return;
         }
@@ -3134,9 +3507,19 @@ class Cpu {
             getReg16(2);
             _p = v;
             if (op == 236) { portIn(_p); putReg8(0, v); return; }
-            if (op == 237) { portIn(_p); putReg16(0, v); return; }
+            if (op == 237) {
+                if (_p == X.ataDataPort) { ataIn(); putPortReg(_p, v); return; }
+                if (_p == X.scsiDataPort) { scsiData(); putPortReg(_p, v); return; }
+                portIn(_p); putPortReg(_p, v);
+                return;
+            }
+            if (op == 239) {
+                getPortReg(_p);
+                if (_p == X.ataDataPort) { ataOut(v); return; }
+                portOut(_p, v);
+                return;
+            }
             getReg8(0);
-            if (op == 239) { getReg16(0); }
             portOut(_p, v);
             return;
         }
@@ -3167,9 +3550,19 @@ class Cpu {
         }
         if (op == 168 || op == 169) {
             _sz = 1;
-            if (op == 169) { _sz = 2; }
-            if (_sz == 1) { f8(); } else { f16(); }
+            if (op == 169) { _sz = oz; }
+            if (_sz == 1) { f8(); }
+            if (_sz == 2) { f16(); }
+            if (_sz == 4) { f32(); }
             _v0 = v;
+            if (_sz == 4) {
+                /* the immediate is in a field, not a temp: `getReg32` goes
+                 * through the register file and would overwrite a temp */
+                _tv = _v0;
+                getReg32(0);
+                alu(4, v, _tv, 4);
+                return;
+            }
             getReg16(0);
             _v1 = v;
             if (_sz == 1) { _v1 = _v1 % 256; }
@@ -3179,6 +3572,13 @@ class Cpu {
 
         /* --- the two-byte page --- */
         if (op == 15) { twoByte(); return; }
+
+        /* --- the coprocessor escapes ---------------------------------- *
+         * 0xD8..0xDF are the 387's opcodes, and this board has no 387. A real
+         * 386 without one raised interrupt 7 -- "device not available" -- and a
+         * BIOS's own floating-point probe is built around exactly that, so
+         * raising it is both cheaper and more honest than modelling an FPU. */
+        if (op >= 216 && op <= 223) { interrupt(7); return; }
 
         /* --- daa / das / aaa / aas: the decimal adjusts ----------------- *
          * Both of daa's tests read the byte as it arrived: doing the second

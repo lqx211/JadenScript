@@ -52,6 +52,7 @@ BDA_MEMK        equ 0x413
 ARG_AX          equ 0x4F0
 ARG_AH          equ 0x4F1
 ARG_BL          equ 0x4F2
+BDA_PCI_NDEV     equ 0x6FF         ; how many PCI functions answered
 BDA_CORES       equ 0x4F3
 PIC_CMD         equ 0x20
 PIC_MSK         equ 0x21
@@ -290,6 +291,17 @@ start:
     call    puts
 
     call    smpBoot
+
+    ; the PCI bus: how many functions answered, which is the number a driver's
+    ; first pass over the bus would count for itself
+    call    pciScan
+    mov     si, msg_pci
+    call    puts
+    mov     al, [es:BDA_PCI_NDEV]
+    xor     ah, ah
+    call    putn
+    mov     si, msg_pci_tail
+    call    puts
 
     mov     si, msg_step_boot
     call    splashStep
@@ -643,6 +655,12 @@ int10:
     mov     ah, COLS
     jmp     .out
 .not_getmode:
+    cmp     ah, 0x02                ; set cursor: the BDA is where tty reads it
+    jne     .not_setpos
+    mov     [es:BDA_CURSOR_ROW], dh
+    mov     [es:BDA_CURSOR_COL], dl
+    jmp     .out
+.not_setpos:
     cmp     ah, 0x03                ; get cursor
     jne     .out
     mov     dh, [es:BDA_CURSOR_ROW]
@@ -665,6 +683,8 @@ clear_text:
     push    cx
     push    di
     push    es
+    mov     byte [es:BDA_CURSOR_ROW], 0
+    mov     byte [es:BDA_CURSOR_COL], 0
     mov     ax, TEXT_SEG
     mov     es, ax
     xor     di, di
@@ -1049,6 +1069,7 @@ int09:
     iret
 
 %include "setup.inc"
+%include "pci.inc"
 %include "splash.inc"
 %include "gx620.inc"
 %include "boot.inc"
@@ -1068,6 +1089,8 @@ msg_boot:   db "Booting from device 0x80...", 13, 10, 0
 msg_cores:  db "Cores: ", 0
 msg_smp:    db "SMP: ", 0
 msg_cores_online: db " core(s) online", 13, 10, 0
+msg_pci:    db "PCI: ", 0
+msg_pci_tail: db " function(s) on bus 0", 13, 10, 0
 msg_nodev:  db "No bootable device.", 13, 10, 0
 
 ; set 1 scan codes, straight out of the 8042

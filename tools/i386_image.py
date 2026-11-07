@@ -36,6 +36,7 @@ ROOT = Path(__file__).resolve().parent.parent
 RVDIR = ROOT / "userspace" / "i386"
 BIOS = RVDIR / "bios.bin"
 BOOT = RVDIR / "mbr.bin"
+MEOW = RVDIR / "meow.bin"
 OUT = ROOT / "userspace" / "i386" / "assets" / "X.image.jsa"
 SRC = ROOT / "userspace" / "i386" / "assets" / "X.image.src"
 
@@ -73,10 +74,20 @@ def disk_image() -> bytes:
     return disk.ljust(DISK_SECTORS * SECTOR, b"\0")
 
 
-def build() -> bytes:
+def meow_disk() -> bytes:
+    """The same disk with the cat sector in slot 0: a tune on PIT channel 2."""
+    sector = MEOW.read_bytes()
+    if sector[510:512] != b"\x55\xaa":
+        raise SystemExit("the cat sector does not end with 0xAA55")
+    disk = sector + b"\0" * (DISK_SECTORS * SECTOR - SECTOR)
+    return disk
+
+
+def build(disk: bytes | None = None) -> bytes:
     image = bytearray(RAM_SIZE)
     image[BIOS_AT:ROM_TOP] = rom()
-    disk = disk_image()
+    if disk is None:
+        disk = disk_image()
     image[DISK_AT:DISK_AT + len(disk)] = disk
     return bytes(image)
 
@@ -90,11 +101,12 @@ def words(data: bytes) -> list[int]:
     return [int.from_bytes(data[i:i + 4], "little") for i in range(0, len(data), 4)]
 
 
-def emit_jsw() -> None:
+def emit_jsw(disk: bytes | None = None) -> None:
     """Write the ROM and the disk as `.jsa` lists the project can import."""
     assets = RVDIR / "assets" / "lists"
     assets.mkdir(parents=True, exist_ok=True)
-    for name, data in (("bios.jsa", rom()), ("disk.jsa", disk_image())):
+    for name, data in (("bios.jsa", rom()),
+                       ("disk.jsa", disk if disk is not None else disk_image())):
         (assets / name).write_text(json.dumps(words(data)), encoding="utf-8")
         print(f"{name}: {len(data):,} bytes -> {len(words(data)):,} words")
 
@@ -117,9 +129,11 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--check", action="store_true", help="boot it in the model")
     parser.add_argument("--out", help="write a flat binary as well")
     parser.add_argument("--steps", type=int, default=200_000)
+    parser.add_argument("--meow", action="store_true",
+                        help="stage the cat sector as the boot sector")
     args = parser.parse_args(argv)
 
-    image = build()
+    image = build(meow_disk() if args.meow else None)
     print(f"image {len(image):,} bytes: bios {BIOS.name}, "
           f"disk {DISK_SECTORS} sectors at {DISK_AT:#07x}")
     if args.out:
@@ -128,7 +142,7 @@ def main(argv: list[str]) -> int:
     OUT.parent.mkdir(parents=True, exist_ok=True)
     OUT.write_text(json.dumps(list(image)), encoding="utf-8")
     SRC.write_text("i386: bios.elf + mbr.elf\n", encoding="utf-8")
-    emit_jsw()
+    emit_jsw(meow_disk() if args.meow else None)
     if args.check:
         return check(image, args.steps)
     return 0

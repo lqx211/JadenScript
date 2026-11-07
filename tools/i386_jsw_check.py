@@ -71,13 +71,18 @@ def machine() -> jsw_sim.Env:
     env.procs = classes["Cpu"].procs
     env.threads.append({})
     env.current = 0
-    # the model has one core, so the machine under test must be asked for one
+    # the model has one core, so the machine under test must be asked for one --
+    # and the board's own record of it too, because hwApply hands the CMOS to the
+    # chipset at POST and would otherwise ask for the two the battery comes with.
+    # A clone cannot check in under the simulator, so a second core is exactly
+    # the difference this comparison cannot model.
     env.vars["X.cores"] = 1
     gen = jsw_sim.call(env, classes["Cpu"].procs["powerOn"], [])
     try:
         next(gen)
     except StopIteration:
         pass
+    env.lists["X.cmos"][56] = 0          # 0x38, in a 1-based list: one core
     return env
 
 
@@ -107,6 +112,7 @@ def main(argv: list[str]) -> int:
 
     mach = ref.Machine()
     mach.ram[:] = i386_image.build()
+    mach.cmos[0x38] = 0                  # the same one core, the same way
     mach.sreg[ref.SEG_CS] = ref.RESET_CS
     mach.eip = ref.RESET_IP
     if args.code is not None:
@@ -159,6 +165,18 @@ def main(argv: list[str]) -> int:
                   f"ref {mach.sreg[ref.SEG_CS]:04x}:{mach.eip:04x}")
             print(f"  jsw ir {int(env.vars['ir']):#x} err {env.vars['err']!r} "
                   f"last {env.where_stmt}")
+            # the registers are where the difference actually is, so print them:
+            # a flags disagreement looks identical to an address one otherwise
+            names = ("eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi")
+            print("  jsw " + " ".join(f"{n}={int(env.lists['r'][i]):#010x}"
+                                      for i, n in enumerate(names)))
+            print("  ref " + " ".join(f"{n}={mach.reg[i]:#010x}"
+                                      for i, n in enumerate(names)))
+            print(f"  jsw flags {int(env.vars['fl']):#06x}   "
+                  f"ref flags {mach.eflags:#06x}")
+            for key in ("v", "oz", "dsz", "X.pciAddr"):
+                if key in env.vars:
+                    print(f"  jsw {key} {int(env.vars[key]):#x}")
             return 1
     if int(env.vars["halted"]) == 1 and env.vars["err"] != "":
         print(f"the machine halted on its own at {int(env.vars['steps']):,}: "
@@ -167,6 +185,11 @@ def main(argv: list[str]) -> int:
     print(f"agree on {compared:,} instructions "
           f"(jsw {int(env.vars['steps']):,} retired, ref {mach.steps:,})")
     if args.code is not None:
+        names = ("eax", "ecx", "edx", "ebx")
+        print("  jsw " + " ".join(f"{n}={int(env.lists['r'][i]):#010x}"
+                                  for i, n in enumerate(names)))
+        print("  ref " + " ".join(f"{n}={mach.reg[i]:#010x}"
+                                  for i, n in enumerate(names)))
         # a --code run starts from a bare machine, so the text planes are not
         # the thing to compare: the program's own memory is. Everything it
         # wrote goes through the same byte path either way.

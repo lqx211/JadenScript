@@ -26,13 +26,14 @@
 ; place you go, not a key you press: the Exit page is the only way out.
 ; ---------------------------------------------------------------------------
 
-SU_BUF   equ 0x500                  ; the working copy: 16 bytes in the data area
-SU_ITEM  equ 0x510                  ; which row is selected
-; these three used to live inside SU_BUF (0x50C..0x50E), which was fine while
-; the buffer only had eleven rows. It has fifteen now, so they moved out.
-SU_TAB   equ 0x511                  ; which page: 0 Main, 1 Info, 2 Exit
-SU_OLD   equ 0x512                  ; the value before an edit, for Esc
-SU_OPT   equ 0x513                  ; which button the exit prompt has lit
+SU_BUF   equ 0x540                  ; the working copy: 24 bytes in the data area
+SU_ITEM  equ 0x558                  ; which row is selected
+; these moved twice: once out of the buffer when it grew past eleven rows, and
+; once clear of the boot menu's own scratch bytes (0x511..0x51C) when it grew
+; past sixteen. Nothing else lives between 0x534 and 0x5A0.
+SU_TAB   equ 0x559                  ; which page: 0 Main, 1 Info, 2 Exit
+SU_OLD   equ 0x55A                  ; the value before an edit, for Esc
+SU_OPT   equ 0x55B                  ; which button the exit prompt has lit
 SU_N     equ 11                     ; how many rows (the last is read-only)
 
 ; attribute bytes. White on blue, not grey on blue: a 720 x 400 screen that is
@@ -301,6 +302,36 @@ suLoad:
     mov     al, 10
 .mem_ok:
     mov     [es:SU_BUF + 9], al
+    ; the emulation's own knobs: cores, threads, performance, clock rate. Each
+    ; is edited as an index and stored as one, so a blank battery is row 0.
+    mov     al, 0x38                ; the core count, less one
+    call    cmos_read
+    cmp     al, 15
+    jbe     .cores_ok
+    mov     al, 1                   ; two cores, the way the chipset comes up
+.cores_ok:
+    mov     [es:SU_BUF + 15], al
+    mov     al, 0x39                ; threads per core, less one
+    call    cmos_read
+    cmp     al, 3
+    jbe     .threads_ok
+    xor     al, al
+.threads_ok:
+    mov     [es:SU_BUF + 16], al
+    mov     al, 0x3A                ; which entry of the performance table
+    call    cmos_read
+    cmp     al, 7
+    jbe     .perf_ok
+    xor     al, al                  ; 1x: nobody's multiplier but the real one
+.perf_ok:
+    mov     [es:SU_BUF + 17], al
+    mov     al, 0x3B                ; which entry of the clock-rate table
+    call    cmos_read
+    cmp     al, 5
+    jbe     .rate_ok
+    xor     al, al                  ; 100%: the guest's clock keeps real time
+.rate_ok:
+    mov     [es:SU_BUF + 18], al
     ret
 
 suSave:
@@ -381,6 +412,22 @@ suSave:
     mov     al, [es:SU_BUF + 14]
     mov     cl, al
     mov     al, 0x37
+    call    cmos_write
+    mov     al, [es:SU_BUF + 15]
+    mov     cl, al
+    mov     al, 0x38
+    call    cmos_write
+    mov     al, [es:SU_BUF + 16]
+    mov     cl, al
+    mov     al, 0x39
+    call    cmos_write
+    mov     al, [es:SU_BUF + 17]
+    mov     cl, al
+    mov     al, 0x3A
+    call    cmos_write
+    mov     al, [es:SU_BUF + 18]
+    mov     cl, al
+    mov     al, 0x3B
     call    cmos_write
     ; a checksum a real board keeps, so the battery can be declared good
     mov     al, 0x31
@@ -521,6 +568,18 @@ suAdjust:
     cmp     bl, 11
     je      .wrap
     cmp     bl, 12
+    je      .wrap
+    mov     cl, 8                   ; the performance multiplier
+    cmp     bl, 17
+    je      .wrap
+    mov     cl, 6                   ; the guest clock's rate
+    cmp     bl, 18
+    je      .wrap
+    mov     cl, 16                  ; how many cores there are, less one
+    cmp     bl, 15
+    je      .wrap
+    mov     cl, 4                   ; threads per core, less one
+    cmp     bl, 16
     je      .wrap
     mov     cl, 5                   ; the clock and the repeat rate
 .wrap:
@@ -2030,10 +2089,12 @@ suValue:
     mov     bl, al
     mov     si, bx                  ; si = the row, for the buffer and the tables
     mov     al, [es:SU_BUF + si]    ; the value, 0..99
-    cmp     ah, 14
+    cmp     ah, 18
     jbe     .known
     jmp     .done                   ; no such row
 .known:
+    cmp     ah, 15
+    jae     .hardware               ; the emulation's own four knobs
     cmp     ah, 11
     jae     .named                  ; the emulation rows are named values
     cmp     ah, 10
@@ -2053,6 +2114,23 @@ suValue:
 .two:
     mov     bl, [es:SU_INK]
     call    put2
+    jmp     .done
+.hardware:
+    ; rows 15..18 each read their name out of their own table, so the value the
+    ; dialog shows is a word ("4", "2x", "100%"), not a raw index
+    mov     al, [es:SU_BUF + si]
+    xor     ah, ah
+    add     ax, ax                  ; the value, as a word index
+    mov     di, ax
+    mov     al, [es:SU_ITEM]
+    sub     al, 15
+    xor     ah, ah
+    add     ax, ax
+    mov     si, ax
+    mov     bx, [si + su_hwtabs]    ; si+di is not an 8086 address, bx+di is
+    mov     si, [di + bx]
+    mov     bl, [es:SU_INK]
+    call    suPrint
     jmp     .done
 .named:
     mov     al, [es:SU_BUF + si]
@@ -2284,6 +2362,7 @@ su_labels:
     dw su_row_month, su_row_day, su_row_year, su_row_hour, su_row_min
     dw su_row_sec, su_row_flop, su_row_disk, su_row_boot, su_row_mem
     dw su_row_cpu, su_row_emu, su_row_batt, su_row_freq, su_row_repeat
+    dw su_row_cores, su_row_threads, su_row_perf, su_row_time
 
 ; the detail panel: two short lines per item, the way a setup utility explains
 ; the row that is selected
@@ -2291,10 +2370,12 @@ su_d1:
     dw su_h_month_a, su_h_day_a, su_h_year_a, su_h_hour_a, su_h_min_a
     dw su_h_sec_a, su_h_flop_a, su_h_disk_a, su_h_boot_a, su_h_mem_a
     dw su_h_cpu_a, su_h_emu_a, su_h_batt_a, su_h_freq_a, su_h_rep_a
+    dw su_h_cores_a, su_h_thr_a, su_h_perf_a, su_h_time_a
 su_d2:
     dw su_h_month_b, su_h_day_b, su_h_year_b, su_h_hour_b, su_h_min_b
     dw su_h_sec_b, su_h_flop_b, su_h_disk_b, su_h_boot_b, su_h_mem_b
     dw su_h_cpu_b, su_h_emu_b, su_h_batt_b, su_h_freq_b, su_h_rep_b
+    dw su_h_cores_b, su_h_thr_b, su_h_perf_b, su_h_time_b
 
 su_h_month_a: db "The clock's month at boot.", 0
 su_h_month_b: db "CMOS keeps it in BCD.", 0
@@ -2317,7 +2398,7 @@ su_h_boot_b:  db "first. A: then C: is the PC.", 0
 su_h_mem_a:   db "Base memory in 64 KiB steps.", 0
 su_h_mem_b:   db "640 KB is conventional.", 0
 su_h_cpu_a:   db "Cores the chipset reports on", 0
-su_h_cpu_b:   db "port 0x5A0. This one is fixed.", 0
+su_h_cpu_b:   db "port 0x5A0. CPU Cores sets it.", 0
 su_h_emu_a:   db "The master switch for everything", 0
 su_h_emu_b:   db "on the HW Emulation page.", 0
 su_h_batt_a:  db "The CMOS battery the settings", 0
@@ -2332,6 +2413,20 @@ su_row_repeat: db "Key Repeat", 0
 
 su_h_rep_a:   db "How often a held key repeats.", 0
 su_h_rep_b:   db "The delay before it starts is 2/5 s.", 0
+
+su_row_cores:  db "CPU Cores", 0
+su_row_threads: db "CPU Threads", 0
+su_row_perf:   db "Performance Emu", 0
+su_row_time:   db "Fake OS Time", 0
+
+su_h_cores_a: db "How many cores the chipset gives", 0
+su_h_cores_b: db "the guest. 1 to 16; takes a reboot.", 0
+su_h_thr_a:   db "Instruction budget per core, per", 0
+su_h_thr_b:   db "frame. More threads, more steps.", 0
+su_h_perf_a:  db "Multiplies the clock the monitor", 0
+su_h_perf_b:  db "reports. Changes the claim, not the speed.", 0
+su_h_time_a:  db "The guest's clock, as a percentage", 0
+su_h_time_b:  db "of real time. The CPU ignores it.", 0
 
 su_kr_0:      db "1/2 s", 0
 su_kr_1:      db "1/4 s", 0
@@ -2375,3 +2470,77 @@ su_bo_2:        db "C: only", 0
 su_bo_3:        db "CD-ROM first", 0
 su_boot:
     dw su_bo_0, su_bo_1, su_bo_2, su_bo_3
+
+; ---------------------------------------------------------------------------
+; The emulation's four knobs, as words. These are the only settings on this
+; board that change what the *emulator* does rather than what the guest sees,
+; so each is stored as an index into a table that the chipset is then handed.
+; ---------------------------------------------------------------------------
+
+; CPU Cores. The chipset takes the count, one to sixteen; the row edits
+; "count less one", because a wrap table counts from zero.
+su_co_0:  db "1", 0
+su_co_1:  db "2", 0
+su_co_2:  db "3", 0
+su_co_3:  db "4", 0
+su_co_4:  db "5", 0
+su_co_5:  db "6", 0
+su_co_6:  db "7", 0
+su_co_7:  db "8", 0
+su_co_8:  db "9", 0
+su_co_9:  db "10", 0
+su_co_10: db "11", 0
+su_co_11: db "12", 0
+su_co_12: db "13", 0
+su_co_13: db "14", 0
+su_co_14: db "15", 0
+su_co_15: db "16", 0
+su_cores:
+    dw su_co_0, su_co_1, su_co_2, su_co_3, su_co_4, su_co_5, su_co_6, su_co_7
+    dw su_co_8, su_co_9, su_co_10, su_co_11, su_co_12, su_co_13, su_co_14
+    dw su_co_15
+
+; CPU Threads: how much of a frame each core is given, as a multiplier on the
+; instruction budget. One is a 386; four is a machine that finishes its batch
+; and spends the rest of the frame waiting, which is what a second thread does.
+su_th_0:  db "1 per core", 0
+su_th_1:  db "2 per core", 0
+su_th_2:  db "3 per core", 0
+su_th_3:  db "4 per core", 0
+su_threads:
+    dw su_th_0, su_th_1, su_th_2, su_th_3
+
+; Performance Emu: the multiplier applied to the measured instruction rate
+; before it is printed as a clock. It is a claim about the machine, not a
+; change to it -- a 25 MHz board that retires 4x runs as a 100 MHz one.
+su_pf_0:  db "1x (measured)", 0
+su_pf_1:  db "2x", 0
+su_pf_2:  db "3x", 0
+su_pf_3:  db "4x", 0
+su_pf_4:  db "6x", 0
+su_pf_5:  db "8x", 0
+su_pf_6:  db "12x", 0
+su_pf_7:  db "16x", 0
+su_perf:
+    dw su_pf_0, su_pf_1, su_pf_2, su_pf_3, su_pf_4, su_pf_5, su_pf_6, su_pf_7
+
+; Fake OS Time: the guest's clock as a percentage of real time. Below 100 the
+; RTC crawls while the CPU keeps running, so a boot that took real seconds
+; reports fewer of them -- the guest believes the machine is faster than it is.
+su_tm_0:  db "100% (real)", 0
+su_tm_1:  db "75%", 0
+su_tm_2:  db "50%", 0
+su_tm_3:  db "25% (4x faster)", 0
+su_tm_4:  db "10% (10x faster)", 0
+su_tm_5:  db "5% (20x faster)", 0
+su_time:
+    dw su_tm_0, su_tm_1, su_tm_2, su_tm_3, su_tm_4, su_tm_5
+
+su_hwtabs:
+    dw su_cores, su_threads, su_perf, su_time
+
+; the words the numeric rows hold, for the chipset to read back
+su_hwcores:  db 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16
+su_hwthreads: db 1, 2, 3, 4
+su_hwperf:   db 1, 2, 3, 4, 6, 8, 12, 16
+su_hwtime:   db 100, 75, 50, 25, 10, 5

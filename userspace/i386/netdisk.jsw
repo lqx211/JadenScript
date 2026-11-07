@@ -1,0 +1,135 @@
+/*
+ * netdisk — the hard disk, on the network, on its own thread.
+ *
+ * The drive in this machine is 128 sectors of a Scratch list, staged at build
+ * time out of `assets/lists/disk.jsa`. That is what makes the boot sector
+ * arrive in one frame instead of after a round trip. What a list cannot do is
+ * survive: close the tab and every write the guest ever made is gone.
+ *
+ * So this sprite is the drive's back end. It holds one WebSocket to
+ * `tools/i386_disk.py` -- a file, on this machine, with a fault model and a
+ * panel -- and it does two things with it:
+ *
+ *   * it forwards every sector the CPU writes (port 0x1F0, command 0x30), as
+ *     the 32-bit words the machine actually holds, so the file on the host is
+ *     the disk and the list is only its cache;
+ *   * it reports every sector the CPU reads, so the host's SMART log and its
+ *     panel see the traffic a real drive would.
+ *
+ * The split matters. A synchronous ATA read cannot wait for a network round
+ * trip: the firmware polls the status register once and gives up, which is why
+ * a boot from a cold network disk is a boot that hangs. Read-ahead is the
+ * answer a real drive gives, and it is the answer here -- the image is staged,
+ * reads hit it, and the network carries the writes back.
+ *
+ * A write is therefore a *cached* write, and a cached write can fail after the
+ * drive has already said yes. That is not a fudge: a drive with its write cache
+ * on really does report the failure on the next command, and this one raises
+ * the error bit for exactly one command when the host says the platter refused
+ * it. `X.netFails` counts them, and the panel on the host shows the sector.
+ *
+ * Nothing here is required. With no server listening the socket fails to open
+ * in a few frames, `X.netOn` stays 0, and the machine boots from the staged
+ * image exactly as it always did.
+ */
+class NetDisk {
+    private url = "ws://127.0.0.1:65440";
+    private waited = 0;
+    private sent = 0;
+    private msg = "";
+    private head = "";
+
+    public void netStart() { // hook: green flag
+        Looks.hide();
+        X.netOn = 0;
+        X.netAcks = 0;
+        X.netFails = 0;
+        X.netLast = "";
+        X.netDeferred = 0;
+        X.netOut.clear();
+        WebSocket.connectTo(url);
+        /* Two seconds of frames, not a spin: a socket that is refused has to
+         * report back, and on a backgrounded tab a frame is a second long. */
+        waited = 0;
+        while (WebSocket.isConnected < 1 && waited < 120) {
+            Control.wait(0);
+            waited += 1;
+        }
+        if (WebSocket.isConnected < 1) {
+            return;                         // no server: the staged image boots
+        }
+        X.netOn = 1;
+        WebSocket.sendMessage("I");         // who the drive says it is
+        while (1) {
+            pump();
+            Control.wait(0);
+        }
+    }
+
+    /* Eight messages a frame: enough that a burst of writes drains quickly, few
+     * enough that the socket never becomes the frame's whole cost. */
+    private void pump() { // warp
+        sent = 0;
+        while (X.netOut.length() > 0 && sent < 8) {
+            msg = X.netOut.get(1);
+            X.netOut.delete(1);
+            WebSocket.sendMessage(msg);
+            sent += 1;
+        }
+    }
+
+    /* The reply, one line at a time. "W ok" is four characters and every reason
+     * it can give instead is longer, which is the whole test. */
+    public void netMessage() { // hook: WebSocket.onMessage
+        msg = WebSocket.receivedMessageData;
+        head = "";
+        if (Operators.length(msg) > 0) {
+            head = Operators.letterOf(1, msg);
+        }
+        if (head == "W") {
+            if (Operators.length(msg) < 5) {
+                X.netAcks += 1;
+                return;
+            }
+            writeFailed();
+            return;
+        }
+        if (head == "I") {
+            X.netIdent = msg;
+            return;
+        }
+        if (head == "E") {
+            X.netFails += 1;
+            X.netLast = msg;
+            writeFailed();
+            return;
+        }
+    }
+
+    /* The platter refused a sector the drive has already acknowledged. A real
+     * drive raises the error bit on the next status read, and only then -- so
+     * this does too, and if a transfer is in flight it waits for the command
+     * that follows rather than tearing up the one that is running. */
+    private void writeFailed() { // warp
+        X.netFails += 1;
+        X.netLast = msg;
+        if (X.ataStatus == 64) {
+            X.ataErr = 64;                  // uncorrectable: the write was lost
+            X.ataStatus = 65;               // ready, with an error
+            return;
+        }
+        X.netDeferred = 1;
+    }
+
+    public void netOpened() { // hook: WebSocket.onOpen
+        X.netOn = 1;
+    }
+
+    public void netClosed() { // hook: WebSocket.onClose
+        X.netOn = 0;
+    }
+
+    public void netErrored() { // hook: WebSocket.onError
+        X.netOn = 0;
+    }
+}

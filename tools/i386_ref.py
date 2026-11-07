@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import math
 
+PIT_HZ = 1_193_182                 # the 8254's input clock
 RAM_SIZE = 1 << 20
 TEXT_BASE = 0x000B_8000
 TEXT_COLS = 80
@@ -109,6 +110,21 @@ REG32 = ("eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi")
 #: what a fresh board's battery holds. The clock registers are BCD, the memory
 #: size is in KiB across two bytes, and 0x30 is ours: a boot counter that only
 #: exists because the battery does.
+#: The PCI bus, as a 440FX board has one: a host bridge, an ISA bridge, the IDE
+#: controller and its bus-master function, a video card, and the AHCI controller
+#: this machine really does answer for. A guest finds hardware by reading this
+#: table through 0xCF8/0xCFC, which is the whole point of PCI: nothing is at a
+#: fixed address that a driver may assume.
+#:   (bus, device, function, vendor, device, class<<16|sub<<8|progif, bars...)
+PCI_DEVICES = [
+    (0, 0, 0, 0x8086, 0x1237, 0x060000, []),                # 440FX host bridge
+    (0, 1, 0, 0x8086, 0x7000, 0x068000, []),                # PIIX3 ISA bridge
+    (0, 1, 1, 0x8086, 0x7010, 0x010180,                     # PIIX3 IDE, native
+     [0x000001F1, 0x000003F5, 0x00000171, 0x00000375, 0x0000C001]),
+    (0, 2, 0, 0x1234, 0x1111, 0x030000, [0xE0000000]),      # JSW VGA
+    (0, 3, 0, 0x8086, 0x2829, 0x010601, [0x000D0000]),      # AHCI (SATA)
+]
+
 CMOS_DEFAULTS = {
     0x00: 0x00,          # seconds
     0x01: 0x00,          # seconds alarm
@@ -137,6 +153,10 @@ CMOS_DEFAULTS = {
     0x35: 0x01,          # battery: fitted
     0x36: 0x02,          # CPU frequency: 33 MHz, the setup's table entry 2
     0x37: 0x02,          # key repeat: 1/8 s, the entry that feels like a PC
+    0x38: 0x01,          # cores, less one: two, which is what X.cores starts at
+    0x39: 0x00,          # threads per core
+    0x3A: 0x00,          # Performance Emu: 1x
+    0x3B: 0x00,          # Fake OS Time: 100%, real time
 }
 
 
@@ -515,6 +535,11 @@ class Machine:
         self.emu_on = 1
         self.key_repeat = 120             # ms between repeats of a held key
         self.core_run = [0] * 16
+        self.pci_addr = 0                 # 0xCF8: which dword the next read means
+        self.pci_devices = PCI_DEVICES
+        self.threads = 1                  # instruction budget multiplier per core
+        self.perf_factor = 1              # multiplier on the reported clock
+        self.time_rate = 100              # per cent: how fast the guest's clock runs
         self.cmos = bytearray(128)
         self.cmos_index = 0
         # the board's clock and interrupt controller
@@ -971,6 +996,11 @@ class Machine:
             return self.pic2.imr
         if port == 0x61:                  # the speaker port: timer 2's gate
             return self.ports.get(0x61, 0)
+        if port == 0x5BC:                 # how open the gate is
+            return self.ports.get(0x61, 0) & 3
+        if port in (0x5BA, 0x5BB):        # the tone the speaker is making
+            hz = self.speaker_hz()
+            return hz & 0xFF if port == 0x5BA else (hz >> 8) & 0xFF
         if port == 0x310:
             return self.scsi_data()
         if port == 0x316:
@@ -993,7 +1023,19 @@ class Machine:
             return self.ata_drv
         if port in (0x1F7, 0x3F6):
             return self.ata_status
+        if port == 0xCF8:
+            return self.pci_addr & 0xFFFFFFFF
+        if 0xCFC <= port <= 0xCFF:
+            return self.pci_read(port - 0xCFC, size)
         if port == 0x5A0:
+            return self.cores
+        if port == 0x5AB:
+            return self.threads
+        if port == 0x5AC:
+            return self.perf_factor
+        if port == 0x5AD:
+            return self.time_rate
+        if port == 0x5AE:
             return self.cores
         if port == 0x5A6:                 # the core selected on 0x5A5
             return self.core_usage(self.core_sel)
@@ -1058,7 +1100,25 @@ class Machine:
             return 0x01 if self.keys else 0
         return self.ports.get(port, 0xFF)
 
+    def speaker_hz(self) -> int:
+        """What the speaker sounds like: channel 2's divisor, behind a gate.
+
+        0x61 bit 0 lets timer 2's square wave through and bit 1 enables the
+        speaker behind it, so both have to be set -- a guest that programs the
+        divisor and stops hears nothing, which is the classic PC-speaker bug.
+        """
+        if self.ports.get(0x61, 0) & 3 != 3:
+            return 0
+        divisor = self.pit.reload[2] or 0x10000
+        return PIT_HZ // divisor
+
     def port_out(self, port, value, size):
+        if port == 0xCF8:
+            self.pci_addr = value & 0xFFFFFFFF
+            return
+        if 0xCFC <= port <= 0xCFF:
+            self.pci_write(port - 0xCFC, value, size)
+            return
         if port == 0x43:
             self.pit.control(value & 0xFF)
             return
@@ -1097,6 +1157,27 @@ class Machine:
             return
         if port == 0x5AA:                 # key repeat, in units of 10 ms
             self.key_repeat = (value & 0xFF) * 10
+            return
+        if port == 0x5AB:                 # instruction budget per core
+            if 1 <= (value & 0xFF) <= 4:
+                self.threads = value & 0xFF
+            return
+        if port == 0x5AC:                 # the performance multiplier
+            if 1 <= (value & 0xFF) <= 16:
+                self.perf_factor = value & 0xFF
+            return
+        if port == 0x5AD:                 # the guest's clock, per cent
+            if 10 <= (value & 0xFF) <= 255:
+                self.time_rate = value & 0xFF
+            return
+        if port == 0x5AE:                 # how many cores there should be
+            cores = value & 0xFF
+            if 1 <= cores <= 16:
+                self.cores = cores
+                for index in range(cores + 1, 16):
+                    self.core_run[index] = 0
+                if self.core_sel > cores:
+                    self.core_sel = cores
             return
         if port == 0x311:
             self.scsi_command(value & 0xFF)
@@ -1423,6 +1504,66 @@ class Machine:
         self.eip = self.pop(size) & self.ipmask
         self.loadseg(SEG_CS, self.pop(size))
         self.eflags = (self.eflags & ~MASK[size]) | self.pop(size) | FLAG_ALWAYS
+
+    # ---- the PCI bus -------------------------------------------------
+
+    def pci_dword(self, bus, device, function, index):
+        """One dword of a device's 256-byte configuration space.
+
+        Only the first 64 bytes exist on this bus; the rest reads as zero, which
+        is what a device that has no extended capability list reports.
+        """
+        for entry in self.pci_devices:
+            if (entry[0], entry[1], entry[2]) != (bus, device, function):
+                continue
+            _, _, _, vendor, ident, cls, bars = entry
+            if index == 0:
+                return vendor | (ident << 16)
+            if index == 1:
+                # status: capability list absent, DEVSEL medium, and the
+                # command register at power-on: I/O and memory space both off
+                return 0x0200 << 16
+            if index == 2:
+                return (cls << 8) | 0x00            # class, subclass, prog-if, rev
+            if index == 3:
+                # the header type, in bits 16..23: bit 7 says this slot has more
+                # than one function, which is how a scan knows to look past fn 0
+                siblings = any(other[0] == bus and other[1] == device
+                               and other[2] != function
+                               for other in self.pci_devices)
+                return (0x80 if siblings else 0x00) << 16
+            if 4 <= index <= 9:
+                slot = index - 4
+                if slot < len(bars):
+                    return bars[slot]
+                return 0
+            if index == 11:
+                return vendor << 16 | ident         # subsystem: the same pair
+            if index == 15:
+                return 0x0100 | (device + 10)       # INTA, and a plausible line
+            return 0
+        return 0xFFFFFFFF                            # nothing there
+
+    def pci_read(self, byte_lane, size):
+        lane = byte_lane & 3
+        if not self.pci_addr & 0x80000000:
+            return 0
+        bus = (self.pci_addr >> 16) & 0xFF
+        device = (self.pci_addr >> 11) & 0x1F
+        function = (self.pci_addr >> 8) & 0x07
+        index = (self.pci_addr >> 2) & 0x3F
+        dword = self.pci_dword(bus, device, function, index)
+        if size == 1:
+            return (dword >> (lane * 8)) & 0xFF
+        if size == 2:
+            return (dword >> (lane * 8)) & 0xFFFF
+        return dword & 0xFFFFFFFF
+
+    def pci_write(self, byte_lane, value, size):
+        # every writable field on this board is a claim the BIOS makes, not one
+        # the guest gets to change, so a write is recorded and otherwise ignored
+        self.ports[0xCFC + (byte_lane & 3)] = value
+        return
 
     # ---- output ------------------------------------------------------
 
@@ -2098,6 +2239,11 @@ def execute(m):
         return
     if op == 0x0F:
         two_byte(m, size, seg, addr_size)
+        return
+    if 0xD8 <= op <= 0xDF:
+        # no coprocessor is fitted, so the escape traps: interrupt 7, exactly
+        # what a 386SX does when a program tries to use a 387 that is not there
+        m.interrupt(7)
         return
     raise NotImplementedError(f"opcode {op:#04x} at {m.eip - 1:04x}")
 

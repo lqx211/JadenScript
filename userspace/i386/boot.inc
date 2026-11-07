@@ -375,6 +375,53 @@ hwApply:
     mov     al, [cs:hw_keyrep + si]
     mov     dx, 0x5AA               ; in units of 10 ms: a byte cannot hold 1/2 s
     out     dx, al
+    ; how many cores, and how hard each is driven. The chipset spawns the ones
+    ; it does not have yet, so a raise here is felt without a power cycle; a
+    ; lower count parks them instead, which is what a hot-unplug looks like.
+    mov     al, 0x38
+    call    cmos_read
+    cmp     al, 15
+    jbe     .cores
+    mov     al, 1
+.cores:
+    xor     ah, ah
+    mov     si, ax
+    mov     al, [cs:su_hwcores + si]
+    mov     dx, 0x5AE
+    out     dx, al
+    mov     al, 0x39
+    call    cmos_read
+    cmp     al, 3
+    jbe     .threads
+    xor     al, al
+.threads:
+    xor     ah, ah
+    mov     si, ax
+    mov     al, [cs:su_hwthreads + si]
+    mov     dx, 0x5AB
+    out     dx, al
+    mov     al, 0x3A                ; the performance multiplier
+    call    cmos_read
+    cmp     al, 7
+    jbe     .perf
+    xor     al, al
+.perf:
+    xor     ah, ah
+    mov     si, ax
+    mov     al, [cs:su_hwperf + si]
+    mov     dx, 0x5AC
+    out     dx, al
+    mov     al, 0x3B                ; and the rate the guest's clock runs at
+    call    cmos_read
+    cmp     al, 5
+    jbe     .rate
+    xor     al, al
+.rate:
+    xor     ah, ah
+    mov     si, ax
+    mov     al, [cs:su_hwtime + si]
+    mov     dx, 0x5AD
+    out     dx, al
     pop     dx
     pop     bx
     pop     ax

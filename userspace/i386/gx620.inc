@@ -26,19 +26,20 @@
 ; this BIOS has always used. Nothing here invents state.
 ; ---------------------------------------------------------------------------
 
-GX_SEL   equ 0x521                  ; which visible row is selected
-GX_TOP   equ 0x522                  ; the first visible row shown
-GX_NVIS  equ 0x523                  ; how many rows the open tree has
-GX_HIDE  equ 0x524                  ; while walking: the depth folded away
-GX_NODE  equ 0x525                  ; the node the drawing loops are on
-GX_ROW   equ 0x526                  ; ... and the screen row
-GX_COL   equ 0x527                  ; ... and the column
-GX_LINE  equ 0x528                  ; ... and the line of a detail being printed
-GX_EXP   equ 0x5A0                  ; one byte per node: a group is open at 1
-GX_VIS   equ 0x5C0                  ; 32 bytes: the node index of each visible row
-GX_NODES equ 31
+GX_SEL   equ 0x560                  ; which visible row is selected
+GX_TOP   equ 0x561                  ; the first visible row shown
+GX_NVIS  equ 0x562                  ; how many rows the open tree has
+GX_HIDE  equ 0x563                  ; while walking: the depth folded away
+GX_NODE  equ 0x564                  ; the node the drawing loops are on
+GX_ROW   equ 0x565                  ; ... and the screen row
+GX_COL   equ 0x566                  ; ... and the column
+GX_LINE  equ 0x567                  ; ... and the line of a detail being printed
+GX_EXP   equ 0x580                  ; one byte per node: a group is open at 1
+GX_VIS   equ 0x5C0                  ; 64 bytes: the node index of each visible row
+GX_NODES equ 38
 GX_LIVE  equ 0xFFFE                 ; a page that reads the hardware, not the ROM
 GX_LIVEDRV equ 0xFFFD               ; ... the drive's identity, which it answers
+GX_LIVEPCI equ 0xFFFC               ; ... the PCI bus, which it walks
 
 GX_TOP_I equ 1                      ; the outer frame's first row inside
 GX_BOT_I equ 22                     ; ... and its bottom border
@@ -121,7 +122,7 @@ gxEnter:
 .editable:
     test    al, KIND_EDIT
     jz      .key                    ; a page of facts: nothing to change
-    and     al, 0x0F                ; the setting's number
+    and     al, 0x1F                ; the setting's number
     mov     [es:SU_ITEM], al
     call    suEdit                  ; the dialog this BIOS already had
     call    gxDraw
@@ -719,6 +720,111 @@ gxScrollBar:
     ret
 
 ; ---------------------------------------------------------------------------
+; gxPci -- the PCI page: every function the firmware found, read back live.
+;
+; The records come from the POST-time scan (pci.inc wrote them at PCI_TAB), and
+; each line's class comes from the bus itself: select the function, read
+; register 2, and the top three bytes are base class, sub-class and programming
+; interface. Nothing here is a table of what this board is supposed to have --
+; a device that stopped answering would vanish from the page.
+; ---------------------------------------------------------------------------
+gxPci:
+    push    ax
+    push    bx
+    push    cx
+    push    dx
+    push    si
+    push    di
+    mov     byte [es:CON_ATTR], SU_PAPER
+    mov     si, msg_gx_pci
+    call    gxStrLen
+    mov     dl, GX_RR
+    sub     dl, al
+    dec     dl
+    mov     dh, GX_FIRST
+    call    suGoto
+    mov     si, msg_gx_pci
+    mov     bl, SU_HEAD
+    call    suPrint
+    mov     dh, GX_FIRST + 1
+    mov     dl, GX_TX
+    mov     cx, GX_TW
+    mov     al, G_HBAR
+    mov     bl, SU_SEL
+    call    suBar
+    mov     byte [es:GX_ROW], GX_FIRST + 2
+    mov     byte [es:GX_NODE], 0        ; the record being printed
+.rec:
+    mov     al, [es:GX_NODE]
+    cmp     al, [es:BDA_PCI_NDEV]
+    jae     .out
+    mov     bl, al
+    xor     bh, bh
+    shl     bl, 3                       ; eight bytes a record
+    mov     di, PCI_TAB
+    add     di, bx
+    mov     dl, GX_TX
+    mov     dh, [es:GX_ROW]
+    call    suGoto
+    mov     al, ' '
+    call    putc
+    mov     al, [es:di]                 ; the slot, as two digits
+    call    puthex
+    mov     al, ':'
+    call    putc
+    mov     al, [es:di + 1]             ; then the function
+    call    puthex
+    mov     al, ' '
+    call    putc
+    call    putc
+    mov     al, [es:di + 3]             ; vendor, big-endian on screen
+    call    puthex
+    mov     al, [es:di + 2]
+    call    puthex
+    mov     al, ':'
+    call    putc
+    mov     al, [es:di + 5]
+    call    puthex
+    mov     al, [es:di + 4]
+    call    puthex
+    ; the class, out of the bus. The slot goes in bh because that is the
+    ; register pciSelectSlot reads it from; dh is the screen row.
+    mov     bh, [es:di]
+    mov     bl, [es:di + 1]
+    call    pciSelectSlot
+    mov     dx, PCI_ADDR
+    in      eax, dx
+    or      eax, 0x08                   ; register 2: class and revision
+    out     dx, eax
+    mov     dx, PCI_DATA
+    in      eax, dx
+    shr     eax, 16                     ; drop the revision
+    mov     [es:SU_OLD], ah             ; base and sub-class, for the line
+    mov     [es:SU_OPT], al
+    mov     dl, GX_TX + 18
+    mov     dh, [es:GX_ROW]
+    call    suGoto
+    mov     al, '['
+    call    putc
+    mov     al, [es:SU_OLD]
+    call    puthex
+    mov     al, [es:SU_OPT]
+    call    puthex
+    mov     al, ']'
+    call    putc
+    inc     byte [es:GX_ROW]
+    inc     byte [es:GX_NODE]
+    jmp     .rec
+.out:
+    pop     di
+    pop     si
+    pop     dx
+    pop     cx
+    pop     bx
+    pop     ax
+    ret
+
+; ---------------------------------------------------------------------------
 ; gxMonitor -- the Hardware Monitor page: one line per core, read live.
 ;
 ; Every other page is a table in the ROM. This one is not, so the page's detail
@@ -1187,12 +1293,17 @@ gxDrawRight:
     je      .monitor
     cmp     ax, GX_LIVEDRV
     je      .drive
+    cmp     ax, GX_LIVEPCI
+    je      .pci
     jmp     .static
 .monitor:
     call    gxMonitor
     jmp     .out
 .drive:
     call    gxDrive
+    jmp     .out
+.pci:
+    call    gxPci
     jmp     .out
 .static:
     ; the title, flush right
@@ -1331,7 +1442,14 @@ gx_nodes:
     NODE 1, KIND_EDIT | 13,         msg_gx_freq,     gx_d_freq
     NODE 1, KIND_EDIT | 14,         msg_gx_repeat,   gx_d_repeat
     NODE 1, 0,                      msg_gx_hwmon,    gx_d_hwmon
+    NODE 1, KIND_GROUP,             msg_gx_cpug,     gx_d_cpug
+    NODE 2, KIND_EDIT | 15,         msg_gx_cores,    gx_d_cores
+    NODE 2, KIND_EDIT | 16,         msg_gx_threads,  gx_d_threads
+    NODE 2, KIND_EDIT | 17,         msg_gx_perfe,    gx_d_perfe
+    NODE 1, KIND_GROUP,             msg_gx_clockg,   gx_d_clockg
+    NODE 2, KIND_EDIT | 18,         msg_gx_faketime, gx_d_faketime
     NODE 0, 0,                      msg_gx_video,    gx_d_video
+    NODE 0, 0,      msg_gx_pci,      gx_d_pci
     NODE 0, 0,                      msg_gx_perf,     gx_d_perf
     NODE 0, 0,                      msg_gx_security, gx_d_security
     NODE 0, 0,                      msg_gx_power,    gx_d_power
@@ -1366,6 +1484,13 @@ gx_d_batt:      dw msg_gx_batt, l_bt1, l_bt2, l_blank, l_edit, 0
 gx_d_freq:      dw msg_gx_freq, l_fq1, l_fq2, l_blank, l_edit, 0
 gx_d_repeat:    dw msg_gx_repeat, l_kr1, l_kr2, l_blank, l_edit, 0
 gx_d_hwmon:     dw msg_gx_hwmon, GX_LIVE, 0
+gx_d_pci:       dw msg_gx_pci, GX_LIVEPCI, 0
+gx_d_cpug:      dw msg_gx_cpug, l_cg1, l_cg2, l_blank, l_cg3, 0
+gx_d_cores:     dw msg_gx_cores, l_co1, l_co2, l_blank, l_edit, 0
+gx_d_threads:   dw msg_gx_threads, l_th1, l_th2, l_blank, l_edit, 0
+gx_d_perfe:     dw msg_gx_perfe, l_pe1, l_pe2, l_pe3, l_blank, l_edit, 0
+gx_d_clockg:    dw msg_gx_clockg, l_ck1, l_ck2, l_blank, l_ck3, 0
+gx_d_faketime:  dw msg_gx_faketime, l_ft1, l_ft2, l_ft3, l_blank, l_edit, 0
 gx_d_video:     dw msg_gx_video, l_vd1, l_vd2, l_vd3, l_blank, l_fixed, 0
 gx_d_perf:      dw msg_gx_perf, l_pf1, l_blank, l_fixed, 0
 gx_d_security:  dw msg_gx_security, l_se1, l_se2, l_blank, l_fixed, 0
@@ -1409,6 +1534,13 @@ msg_gx_emusw:      db "Emulation", 0
 msg_gx_batt:       db "BIOS Battery", 0
 msg_gx_freq:       db "CPU Frequency", 0
 msg_gx_hwmon:      db "Hardware Monitor", 0
+msg_gx_pci:        db "PCI Devices", 0
+msg_gx_cpug:       db "CPU", 0
+msg_gx_cores:      db "CPU Cores", 0
+msg_gx_threads:    db "CPU Threads", 0
+msg_gx_perfe:      db "Performance Emu", 0
+msg_gx_clockg:     db "Clock", 0
+msg_gx_faketime:   db "Fake OS Time", 0
 msg_gx_repeat:     db "Key Repeat", 0
 msg_gx_system:     db "System", 0
 msg_gx_sysinfo:    db "System Info", 0
@@ -1449,6 +1581,23 @@ l_kr2:   db "itself does. This is how often.", 0
 l_blank:  db "", 0
 l_fixed:  db "None of these fields are changeable.", 0
 l_edit:   db "Enter edits it; Esc leaves it alone.", 0
+
+l_cg1:    db "Every core below is one clone", 0
+l_cg2:    db "running this same program.", 0
+l_cg3:    db "Raise a count and the chipset makes it.", 0
+l_co1:    db "1 to 16 cores. The board reports", 0
+l_co2:    db "them on port 0x5A0 and wakes each", 0
+l_th1:    db "Work each core is given per frame,", 0
+l_th2:    db "as a multiple of the base batch.", 0
+l_pe1:    db "The measured instruction rate times", 0
+l_pe2:    db "this multiplier, reported as MHz.", 0
+l_pe3:    db "Nothing runs any faster for it.", 0
+l_ck1:    db "The RTC on the I/O ports, and every", 0
+l_ck2:    db "time the guest reads from it.", 0
+l_ck3:    db "Rate 100% is real time.", 0
+l_ft1:    db "Below 100% the guest's clock crawls", 0
+l_ft2:    db "while the CPU keeps running flat out,", 0
+l_ft3:    db "so a boot reports fewer seconds.", 0
 
 l_sys1:   db "System            = JSW 80386", 0
 l_si2:    db "BIOS Version          = A07 (03/31/06)", 0
