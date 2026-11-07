@@ -2204,10 +2204,25 @@ class I386MemoryMapTests(unittest.TestCase):
         self.assertEqual(self.read(procs, env, 0), 0x44)
         self.assertEqual(self.read(procs, env, 3), 0x11)
 
-    def test_the_aperture_is_open_bus_and_the_text_plane_is_not(self) -> None:
+    def test_the_aperture_is_the_graphics_card_and_the_text_plane_is_not(self) -> None:
+        """The aperture used to answer as an open bus, which is why a program
+        that set mode 13h painted a screen that never changed. It is the card's
+        own memory now -- 64 KiB of it, a byte a pixel -- and the text plane is
+        still its own 80 x 30 cells."""
+        import types
+
         env, procs = self.jsw()
-        self.assertEqual(self.read(procs, env, 0xA0000), 0xFF,
-                         "there is no card in the graphics aperture yet")
+
+        def run(name, args):
+            gen = jsw_sim.call(env, procs[name], args)
+            try:
+                next(gen)
+            except StopIteration:
+                pass
+
+        run("wrb", [0xA0000, 0x41])
+        self.assertEqual(self.read(procs, env, 0xA0000), 0x41,
+                         "a store at A0000 lands in the card's memory")
         self.assertEqual(self.read(procs, env, 0xB8000), 0x20,
                          "the text plane starts full of spaces")
 
@@ -2760,10 +2775,13 @@ class I386FirmwareApiTests(unittest.TestCase):
 
     BIN = ROOT / "userspace/i386/apiprobe.bin"
 
-    def boot(self, extended_kb: int = 0) -> rv.Machine:
-        blob = self.BIN.read_bytes()
-        image = bytearray(i386_image.build())
-        image[i386_image.DISK_AT:i386_image.DISK_AT + 512] = blob
+    def boot(self, extended_kb: int = 0, disk: bytes | None = None) -> rv.Machine:
+        # the firmware's own sector 1 is where `apiprobe` reads from, so its
+        # sector 0 is put in place: int 19h reads sector 0 through int 13h
+        image = bytearray(i386_image.build(disk))
+        image[i386_image.DISK_AT:i386_image.DISK_AT + 512] = self.BIN.read_bytes()
+        if disk is not None:
+            image[i386_image.DISK_AT + 512:i386_image.DISK_AT + 1024] = disk[512:1024]
         mach = rv.Machine()
         mach.ram[:] = bytes(image)
         mach.cmos[0x17] = extended_kb & 0xFF        # extended memory, KiB
@@ -2812,7 +2830,8 @@ class I386FirmwareApiTests(unittest.TestCase):
     def test_a_packet_read_moves_the_sector_the_guest_asked_for(self) -> None:
         """LBA 1 is the second sector and says STAGE2; the packet names LBA 1,
         and that is where it lands -- the arithmetic is the firmware's."""
-        mach = self.boot()
+        # the firmware's own disk, because that is the one with a sector 1
+        mach = self.boot(disk=i386_image.disk_image())
         self.assertEqual(bytes(mach.ram[0x900:0x906]), b"STAGE2")
 
     def test_the_packet_drive_parameters_describe_the_image(self) -> None:
@@ -2892,6 +2911,96 @@ class I386Address32Tests(unittest.TestCase):
                               timeout=900)
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertIn("agree on 66 instructions", done.stdout)
+
+
+class I386VideoTests(unittest.TestCase):
+    """The graphics modes: the memory, the mode, and what the card can do.
+
+    Mode 13h and mode 12h are memory at 0xA0000 that a guest writes a byte at a
+    time. The machine used to answer that window with an open bus, so a program
+    that set the mode and painted got a screen that never changed -- which is
+    exactly what was reported. These tests hold the two halves: the guest's
+    writes land, and the mode it set is the mode the card believes.
+    """
+
+    BIN = ROOT / "userspace/i386/mode13.bin"
+
+    def boot(self, blob: bytes) -> rv.Machine:
+        mach = self.boot_image(bytearray(i386_image.build(i386_image.boot_disk(blob))))
+        mach.run(limit=300_000)
+        return mach
+
+    def boot_image(self, image) -> rv.Machine:
+        mach = rv.Machine()
+        mach.ram[:] = bytes(image)
+        # a board with one core: smpBoot's wait for a second one to check in is
+        # a five-second spin in the model, and it is not what these tests are
+        # about. The sector on the disk is what this machine boots.
+        mach.cmos[0x38] = 0
+        mach.keys.append(0x39)
+        mach.sreg[rv.SEG_CS] = rv.RESET_CS
+        mach.eip = rv.RESET_IP
+        return mach
+
+    def test_a_guest_paints_mode_13h_memory(self) -> None:
+        mach = self.boot(self.BIN.read_bytes())
+        self.assertTrue(mach.halted, mach.error)
+        self.assertEqual(bytes(mach.ram[0xA0000:0xA0004]), b"AAAA",
+                         "320 x 200 memory is at A0000, a byte a pixel")
+        filled = sum(1 for byte in mach.ram[0xA0000:0xB0000] if byte == 0x41)
+        self.assertGreaterEqual(filled, 0x1000,
+                                "rep stosb wrote the sector's 64 KiB, not one byte")
+
+    def test_the_mode_is_readable_through_the_firmware(self) -> None:
+        """AH=0Fh is the question every VESA-era program asks before it draws.
+
+        The probe writes what the firmware answered to the data area, where a
+        test can see it: AL is the mode and AH the columns, and a card that
+        reports the wrong one is a card a program will draw on wrongly.
+        """
+        mach = self.boot(self.BIN.read_bytes())
+        self.assertEqual(mach.ram[0x449], 0x13,
+                         "the data area keeps the mode int 10h set")
+
+    def test_the_card_reads_its_mode_from_the_data_area(self) -> None:
+        """One byte is the whole handshake: the firmware writes it, the machine
+        polls it, and a graphics mode is what the painter then sees."""
+        import jsw_sim
+
+        prog = ROOT / "build" / "i386" / "i386-test.back.jsw"
+        if not prog.exists():
+            self.skipTest("run the JSW tests first; they build this project")
+        env = jsw_sim.Env()
+        classes = jsw_sim.parse_program(prog.read_text(), env)
+        cpu = classes["Cpu"].procs
+        env.procs = cpu
+        env.threads.append({})
+        env.current = 0
+        env.vars["X.cores"] = 1
+        env.lists["rom"] = json.loads((RVDIR / "assets" / "lists" / "bios.jsa").read_text())
+        env.lists["disk"] = json.loads((RVDIR / "assets" / "lists" / "disk.jsa").read_text())
+
+        def run(name, args):
+            gen = jsw_sim.call(env, cpu[name], args)
+            try:
+                next(gen)
+            except StopIteration:
+                pass
+
+        mem = env.lists["X.mem"]
+        for mode, expect in ((0x13, 1), (0x12, 2), (0x03, 0)):
+            # base memory is one 32-bit word a list item
+            at = 0x449
+            cell = at // 4          # this simulator's lists are 0-based
+            while len(mem) < cell + 1:
+                mem.append(0)
+            shift = 256 ** (at % 4)
+            word = int(mem[cell])
+            word = word - (word // shift) % 256 * shift + mode * shift
+            mem[cell] = word
+            run("modePoll", [])
+            self.assertEqual(int(env.vars["X.textMode"]), expect,
+                             f"mode {mode:#04x}")
 
 
 class I386SpeakerTests(unittest.TestCase):

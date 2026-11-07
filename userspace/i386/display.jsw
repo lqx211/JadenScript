@@ -42,7 +42,11 @@ class Display {
                 X.dispReq = 0;
                 X.dispAck = 1;
             }
-            paintSome();
+            if (X.textMode > 0) {
+                paintGraphics();
+            } else {
+                paintSome();
+            }
             Control.wait(0);
         }
     }
@@ -202,6 +206,90 @@ class Display {
         Motion.setXY(_px + len - 1, _py);
         Pen.penUp();
         X.dispDots += len;
+    }
+
+    /* ---- the graphics modes --------------------------------------------- *
+     * `int 10h` sets mode 13h (320 x 200, 256 colours) and mode 12h (640 x 480,
+     * 16 colours). The memory behind them is ordinary memory at 0xA0000: a
+     * guest's `mov [di], al` lands there the way it lands anywhere, and `X.gfx`
+     * is that memory -- one byte a list item, the aperture decoded by a
+     * multiply rather than scanned cell by cell.
+     *
+     * This painter is deliberately the slow answer: one pen dot a click, so the
+     * cost is visible instead of hidden behind an extension. A dot is about
+     * forty microseconds, so a six-millisecond budget paints a few hundred of
+     * them and a 320 x 200 screen arrives over a second or two. Nothing is
+     * scaled, because a scaled framebuffer is a quarter of a million dots a
+     * frame and this machine cannot make that many clicks -- which is the
+     * number a real card would be judged by too.
+     */
+    private void paintGraphics() { // warp
+        if (X.gfxDirty == 1) {
+            X.gfxDirty = 0;
+            X.gfxPos = 0;                  // the guest painted: start the sweep
+        }
+        _mode = X.textMode + 0;
+        if (_mode == 1) {                 // 13h: a byte a pixel
+            _rows = 200;
+            _cols = 320;
+        } elif (_mode == 2) {             // 12h: four bits a pixel
+            _rows = 480;
+            _cols = 640;
+        } else {
+            return;
+        }
+        _t0 = Sensing.timer();
+        _n = 0;
+        while (_n < 400) {
+            if (Sensing.timer() - _t0 > 0.006) { return; }
+            _i = X.gfxPos;
+            if (_i >= _rows * _cols) {
+                X.gfxPos = 0;
+                return;                    // one sweep of the frame is enough
+            }
+            _row = Operators.math("floor", _i / _cols);
+            _col = _i % _cols;
+            _at = _row * _cols + _col;
+            if (_mode == 1) {
+                _c = X.gfx.get(_at + 1) + 0;
+            } else {
+                _v = X.gfx.get(Operators.math("floor", _at / 2) + 1) + 0;
+                if (_at % 2 == 0) {
+                    _c = _v % 16;
+                } else {
+                    _c = Operators.math("floor", _v / 16) % 16;
+                }
+            }
+            palette(_c, _mode);
+            Pen.setPenSize(1);
+            Pen.setPenColorToColor(v);
+            Motion.setXY(_col - _cols / 2 + 0.5, _rows / 2 - _row - 0.5);
+            Pen.penDown();
+            Pen.penUp();
+            X.gfxPos = _i + 1;
+            _n += 1;
+        }
+    }
+
+    /* The two palettes, as Scratch colours. Mode 13h's low sixteen entries are
+     * the same sixteen the VGA card's default palette keeps; the rest of its
+     * 256 come from the four-bit split of each channel. Mode 12h indexes the
+     * sixteen directly. */
+    private void palette(index, mode) { // warp
+        _r = 0;
+        _g = 0;
+        _b = 0;
+        if (mode == 1 && index > 15) {
+            _r = Operators.math("floor", index / 32) * 36;
+            _g = Operators.math("floor", index / 4) % 8 * 36;
+            _b = index % 4 * 85;
+        } else {
+            _i = index % 16;
+            _r = X.gfxPal.get(_i * 3 + 1) + 0;
+            _g = X.gfxPal.get(_i * 3 + 2) + 0;
+            _b = X.gfxPal.get(_i * 3 + 3) + 0;
+        }
+        v = _r * 65536 + _g * 256 + _b;    // the block's value comes back in v
     }
 
     private void paintSome() { // warp

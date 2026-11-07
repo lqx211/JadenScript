@@ -83,6 +83,18 @@ def meow_disk() -> bytes:
     return disk
 
 
+def boot_disk(blob: bytes) -> bytes:
+    """A staged disk whose sector 0 is the sector under test.
+
+    A test boots a boot sector, so it has to *be* sector 0 of the staged disk:
+    int 19h reads that through int 13h the way it does on a real board, and the
+    destination is 0x7C00. `disk_image()` is the firmware's own test sector.
+    """
+    if blob[510:512] != b"\x55\xaa":
+        raise SystemExit("a boot sector has to end with 0xAA55")
+    return blob.ljust(DISK_SECTORS * SECTOR, b"\0")
+
+
 def build(disk: bytes | None = None) -> bytes:
     image = bytearray(RAM_SIZE)
     image[BIOS_AT:ROM_TOP] = rom()

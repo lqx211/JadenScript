@@ -61,6 +61,18 @@ public X.maxFrames = 0;                  // 0 = run forever; >0 = a test budget
  */
 public X.memBase = 0;                    // the RAM window
 public X.memWords = 163840;              // 640 KiB of base memory
+public X.memWords4 = 655360;             // ... in bytes, for the byte reader
+public X.textMode = 0;                   // 0 text, 1 mode 13h, 2 mode 12h
+public X.gfxPos = 0;                     // how far the card has painted
+public X.gfx = [];                       // 0xA0000: a byte a pixel in 13h
+public X.gfxPal = [];
+/* The sixteen the VGA card is born with, as red, green and blue. */
+public X.gfx16 = [0, 0, 0, 0, 0, 170, 0, 170, 0, 0, 170, 170, 170, 0, 0,
+                  170, 0, 170, 170, 85, 0, 170, 170, 170, 85, 85, 85,
+                  85, 85, 255, 85, 255, 85, 85, 255, 255, 255, 85, 85,
+                  255, 85, 255, 255, 255, 85, 255, 255, 255];
+public X.gfxWords = 0;
+public X.gfxDirty = 0;                  // the card has a pixel to repaint
 public X.extBase = 1048576;              // 0x10_0000: extended memory
 public X.extWords = 0;                   // ... as many words as `Ram` gave
 public X.holeEnd = 655360;               // 0xA_0000: RAM stops at the video hole
@@ -785,6 +797,36 @@ class Cpu {
                 _i += 1;
             }
         }
+        /* ---- the picture -------------------------------------------------
+         * The aperture is 64 KiB whatever the mode: mode 13h fills 320 x 200 of
+         * it and mode 12h 640 x 480 of it, which is why the same window serves
+         * both. The mode itself is the BIOS data area's own byte at 0x449, so
+         * `int 10h` and the card agree without either knowing about the other.
+         */
+        X.gfxWords = 16384;
+        if (X.gfx.length() < X.gfxWords) {
+            X.gfx.clear();
+            _i = 1;
+            while (_i <= X.gfxWords) {
+                X.gfx.add(0);
+                _i += 1;
+            }
+        } else {
+            _i = 1;
+            while (_i <= X.gfxWords) {
+                X.gfx.set(_i, 0);
+                _i += 1;
+            }
+        }
+        if (X.gfxPal.length() < 48) {
+            X.gfxPal.clear();
+            _i = 1;
+            while (_i <= 48) {
+                X.gfxPal.add(0);
+                _i += 1;
+            }
+            vgaPalette();
+        }
         if (X.text.length() < X.textWords) {
             X.text.clear();
             _i = 1;
@@ -915,6 +957,7 @@ class Cpu {
                 if (X.spawned < X.cores) {
                     spawnCores();               // the setup utility raised the count
                 }
+                modePoll();                     // and the card follows int 10h
             }
             /* A halted core is not a stopped machine: the clock still runs and
              * the next tick wakes it. Two things have to be true for that to
@@ -1177,6 +1220,39 @@ class Cpu {
         }
     }
 
+    /* The card's sixteen colours, before any guest programs the DAC: black,
+     * blue, green, cyan, red, magenta, brown, light grey and their bright
+     * twins, which is the palette every DOS program starts from. */
+    private void vgaPalette() { // warp
+        _i = 0;
+        while (_i < 16) {
+            X.gfxPal.set(_i * 3 + 1, X.gfx16.get(_i * 3 + 1) + 0);
+            X.gfxPal.set(_i * 3 + 2, X.gfx16.get(_i * 3 + 2) + 0);
+            X.gfxPal.set(_i * 3 + 3, X.gfx16.get(_i * 3 + 3) + 0);
+            _i += 1;
+        }
+    }
+
+    /* The card's mode is the BIOS data area's own byte: `int 10h` writes it,
+     * the card reads it, and neither has to tell the other. One read a frame is
+     * the whole cost of that agreement. It lives here rather than in the loop
+     * so the loop's locals stay what they were. */
+    private void modePoll() { // warp
+        rdb(0x449);
+        if (v % 256 == 0x13) {
+            X.textMode = 1;
+            return;
+        }
+        if (v % 256 == 0x12) {
+            X.textMode = 2;
+            return;
+        }
+        if (X.textMode > 0) {
+            X.textMode = 0;
+            X.gfxPos = 0;
+        }
+    }
+
     private void rdb(a) { // warp
         v = 0xFF;                      // an open bus reads as all ones
         /* The chipset forwards the last megabyte of the four-gigabyte space to
@@ -1185,6 +1261,7 @@ class Cpu {
          * that work by accident; this is what was actually happening. */
         _pA = a;
         if (_pA >= 4293918720) { _pA = _pA - 4293918720 + 983040; }
+        _pA = _pA % 4294967296;        // a sixteen-bit register can come in negative
         if (_pA < X.holeEnd) {         // hot path: one comparison for base memory
             _w = X.mem.get(Operators.math("floor", _pA / 4) + 1) + 0;
             v = Operators.math("floor", _w / X.bw.get(_pA % 4 + 1)) % 256;
@@ -1200,6 +1277,13 @@ class Cpu {
             return;
         }
 #endif
+        /* The picture is stored a byte a list item, because a guest paints it
+         * a byte at a time and a word-shaped store would have to unpack. That
+         * is why this block is here and not with the word planes. */
+        if (_pA >= 655360 && _pA < 655360 + X.gfxWords * 4) {
+            v = X.gfx.get(_pA - 655360 + 1) + 0;
+            return;
+        }
         if (_pA >= X.textBase && _pA < X.textBase + X.textWords * 4) {
             _w = X.text.get(Operators.math("floor", (_pA - X.textBase) / 4) + 1) + 0;
             v = Operators.math("floor", _w / X.bw.get((_pA - X.textBase) % 4 + 1)) % 256;
@@ -1233,7 +1317,7 @@ class Cpu {
     private void wrb(a, val) { // warp
 
         _wv = val % 256;
-        _pA = a;
+        _pA = a % 4294967296;          // as above: the address is unsigned
         if (_pA >= 4293918720) { _pA = _pA - 4293918720 + 983040; }
 #ifdef TURBOWARP
         if (X.extOn == 1 && _pA < X.memWords4) {
@@ -1241,6 +1325,11 @@ class Cpu {
             return;
         }
 #endif
+        if (_pA >= 655360 && _pA < 655360 + X.gfxWords * 4) {
+            X.gfx.set(_pA - 655360 + 1, _wv);
+            X.gfxDirty = 1;                 // the card has a pixel to repaint
+            return;
+        }
         if (_pA < X.holeEnd) {         // hot path, and the same one comparison
             _i = Operators.math("floor", _pA / 4) + 1;
             _sh = X.bw.get(_pA % 4 + 1);

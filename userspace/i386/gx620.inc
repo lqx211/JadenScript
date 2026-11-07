@@ -1652,9 +1652,9 @@ l_ob1:    db "The devices soldered to the board.", 0
 l_sr1:    db "Serial Port        = COM1, 0x3F8, IRQ4", 0
 l_sr2:    db "The port a terminal or a debug cable would use.", 0
 l_au1:    db "Audio Controller   = not fitted", 0
-l_vd1:    db "Video Controller   = JSW VGA, text mode", 0
+l_vd1:    db "Video Controller   = JSW VGA", 0
 l_vd2:    db "Video Memory       = 4 KB of text plane", 0
-l_vd3:    db "Mode               = 80 x 30, 16 colours", 0
+l_vd3:    db "Mode               = 03h text, 13h, 12h", 0
 l_pf1:    db "The clock this board counts instructions with.", 0
 l_se1:    db "Admin Password     = {none}", 0
 l_se2:    db "System Password    = {none}", 0

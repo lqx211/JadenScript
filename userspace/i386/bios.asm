@@ -46,6 +46,10 @@ BDA_KB_TAIL     equ 0x41C
 BDA_KB_BUFFER   equ 0x41E
 BDA_EQUIP       equ 0x410
 BDA_MEMK        equ 0x413
+BDA_VIDEO_MODE  equ 0x449             ; the mode int 10h last set
+BDA_ARG_AL      equ 0x4E4             ; int 10h's own copy of its arguments
+BDA_LAST_STATUS equ 0x4EE             ; int 13h's last status byte
+BDA_ARG_AH      equ 0x4E5
 ; scratch the console keeps between calls: free space in the data area, at an
 ; address that is RAM on every PC. It must *not* live in the ROM, which is
 ; read-only on a real board and on this machine
@@ -613,74 +617,6 @@ puts:
 ; ---------------------------------------------------------------------------
 ; int 10h: the console
 ; ---------------------------------------------------------------------------
-int10:
-    push    bp
-    mov     bp, sp
-    push    bx
-    push    cx
-    push    dx
-    push    si
-    push    di
-    push    ds
-    push    es
-    push    fs
-    ; the caller owns ds, and the ROM is read-only, so the arguments go to the
-    ; data area -- but only after they have been pushed out of the way, because
-    ; loading the segment registers takes ax with it
-    push    ax
-    push    bx
-    mov     ax, cs
-    mov     ds, ax
-    xor     ax, ax
-    mov     es, ax
-    pop     bx
-    pop     ax
-    mov     [es:ARG_AX], al
-    mov     [es:ARG_AH], ah
-    mov     [es:ARG_BL], bl
-    mov     al, [es:ARG_AX]
-    mov     ah, [es:ARG_AH]
-
-    cmp     ah, 0x0E
-    jne     .not_tty
-    mov     bl, [es:ARG_BL]
-    call    tty
-    jmp     .out
-.not_tty:
-    cmp     ah, 0x00                ; set mode: only the text mode exists
-    jne     .not_mode
-    call    clear_text
-    jmp     .out
-.not_mode:
-    cmp     ah, 0x0F                ; get mode
-    jne     .not_getmode
-    mov     al, 0x03
-    mov     ah, COLS
-    jmp     .out
-.not_getmode:
-    cmp     ah, 0x02                ; set cursor: the BDA is where tty reads it
-    jne     .not_setpos
-    mov     [es:BDA_CURSOR_ROW], dh
-    mov     [es:BDA_CURSOR_COL], dl
-    jmp     .out
-.not_setpos:
-    cmp     ah, 0x03                ; get cursor
-    jne     .out
-    mov     dh, [es:BDA_CURSOR_ROW]
-    mov     dl, [es:BDA_CURSOR_COL]
-    xor     cx, cx
-.out:
-    pop     fs
-    pop     es
-    pop     ds
-    pop     di
-    pop     si
-    pop     dx
-    pop     cx
-    pop     bx
-    pop     bp
-    iret
-
 clear_text:
     push    ax
     push    cx
@@ -948,6 +884,7 @@ int13:
 .ok:
     and     word [ss:bp + 6], 0xFFFE ; clear carry: it worked
     xor     ah, ah
+    mov     [es:BDA_LAST_STATUS], ah
     jmp     .out
 .ok_ah:
     and     word [ss:bp + 6], 0xFFFE
@@ -955,6 +892,7 @@ int13:
 .fail:
     or      word [ss:bp + 6], 1     ; set carry: it did not
     mov     ah, 0x04                ; sector not found
+    mov     [es:BDA_LAST_STATUS], ah
 .out:
     pop     ds
     pop     di
@@ -1208,6 +1146,20 @@ key_wait:
 ; ---------------------------------------------------------------------------
 ; int 19h: boot
 ; ---------------------------------------------------------------------------
+int13dbg:
+    push    ax
+    push    dx
+    push    es
+    xor     ax, ax
+    mov     es, ax
+    mov     al, [es:0x7C00]
+    mov     [es:0x4EC], al
+    mov     al, [es:BDA_LAST_STATUS]
+    mov     [es:0x4ED], al
+    pop     es
+    pop     dx
+    pop     ax
+    ret
 int19:
     push    bp
     mov     bp, sp
@@ -1226,6 +1178,7 @@ int19:
     xor     dh, dh
     mov     dl, [es:BDA_BOOTDEV]
     int     0x13
+    call    int13dbg
     jc      .fail
     cmp     word [es:0x7C00 + 510], 0xAA55
     jne     .fail
@@ -1325,6 +1278,85 @@ int09:
     iret
 
 %include "setup.inc"
+
+; ---------------------------------------------------------------------------
+; int 10h: set the mode, set and get the cursor, and the teletype.
+;
+; The teletype is the one every program uses: AH=0Eh with the character in AL.
+; The rest exist so a program can find out what it is drawing on, and because
+; a graphics program asks AH=0Fh before it touches 0xA0000.
+; ---------------------------------------------------------------------------
+; ---------------------------------------------------------------------------
+; int 10h: set the mode, set and get the cursor, and the teletype.
+;
+; The teletype is the one every program uses: AH=0Eh with the character in AL.
+; The rest exist so a program can find out what it is drawing on, and because
+; a graphics program asks AH=0Fh before it touches 0xA0000.
+;
+; This handler saves nothing. It puts what it was asked for in the data area
+; and answers through a jump, so every path ends at one iret with the stock
+; registers -- which is the only arrangement that survived being tested. A
+; handler that pushes nine registers and answers in the tenth has to unwind
+; twenty bytes by hand before returning, and one missing pop there sent the
+; machine into the middle of nothing.
+; ---------------------------------------------------------------------------
+int10:
+    call    int10body
+    iret
+
+int10body:
+    push    ax
+    mov     ax, es                  ; int 10h works in the data area, and
+    xor     ax, ax                  ; `tty` reads the ROM through ds itself
+    mov     es, ax
+    pop     ax
+    mov     [es:BDA_ARG_AL], al
+    mov     [es:BDA_ARG_AH], ah
+    cmp     ah, 0x0E
+    je      tty10
+    cmp     ah, 0x00                ; set mode: text, 13h and 12h exist
+    je      mode10
+    cmp     ah, 0x0F                ; get mode: what was last set
+    je      getmode10
+    cmp     ah, 0x02                ; set cursor: the BDA is where tty reads it
+    je      setpos10
+    cmp     ah, 0x03                ; get cursor
+    je      getpos10
+    ret
+
+tty10:
+    call    tty
+    mov     al, [es:BDA_ARG_AL]
+    mov     ah, [es:BDA_ARG_AH]
+    ret
+
+mode10:
+    mov     al, [es:BDA_ARG_AL]
+    mov     [es:BDA_VIDEO_MODE], al
+    mov     byte [es:BDA_CURSOR_ROW], 0
+    mov     byte [es:BDA_CURSOR_COL], 0
+    call    clear_text
+    mov     al, [es:BDA_ARG_AL]
+    mov     ah, [es:BDA_ARG_AH]
+    ret
+
+getmode10:
+    mov     al, [es:BDA_VIDEO_MODE]
+    mov     ah, COLS
+    ret
+
+setpos10:
+    mov     [es:BDA_CURSOR_ROW], dh
+    mov     [es:BDA_CURSOR_COL], dl
+    ret
+
+getpos10:
+    mov     dh, [es:BDA_CURSOR_ROW]
+    mov     dl, [es:BDA_CURSOR_COL]
+    xor     cx, cx
+    ret
+
+
 %include "pci.inc"
 %include "splash.inc"
 %include "gx620.inc"

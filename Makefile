@@ -121,6 +121,7 @@ i386:
 	cd userspace/i386 && nasm -f bin meow.asm -o meow.bin -l meow.lst
 	cd userspace/i386 && nasm -f bin ea32.asm -o ea32.bin -l ea32.lst
 	cd userspace/i386 && nasm -f bin apiprobe.asm -o apiprobe.bin -l apiprobe.lst
+	cd userspace/i386 && nasm -f bin mode13.asm -o mode13.bin -l mode13.lst
 	$(PY) tools/i386_tones.py
 	$(PY) tools/i386_image.py --check
 	$(PY) -m jswc build userspace/i386/i386.jsw -o build/i386/i386.sb3 --target turbowarp
