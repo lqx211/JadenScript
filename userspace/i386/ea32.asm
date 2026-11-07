@@ -82,7 +82,23 @@ pm32:
     push    dword [ebx + 0x10C]               ; FF /6, a wide push
     pop     eax
     mov     [0xC14], eax
+
+    ; ---- the instruction pointer, which was still sixteen bits -----------
+    call    sub32                             ; the return address is a dword
+    mov     [0xD08], eax
+    mov     eax, [esp]                        ; what `call` pushed
+    mov     [0xD0C], eax
+
+    ; a far return to code above the first 64 KiB: in a flat segment EIP is
+    ; thirty-two bits, so 0x11000 is an ordinary place to be
+    push    dword 0x08
+    push    dword HIGH
+    retf
     hlt
+
+sub32:
+    mov     eax, 0xFEEDFACE
+    ret
 
 ; ---- the flat descriptor table -------------------------------------------
 align 8
@@ -95,3 +111,16 @@ gdt_end:
 gdtr:
     dw      gdt_end - gdt - 1
     dd      gdt
+
+; ---- and code that no sixteen-bit instruction pointer could reach ---------
+HIGH equ 0x11000                        ; 0x1000 where the blob is + 0x10000
+
+times 0x10000 - ($ - $$) db 0
+high:
+    mov     eax, 0x1234BEEF
+    mov     [0xD00], eax
+    jmp     .landed                     ; a rel32 that has to stay up here
+    mov     eax, 0
+.landed:
+    mov     [0xD04], eax
+    hlt

@@ -2749,7 +2749,7 @@ class I386Address32Tests(unittest.TestCase):
         mach.ram[0x1000:0x1000 + len(blob)] = blob
         mach.sreg[rv.SEG_CS] = 0x100
         mach.eip = 0
-        for _ in range(400):
+        for _ in range(800):
             mach.step()
             if mach.halted:
                 break
@@ -2777,9 +2777,19 @@ class I386Address32Tests(unittest.TestCase):
         self.assertEqual(mach.read(0xC08, 4), 0, "xchg read what was there")
         self.assertEqual(mach.read(0xC14, 4), 0xAABBCCDD, "push dword, pop eax")
 
+    def test_the_instruction_pointer_is_thirty_two_bits(self) -> None:
+        """A flat code segment does not wrap EIP at 64 KiB, and `call`/`ret`
+        move a dword each. This walks into protected mode, calls a subroutine,
+        then far-returns to code that sits 64 KiB above where it started."""
+        mach = self.run_ea32()
+        self.assertTrue(mach.halted, mach.error)
+        self.assertEqual(mach.read(0xD08, 4), 0xFEEDFACE, "the callee ran and returned")
+        self.assertEqual(mach.read(0xD00, 4), 0x1234BEEF, "code above the 64 KiB line ran")
+        self.assertGreater(mach.eip, 0x10000, "and it is still up there")
+
     def test_both_machines_agree_on_all_of_it(self) -> None:
         args = [sys.executable, "tools/i386_jsw_check.py",
-                "--code", str(self.BIN), "--steps", "600"]
+                "--code", str(self.BIN), "--steps", "800"]
         # the checker runs the decompiled project; another test class builds it,
         # and skipping the rebuild keeps this one quick when it is already there
         if (ROOT / "build" / "i386" / "i386-test.back.jsw").exists():
@@ -2787,7 +2797,7 @@ class I386Address32Tests(unittest.TestCase):
         done = subprocess.run(args, cwd=ROOT, capture_output=True, text=True,
                               timeout=900)
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.assertIn("agree on 53 instructions", done.stdout)
+        self.assertIn("agree on 66 instructions", done.stdout)
 
 
 class I386SpeakerTests(unittest.TestCase):

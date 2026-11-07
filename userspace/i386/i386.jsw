@@ -1217,7 +1217,7 @@ class Cpu {
             if (index == 2) {
                 dsz = 2;
                 if (dFlags % 8 >= 4) { dsz = 4; }
-                ip = ip % 65536;
+                if (dsz == 2) { ip = ip % 65536; } else { ip = ip % 4294967296; }
             }
         } else {
             sbase.set(index, (_sel * 16) % 1048576);
@@ -1263,6 +1263,17 @@ class Cpu {
         }
     }
 
+    /* Where a relative branch lands. Sixteen-bit code wraps its instruction
+     * pointer at 64 KiB, and a flat D=1 segment does not: a kernel's code sits
+     * wherever the page tables put it, so the wrap has to follow the segment. */
+    private void ipJump(delta) { // warp
+        if (dsz == 4) {
+            ip = (ip + delta) % 4294967296;
+        } else {
+            ip = (ip + delta) % 65536;
+        }
+    }
+
     private void f8() { // warp
         /* The instruction stream is nearly always in the ROM, four bytes to a
            list item: one list read per word instead of one per byte, and no
@@ -1272,7 +1283,7 @@ class Cpu {
             phys(2, ip);
             rdb(v);
             ip = ip + 1;
-            if (ip > 65535) { ip = 0; }
+            if (dsz == 4) { ip = ip % 4294967296; } elif (ip > 65535) { ip = 0; }
             return;
         }
         _fbase = _fip - _fip % 4;
@@ -1290,7 +1301,7 @@ class Cpu {
         if (_fk == 2) { v = fb2; }
         if (_fk == 3) { v = fb3; }
         ip = ip + 1;
-        if (ip > 65535) { ip = 0; }
+        if (dsz == 4) { ip = ip % 4294967296; } elif (ip > 65535) { ip = 0; }
     }
 
     private void f16() { // warp
@@ -1755,9 +1766,9 @@ class Cpu {
 
     /* The far call the hardware makes: flags, cs, ip, then the vector. */
     private void interrupt(n) { // warp
-        push16(fl);
-        push16(sr.get(2));
-        push16(ip);
+        pushOp(dsz, fl);
+        pushOp(dsz, sr.get(2));
+        pushOp(dsz, ip);
         setFlagTo(9, 0);
         setFlagTo(8, 0);
         phys(0, n * 4);
@@ -1769,11 +1780,11 @@ class Cpu {
     }
 
     private void iretOp() { // warp
-        pop16();
+        popOp(dsz);
         ip = v;
-        pop16();
+        popOp(dsz);
         setSeg(2, v);
-        pop16();
+        popOp(dsz);
         fl = v % 65536;
         setFlagTo(1, 1);
     }
@@ -2945,7 +2956,7 @@ class Cpu {
 
     private void jumpRel8() { // warp
         getSignedDisp8();
-        ip = (ip + v) % 65536;
+        ipJump(v);
     }
 
     private void group1(size) { // warp
@@ -3208,14 +3219,32 @@ class Cpu {
             return;
         }
         if (op == 235) { jumpRel8(); return; }
-        if (op == 233) { f16(); _j = v; if (_j >= 32768) { _j = _j - 65536; } ip = (ip + _j) % 65536; return; }
+        if (op == 233) {                       // jmp rel
+            if (dsz == 4) {
+                f32();
+                _j = v;
+                if (_j >= 2147483648) { _j = _j - 4294967296; }
+            } else {
+                f16();
+                _j = v;
+                if (_j >= 32768) { _j = _j - 65536; }
+            }
+            ipJump(_j);
+            return;
+        }
         if (op == 232) {
-            f16();
-            _j = v;
-            if (_j >= 32768) { _j = _j - 65536; }
+            if (dsz == 4) {
+                f32();
+                _j = v;
+                if (_j >= 2147483648) { _j = _j - 4294967296; }
+            } else {
+                f16();
+                _j = v;
+                if (_j >= 32768) { _j = _j - 65536; }
+            }
             getReg16(5);
-            push16(ip);
-            ip = (ip + _j) % 65536;
+            pushOp(dsz, ip);
+            ipJump(_j);
             return;
         }
         if (op == 234) {                       // jmp far
@@ -3245,7 +3274,7 @@ class Cpu {
             if (op == 225 && _cCount != 0 && _cZero == 1) { _take = 1; }
             if (op == 224 && _cCount != 0 && _cZero == 0) { _take = 1; }
             if (op == 227 && _cCount == 0) { _take = 1; }
-            if (_take == 1) { ip = (ip + _cRel) % 65536; }
+            if (_take == 1) { ipJump(_cRel); }
             return;
         }
 
@@ -3502,23 +3531,23 @@ class Cpu {
         }
 
         /* --- returns --- */
-        if (op == 195) { pop16(); ip = v; return; }
+        if (op == 195) { popOp(dsz); ip = v; return; }
         if (op == 194) {
             f16();
             _v0 = v;
-            pop16();
+            popOp(dsz);
             ip = v;
             getReg16(5);
             putReg16(5, v + _v0);
             return;
         }
-        if (op == 203) { pop16(); ip = v; pop16(); setSeg(2, v); return; }
+        if (op == 203) { popOp(dsz); ip = v; popOp(dsz); setSeg(2, v); return; }
         if (op == 202) {
             f16();
             _v0 = v;
-            pop16();
+            popOp(dsz);
             ip = v;
-            pop16();
+            popOp(dsz);
             setSeg(2, v);
             getReg16(5);
             putReg16(5, v + _v0);
@@ -3908,7 +3937,7 @@ class Cpu {
             getOp(2);
             _qV = v;
             if (_qKind == 2) {
-                push16(ip);
+                pushOp(dsz, ip);
                 ip = _qV;
             } else {
                 ip = _qV;
@@ -3922,8 +3951,8 @@ class Cpu {
             rdw(v);
             _qSeg = v;
             if (_qKind == 3) {
-                push16(sr.get(2));
-                push16(ip);
+                pushOp(dsz, sr.get(2));
+                pushOp(dsz, ip);
             }
             setSeg(2, _qSeg);
             ip = _qV;
@@ -4044,7 +4073,7 @@ class Cpu {
             _tRel = v;
             if (_tRel >= 32768) { _tRel = _tRel - 65536; }
             cond(_tOp % 16);
-            if (v == 1) { ip = (ip + _tRel) % 65536; }
+            if (v == 1) { ipJump(_tRel); }
             return;
         }
         if (_tOp >= 144 && _tOp <= 159) {
