@@ -63,6 +63,9 @@ SU_INK   equ 0x575                  ; the ink of the row being drawn. It cannot
                                     ; share 0x4F5 with BDA_RESET: every redraw
                                     ; would clear the board's reboot request.
 SU_INBOX equ 0x576                  ; 1 while the modal editor owns the screen
+SU_TYP   equ 0x6A0                  ; digits typed into the editor, up to eight
+SU_TYL   equ 0x6A8                  ; how many of them there are
+SU_TS    equ 0x6C0                  ; the same digits as a string, for the field
 SU_DLG_L equ 0x4F6                  ; a dialog's left column, while it draws
 SU_DLG_T equ 0x4F7                  ; its top row
 SU_DLG_W equ 0x4F8                  ; its width
@@ -1281,50 +1284,213 @@ dlgRuleBottom:
 ; side of it; Left/Right change it and repaint, Enter keeps it, Esc puts the
 ; old one back.
 ; ---------------------------------------------------------------------------
+; suRowNow -- di = the buffer row of the setting being edited.
+;
+; It has to be recomputed, not carried: the dialog's own painting runs through
+; routines that do not preserve di, and a store through a stale di is how a
+; typed number used to be written into somebody else's row -- visible as an
+; Enter that did nothing at all.
+suRowNow:
+    push    ax
+    mov     al, [es:SU_ITEM]
+    xor     ah, ah
+    add     ax, ax
+    mov     di, ax
+    mov     di, [di + su_bufof]
+    pop     ax
+    ret
+
 suEdit:
     push    ax
     push    bx
     push    cx
     push    dx
     push    di
-    mov     al, [es:SU_ITEM]
-    xor     ah, ah
-    mov     di, ax
-    add     di, di                  ; the table is words, the setting is a byte
-    mov     di, [di + su_bufof]     ; the row the setting lives in
+    call    suRowNow
     mov     al, [es:SU_BUF + di]
     mov     [es:SU_OLD], al
     mov     byte [es:SU_INBOX], 1
-    call    suEditBox               ; the panel, once: a key changes a number
+    mov     byte [es:SU_TYL], 0
+    call    suEditBox
 .key:
     call    keyScan
-    cmp     al, 0x4B                ; left
+    cmp     al, 0x01
+    je      .revert
+    cmp     al, 0x1C
+    je      .accept
+    cmp     al, 0x0E
+    je      .erase
+    cmp     al, 0x4B
     je      .left
-    cmp     al, 0x4D                ; right
+    cmp     al, 0x4D
     je      .right
-    cmp     al, 0x1C                ; Enter keeps it
-    je      .done
-    cmp     al, 0x01                ; Esc throws it away
-    je      .revert
-    cmp     al, 0x0E                ; Backspace too
-    je      .revert
+    cmp     al, 0x02
+    jb      .key
+    cmp     al, 0x0B
+    ja      .key
+    call    suTyped
     jmp     .key
 .left:
+    mov     byte [es:SU_TYL], 0
     mov     dl, -1
     call    suAdjust
     call    suEditValue
     jmp     .key
 .right:
+    mov     byte [es:SU_TYL], 0
     mov     dl, 1
     call    suAdjust
     call    suEditValue
     jmp     .key
+.erase:
+    mov     al, [es:SU_TYL]
+    test    al, al
+    jz      .key
+    dec     al
+    mov     [es:SU_TYL], al
+    call    suEditTyped
+    jmp     .key
+.accept:
+    call    suTypCommit
+    jmp     .done
 .revert:
+    call    suRowNow
     mov     al, [es:SU_OLD]
     mov     [es:SU_BUF + di], al
     call    suEditValue
 .done:
-    mov     byte [es:SU_INBOX], 0   ; the screen is the caller's again
+    mov     byte [es:SU_INBOX], 0
+    pop     di
+    pop     dx
+    pop     cx
+    pop     bx
+    pop     ax
+    ret
+
+; suTyped -- a digit key arrived: append it and show the digits instead of the
+; value. Scan code 0x02 is "1" ... 0x0A is "9", 0x0B is "0".
+suTyped:
+    push    ax
+    push    bx
+    push    si
+    mov     bl, al
+    mov     al, [es:SU_TYL]
+    cmp     al, 8
+    jae     .out
+    mov     al, bl
+    sub     al, 0x02
+    cmp     al, 9
+    jb      .digit
+    xor     al, al
+    jmp     .store
+.digit:
+    inc     al
+.store:
+    mov     bl, [es:SU_TYL]
+    xor     bh, bh
+    mov     si, bx
+    add     si, SU_TYP
+    mov     [es:si], al
+    inc     byte [es:SU_TYL]
+    call    suEditTyped
+.out:
+    pop     si
+    pop     bx
+    pop     ax
+    ret
+
+; suEditTyped -- the field, cleared, then the digits typed so far.
+suEditTyped:
+    push    ax
+    push    bx
+    push    cx
+    push    dx
+    push    si
+    mov     dl, 33
+    mov     dh, 13
+    mov     cx, 20
+    mov     al, ' '
+    mov     bl, SU_SEL
+    call    suBar
+    mov     cl, [es:SU_TYL]
+    xor     ch, ch
+    xor     bx, bx
+.copy:
+    test    cx, cx
+    jz      .show
+    mov     si, bx
+    add     si, SU_TYP
+    mov     al, [es:si]
+    add     al, '0'
+    mov     si, bx
+    add     si, SU_TS
+    mov     [es:si], al
+    inc     bx
+    dec     cx
+    jmp     .copy
+.show:
+    mov     si, bx
+    add     si, SU_TS
+    mov     byte [es:si], 0
+    mov     dl, 34
+    mov     dh, 13
+    call    suGoto
+    push    ds
+    xor     ax, ax                  ; suPrint reads ds:si, and the string is in
+    mov     ds, ax                  ; the data area, not in the ROM
+    mov     si, SU_TS
+    mov     bl, SU_SEL
+    call    suPrint
+    pop     ds
+    pop     si
+    pop     dx
+    pop     cx
+    pop     bx
+    pop     ax
+    ret
+
+; suTypCommit -- the digits become the value, in the row the editor reads back.
+suTypCommit:
+    push    ax
+    push    bx
+    push    cx
+    push    dx
+    push    di
+    push    si
+    mov     al, [es:SU_TYL]
+    test    al, al
+    jz      .out
+    xor     bx, bx
+    xor     cx, cx
+.more:
+    mov     al, [es:SU_TYL]
+    xor     ah, ah
+    cmp     cx, ax
+    jae     .done
+    mov     ax, bx
+    mov     dx, 10
+    mul     dx
+    mov     bx, ax
+    mov     si, cx
+    add     si, SU_TYP
+    mov     al, [es:si]
+    xor     ah, ah
+    add     bx, ax
+    inc     cx
+    jmp     .more
+.done:
+    cmp     bx, 255
+    jbe     .fits
+    mov     bx, 255
+.fits:
+    call    suRowNow
+    mov     al, bl
+    mov     [es:SU_BUF + di], al
+    mov     byte [es:SU_TYL], 0
+    call    suEditValue
+    call    suAdjust
+.out:
+    pop     si
     pop     di
     pop     dx
     pop     cx
