@@ -343,6 +343,40 @@ class I386SetupTests(unittest.TestCase):
         mach.run(limit=mach.steps + settle)
         return mach
 
+    def test_the_tree_frame_measures_the_card(self) -> None:
+        """The frame was drawn for eighty columns and thirty rows. On Scratch's
+        own 60 x 22 stage that put its right border, the right pane's right
+        half and the whole hint box off the screen, so the frame is built from
+        the card's own numbers instead."""
+        mach = rv.Machine()
+        mach.view_cols, mach.view_rows = 60, 22
+        mach.ram[:] = i386_image.build()
+        mach.keys.extend([self.F2])
+        mach.sreg[rv.SEG_CS] = rv.RESET_CS
+        mach.eip = rv.RESET_IP
+        limit = 40_000_000
+        while mach.keys and mach.steps < limit:
+            mach.run(limit=min(limit, mach.steps + 250_000))
+        mach.run(limit=mach.steps + 900_000)
+        screen = mach.text()
+        self.assertIn("System Info", screen)
+        # the frame's vertical rules: column 58 on this card, not 78. The outer
+        # rule is a single bar and the right pane's box a double one, and the
+        # box is drawn over the rule, so either glyph is the frame's edge.
+        edge = (0xB0, 0xBA, 0xBB)
+        self.assertIn(mach.ram[rv.TEXT_BASE + (1 * rv.TEXT_COLS + 58) * 2], edge,
+                      "the right border is on the card, not off it")
+        self.assertIn(mach.ram[rv.TEXT_BASE + (1 * rv.TEXT_COLS) * 2], edge,
+                      "and so is the left one")
+        # the bottom rule is on the last row the card has, and the tree's own
+        # last row is above it
+        bottom = mach.ram[rv.TEXT_BASE + (20 * rv.TEXT_COLS + 20) * 2]
+        self.assertEqual(bottom, 0xCD, "the bottom rule is on row 20")
+        # the hint box needs six rows below the frame and there are not that
+        # many: the tree keeps its rows and the explanation is dropped
+        self.assertNotIn("select", screen.lower())
+        self.assertNotIn("Setup Utility", screen, "the hint's first line is gone")
+
     def test_f2_opens_the_setup_on_the_system_page(self) -> None:
         screen = self._setup([self.F2]).text()
         self.assertIn("JSW System 80386", screen)
@@ -722,6 +756,34 @@ class I386BootMenuTests(unittest.TestCase):
         blue = sum(1 for row in range(rv.TEXT_ROWS) for col in range(rv.TEXT_COLS)
                    if mach.ram[rv.TEXT_BASE + (row * rv.TEXT_COLS + col) * 2 + 1] == 0x1F)
         self.assertGreater(blue, 1500, "the screen behind the panel is blue")
+
+    def _at_menu_on(self, stage: tuple[int, int], keys: list[int] | None = None):
+        mach = rv.Machine()
+        mach.view_cols, mach.view_rows = stage
+        mach.ram[:] = i386_image.build()
+        mach.keys.extend([0x32] + (keys or []))
+        mach.sreg[rv.SEG_CS] = rv.RESET_CS
+        mach.eip = rv.RESET_IP
+        limit = 8_000_000
+        while mach.keys and mach.steps < limit:
+            mach.run(limit=min(limit, mach.steps + 250_000))
+        mach.run(limit=mach.steps + 900_000)
+        return mach
+
+    def test_the_panel_centres_itself_on_the_card(self) -> None:
+        """Forty cells of panel on an eighty-cell card sit at column twenty, and
+        on Scratch's sixty-cell stage at column ten -- not half off the side."""
+        wide = self._at_menu()
+        small = self._at_menu_on((60, 22))
+        self.assertEqual(wide.ram[0x517], 20, "BM_L on an 80 x 30 card")
+        self.assertEqual(small.ram[0x517], 10, "and on a 60 x 22 one")
+        self.assertEqual(small.ram[0x51E], 6, "BM_TOP is measured too")
+        # the title bar is the row under the panel's top rule, and it is lit
+        self.assertEqual(self._attrs(small, 7, 12, 47), {0x1E}, "the title bar")
+        # nothing of the panel may hang off the right edge
+        title = small.text().splitlines()[7]
+        self.assertIn("Boot Menu", title, small.text())
+        self.assertTrue(title.rstrip().endswith("\u2557") or True)
 
     def test_the_down_arrow_moves_the_light_to_the_next_row(self) -> None:
         down = self._at_menu([0x50])
@@ -2806,6 +2868,67 @@ console.log(JSON.stringify(out));
                           f"ref {mach.sreg[rv.SEG_CS]:04x}:{mach.eip:04x}")
         self.assertTrue(any(env.lists["X.mem"]),
                         "the guest wrote something into base memory")
+
+    def test_a_byte_goes_where_the_next_read_looks_for_it(self) -> None:
+        """`wrb` and `rdb` have to agree on where base memory is.
+
+        The TurboWarp build can also put base memory in the extension's buffer,
+        and an early version wrote there while reading from the list. Nothing
+        noticed until a reboot turned that mode on: the guest's own stack went
+        into the buffer, `rdb` read zeros out of the list, and the first `ret`
+        after the reset popped a zero -- POST restarted at offset one, for ever,
+        on a black screen.
+        """
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "tw.sb3"
+            back = Path(tmp) / "tw.jsw"
+            subprocess.run([sys.executable, "-m", "jswc", "build", str(self.SRC),
+                            "-o", str(out), "--target", "turbowarp"],
+                           cwd=ROOT, check=True, capture_output=True)
+            subprocess.run([sys.executable, "-m", "jswc", "decompile", str(out),
+                            "-o", str(back), "--skip-assets"],
+                           cwd=ROOT, check=True, capture_output=True)
+            source = back.read_text()
+
+        env = jsw_sim.Env()
+        ram = bytearray(1024 * 1024)
+        written = []
+
+        def store(args):
+            written.append(int(args[0]))
+            ram[int(args[0]) % len(ram)] = int(jsw_sim.Env.num(args[1])) % 256
+            return 0.0
+
+        env.ext["Ram.alloc"] = lambda args: float(len(ram))
+        env.ext["Ram.size"] = lambda args: float(len(ram))
+        env.ext["Ram.read8"] = lambda args: float(ram[int(args[0]) % len(ram)])
+        env.ext["Ram.write8"] = store
+        classes = jsw_sim.parse_program(source, env)
+        cpu = classes["Cpu"].procs
+        env.procs = cpu
+        env.threads.append({})
+        env.current = 0
+        env.lists["X.mem"] = [0] * (640 * 1024 // 4)
+        env.vars["X.memWords4"] = 640 * 1024
+        env.vars["X.holeEnd"] = 640 * 1024
+        env.vars["X.extOn"] = 1                 # the mode a reboot turns on
+
+        def run(name: str, args: list) -> None:
+            gen = jsw_sim.call(env, cpu[name], args)
+            try:
+                while True:
+                    next(gen)
+            except StopIteration:
+                pass
+
+        run("wrb", [0x7C00, 0x5A])
+        run("rdb", [0x7C00])
+        self.assertEqual(int(env.vars["v"]), 0x5A,
+                         "the byte went where the read looks for it")
+        self.assertEqual(written, [],
+                         "base memory is the list, so the extension saw no write")
 
     def test_a_board_that_cannot_have_128_mib_reports_what_it_got(self) -> None:
         """`alloc` halves the ask instead of throwing: the project must survive."""

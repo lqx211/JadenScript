@@ -30,6 +30,7 @@ BM_SEL     equ 0x515                ; which one the light is on
 BM_ROW     equ 0x516                ; the first entry's row
 BM_L       equ 0x517                ; the panel's left column
 BM_W       equ 0x518                ; ... and its width
+BM_TOP_V   equ 0x51E                ; ... and its top row, measured
 BM_DEV     equ 0x519                ; the device the menu asked for
 BM_DBG     equ 0x51A                ; the debug shell's address pointer
 BM_TITLE   equ 0x51C                ; word: the panel's title
@@ -37,9 +38,7 @@ BM_TITLE   equ 0x51C                ; word: the panel's title
 DBG_BUF    equ 0x530                ; the shell's line
 DBG_MAX    equ 14
 
-BM_LEFT    equ 20
 BM_WIDTH   equ 40
-BM_TOP     equ 10
 BM_MAIN_N  equ 5
 BO_N       equ 4
 
@@ -59,9 +58,7 @@ bootMenu:
     mov     word [es:BM_TBL], bm_items
     mov     word [es:BM_TITLE], msg_bm_title
     mov     byte [es:BM_CNT], BM_MAIN_N
-    mov     byte [es:BM_ROW], BM_TOP + 3
-    mov     byte [es:BM_L], BM_LEFT
-    mov     byte [es:BM_W], BM_WIDTH
+    call    bmGeometry
     mov     al, [es:BM_ITEM]
     mov     [es:BM_SEL], al
     mov     al, [es:BDA_BOOTDEV]
@@ -130,9 +127,7 @@ bootOptions:
     mov     word [es:BM_TBL], bo_items
     mov     word [es:BM_TITLE], msg_bo_title
     mov     byte [es:BM_CNT], BO_N
-    mov     byte [es:BM_ROW], BM_TOP + 3
-    mov     byte [es:BM_L], BM_LEFT
-    mov     byte [es:BM_W], BM_WIDTH
+    call    bmGeometry
     mov     byte [es:BM_SEL], 0
     call    bmRedraw
     call    bmList
@@ -142,6 +137,51 @@ bootOptions:
     add     bx, ax
     mov     al, [bx]
 .out:
+    ret
+
+; ---------------------------------------------------------------------------
+; bmGeometry -- put the panel in the middle of the card that is actually there.
+;
+; The panel has a fixed width and a height of one row per entry plus five, but
+; the card is not always 80 x 30: TurboWarp sized to a smaller window reports
+; fewer cells, and Scratch's own stage is 60 x 22. A panel at column 20 on a
+; card forty cells wide hangs off the right edge and loses half its title, so
+; the card is measured -- at POST, into BDA_VIDCOLS/BDA_VIDROWS -- and the
+; panel is centred in what came back.
+; ---------------------------------------------------------------------------
+bmGeometry:
+    push    ax
+    push    bx
+    push    dx
+    mov     [es:BM_W], BM_WIDTH
+    mov     al, [es:BDA_VIDCOLS]
+    cmp     al, BM_WIDTH            ; a card narrower than the panel gives it
+    jae     .wide                   ; the whole width and takes the loss
+    mov     al, BM_WIDTH
+.wide:
+    xor     ah, ah
+    sub     al, BM_WIDTH
+    shr     al, 1
+    mov     [es:BM_L], al
+    mov     al, [es:BM_CNT]         ; five rows around the entries: a blank, the
+    add     al, 5                   ; title bar, a blank, the entries, the rule
+    mov     bl, al                  ; bl = the height
+    mov     al, [es:BDA_VIDROWS]
+    xor     ah, ah
+    cmp     al, bl
+    jae     .tall
+    mov     al, bl                  ; too short for it: start at the top and
+    jmp     .top                    ; print what fits
+.tall:
+    sub     al, bl
+    shr     al, 1
+.top:
+    mov     [es:BM_TOP_V], al
+    add     al, 3                   ; a blank, the title bar, a blank
+    mov     [es:BM_ROW], al
+    pop     dx
+    pop     bx
+    pop     ax
     ret
 
 ; ---------------------------------------------------------------------------
@@ -159,25 +199,26 @@ bmRedraw:
     xor     dh, dh
 .row:
     xor     dl, dl
-    mov     cx, 79                  ; seventy-nine cells, not eighty: the
-    mov     al, ' '                 ; console advances after the last one and a
-    mov     bl, SU_PAPER            ; cursor that steps past column 79 of row 29
-    call    suBar                   ; scrolls the whole screen up a line
-    mov     dl, 79
+    mov     cl, [es:BDA_VIDCOLS]    ; the console advances after the last cell
+    dec     cl                      ; and a cursor that steps past the last
+    mov     al, ' '                 ; column scrolls the whole screen up a
+    mov     bl, SU_PAPER            ; line, so the final cell is poked instead
+    call    suBar
+    mov     dl, cl
     mov     al, ' '
     mov     bl, SU_PAPER
     call    suPoke
     inc     dh
-    cmp     dh, ROWS
+    cmp     dh, [es:BDA_VIDROWS]
     jb      .row
     xor     dl, dl
     xor     dh, dh
     call    suGoto
     ; the panel: a top rule, the title bar, a blank, the entries, a blank and
     ; the bottom rule
-    mov     dl, BM_LEFT
-    mov     dh, BM_TOP
-    mov     cl, BM_WIDTH
+    mov     dl, [es:BM_L]
+    mov     dh, [es:BM_TOP_V]
+    mov     cl, [es:BM_W]
     mov     al, [es:BM_CNT]
     add     al, 5
     mov     bl, al

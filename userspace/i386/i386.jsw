@@ -1384,6 +1384,21 @@ class Cpu {
         _wv = val % 256;
         _pA = a % 4294967296;          // as above: the address is unsigned
         if (_pA >= 4293918720) { _pA = _pA - 4293918720 + 983040; }
+        /* Base memory is the list, and the test for it comes first here for
+         * the same reason it does in `rdb`: whatever `rdb` reads is where the
+         * byte lives. Writing to the extension's buffer instead, which is what
+         * this did, put the guest's own stack and its BIOS data area somewhere
+         * `rdb` never looked -- so the first `ret` after the reboot popped a
+         * zero and POST restarted at offset one, for ever. A read decides; a
+         * write follows. */
+        if (_pA < X.holeEnd) {         // hot path, and the same one comparison
+            _i = Operators.math("floor", _pA / 4) + 1;
+            _sh = X.bw.get(_pA % 4 + 1);
+            _old = X.mem.get(_i) + 0;
+            _b = Operators.math("floor", _old / _sh) % 256;
+            X.mem.set(_i, _old - _b * _sh + _wv * _sh);
+            return;
+        }
 #ifdef TURBOWARP
         if (X.extOn == 1 && _pA < X.memWords4) {
             Ram.write8(_pA, _wv);
@@ -1393,14 +1408,6 @@ class Cpu {
         if (_pA >= 655360 && _pA < 655360 + X.gfxWords * 4) {
             X.gfx.set(_pA - 655360 + 1, _wv);
             X.gfxDirty = 1;                 // the card has a pixel to repaint
-            return;
-        }
-        if (_pA < X.holeEnd) {         // hot path, and the same one comparison
-            _i = Operators.math("floor", _pA / 4) + 1;
-            _sh = X.bw.get(_pA % 4 + 1);
-            _old = X.mem.get(_i) + 0;
-            _b = Operators.math("floor", _old / _sh) % 256;
-            X.mem.set(_i, _old - _b * _sh + _wv * _sh);
             return;
         }
         if (_pA >= X.textBase && _pA < X.textBase + X.textWords * 4) {

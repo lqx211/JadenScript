@@ -57,11 +57,104 @@ GX_TX    equ 30                     ; the right pane's text
 GX_TW    equ 48                     ; its width
 GX_FIRST equ 2                      ; the first row either pane can use
 GX_LAST  equ 21                     ; ... and the last
-GX_HINT  equ 25                     ; the hint box
+GX_HINT  equ 25                     ; where the hint box wants to be
 GX_HINT_H equ 5
+
+; The rest of the frame depends on the card, not on this listing: TurboWarp in
+; a small window reports fewer cells than Scratch's own 60 x 22 stage, and the
+; frame's fixed 80 x 30 is a frame with its right border and its hint box off
+; the side of the screen. gxLayout measures it once, on the way in, from the
+; geometry POST already read out of the card.
+GX_M_RR   equ 0x5B0                 ; the frame's right edge
+GX_M_TW   equ 0x5B1                 ; the right pane's text width
+GX_M_BOT  equ 0x5B2                 ; ... its bottom border row
+GX_M_LAST equ 0x5B3                 ; ... the last row a pane can use
+GX_M_SPAN equ 0x5B4                 ; ... last - first: a full window, less one
+GX_M_WIN  equ 0x5B5                 ; ... and how many rows that is
+GX_M_HINT equ 0x5B6                 ; ... the hint box's top row, or 0 for none
+GX_M_LM1  equ 0x5B7                 ; ... and one row above the bottom border
+GX_M_COLS equ 0x5B8                 ; ... the card's width in cells
 
 KIND_GROUP equ 0x40
 KIND_EDIT  equ 0x80
+
+; ---------------------------------------------------------------------------
+; gxLayout -- measure the frame against the card the picture is on.
+;
+; The tree was drawn for an 80 x 30 plane and a card that showed all of it. A
+; card is not always that size: POST asks the card how many cells it can show
+; (BDA_VIDCOLS/BDA_VIDROWS) and this turns the answer into the six numbers the
+; frame is built from. The right pane gives up width first -- its text is a
+; caption and a rule -- and a card shorter than the frame loses the hint box
+; rather than the rows the tree needs.
+; ---------------------------------------------------------------------------
+gxLayout:
+    push    ax
+    push    bx
+    push    cx
+    mov     byte [es:CON_T], 0
+    mov     al, [es:BDA_VIDROWS]
+    dec     al
+    mov     byte [es:CON_B], al     ; printing may not run off the card
+    mov     byte [es:CON_W], COLS
+    mov     al, [es:BDA_VIDCOLS]
+    test    al, al
+    jnz     .havecols
+    mov     al, COLS                ; a card that says nothing has the lot
+.havecols:
+    cmp     al, COLS
+    jbe     .narrow
+    mov     al, COLS
+.narrow:
+    mov     [es:GX_M_COLS], al
+    sub     al, 2                   ; the frame's own borders cost a column
+    cmp     al, GX_RR               ; a card wide enough keeps the pane's width
+    jb      .fit
+    mov     al, GX_RR
+.fit:
+    mov     [es:GX_M_RR], al
+    mov     bl, al
+    sub     bl, GX_TX
+    mov     [es:GX_M_TW], bl
+    mov     al, [es:BDA_VIDROWS]
+    test    al, al
+    jnz     .haverows
+    mov     al, ROWS
+.haverows:
+    cmp     al, ROWS
+    jbe     .short
+    mov     al, ROWS
+.short:
+    sub     al, 2
+    cmp     al, GX_BOT_I            ; the bottom border row
+    jb      .fitrow
+    mov     al, GX_BOT_I
+.fitrow:
+    mov     [es:GX_M_BOT], al
+    dec     al
+    mov     [es:GX_M_LAST], al
+    mov     bl, al
+    dec     bl
+    mov     [es:GX_M_LM1], bl
+    sub     al, GX_FIRST
+    mov     [es:GX_M_SPAN], al
+    inc     al
+    mov     [es:GX_M_WIN], al
+    ; the hint box is six rows tall including its border; below the frame it
+    ; needs GX_HINT rows to itself, and a card that short does not have them
+    mov     byte [es:GX_M_HINT], 0
+    mov     al, [es:GX_M_BOT]
+    add     al, 3
+    mov     bl, al
+    add     bl, GX_HINT_H
+    cmp     bl, [es:BDA_VIDROWS]
+    ja      .out
+    mov     [es:GX_M_HINT], al
+.out:
+    pop     cx
+    pop     bx
+    pop     ax
+    ret
 
 ; ---------------------------------------------------------------------------
 ; gxEnter -- the setup utility. Returns when the user has decided to leave.
@@ -72,6 +165,7 @@ gxEnter:
     mov     ds, ax
     pop     ax
     mov     byte [es:CON_ATTR], SU_PAPER
+    call    gxLayout
     mov     byte [es:GX_SEL], 0
     mov     byte [es:GX_TOP], 0
     call    suLoad                  ; the CMOS into the working copy
@@ -266,11 +360,11 @@ gxFollow:
     jmp     .out
 .below:
     mov     ah, [es:GX_TOP]
-    add     ah, GX_LAST - GX_FIRST
+    add     ah, [es:GX_M_SPAN]
     cmp     al, ah
     jbe     .out
     mov     al, [es:GX_SEL]
-    sub     al, GX_LAST - GX_FIRST
+    sub     al, [es:GX_M_SPAN]
     mov     [es:GX_TOP], al
 .out:
     pop     ax
@@ -402,26 +496,27 @@ gxFrame:
     mov     al, G_VBAR
     mov     bl, SU_SEL
     call    suPlot
-    mov     dl, 79
+    mov     dl, [es:GX_M_RR]
     mov     al, G_VBAR
     mov     bl, SU_SEL
     call    suPlot
     inc     dh
-    cmp     dh, GX_BOT_I
+    cmp     dh, [es:GX_M_BOT]
     jb      .side
-    mov     dh, GX_BOT_I
+    mov     dh, [es:GX_M_BOT]
     xor     dl, dl
-    mov     cx, 80
+    mov     cl, [es:GX_M_COLS]
+    xor     ch, ch
     mov     al, G_HBAR
     mov     bl, SU_SEL
     call    suBar
     xor     dl, dl
-    mov     dh, GX_BOT_I
+    mov     dh, [es:GX_M_BOT]
     mov     al, G_BL
     mov     bl, SU_SEL
     call    suPlot
-    mov     dl, 79
-    mov     dh, GX_BOT_I
+    mov     dl, [es:GX_M_RR]
+    mov     dh, [es:GX_M_BOT]
     mov     al, G_BR
     mov     bl, SU_SEL
     call    suPlot
@@ -429,19 +524,26 @@ gxFrame:
     mov     dl, GX_LX
     mov     dh, GX_TOP_I
     mov     cx, GX_LR - GX_LX + 1
-    mov     bh, GX_BOT_I - GX_TOP_I + 1
+    mov     bh, [es:GX_M_BOT]
     call    gxBox
     mov     dl, GX_RX
     mov     dh, GX_TOP_I
-    mov     cx, GX_RR - GX_RX + 1
-    mov     bh, GX_BOT_I - GX_TOP_I + 1
+    mov     cl, [es:GX_M_RR]
+    sub     cl, GX_RX - 1
+    mov     ch, 0
+    mov     bh, [es:GX_M_BOT]
     call    gxBox
-    ; and the hints
+    ; and the hints, if this card is tall enough for them
+    mov     al, [es:GX_M_HINT]
+    test    al, al
+    jz      .nohint
     xor     dl, dl
-    mov     dh, GX_HINT
-    mov     cx, 80
+    mov     dh, al
+    mov     cl, [es:GX_M_COLS]
+    xor     ch, ch
     mov     bh, GX_HINT_H
     call    gxBox
+.nohint:
     pop     si
     pop     dx
     pop     cx
@@ -556,7 +658,7 @@ gxDrawLeft:
     mov     bl, SU_PAPER
     call    suBar
     inc     dh
-    cmp     dh, GX_LAST
+    cmp     dh, [es:GX_M_LAST]
     jbe     .blank
     call    gxScrollBar
     mov     al, [es:GX_TOP]
@@ -567,7 +669,7 @@ gxDrawLeft:
     cmp     al, [es:GX_NVIS]
     jae     .done
     mov     al, [es:GX_NODE]
-    cmp     al, GX_LAST
+    cmp     al, [es:GX_M_LAST]
     ja      .done
     call    gxRow
     inc     byte [es:GX_ROW]
@@ -682,7 +784,7 @@ gxScrollBar:
     mov     bl, SU_SEL
     call    suPlot
     mov     dl, GX_SBAR
-    mov     dh, GX_LAST
+    mov     dh, [es:GX_M_LAST]
     mov     al, 0x1F                 ; and the down arrow
     mov     bl, SU_SEL
     call    suPlot
@@ -693,19 +795,19 @@ gxScrollBar:
     mov     bl, SU_SEL
     call    suPlot
     inc     dh
-    cmp     dh, GX_LAST - 1
+    cmp     dh, [es:GX_M_LM1]
     jbe     .track
     ; where the thumb goes: the window's share of the tree, at least two rows
     mov     al, GX_FIRST + 1
     mov     [es:GX_COL], al
     mov     al, [es:GX_NVIS]
-    cmp     al, GX_LAST - GX_FIRST + 1
+    cmp     al, [es:GX_M_WIN]
     jbe     .draw
     mov     al, [es:GX_TOP]
     mov     bl, 13                   ; the track, less the thumb
     mul     bl
     mov     bl, [es:GX_NVIS]
-    sub     bl, GX_LAST - GX_FIRST + 1
+    sub     bl, [es:GX_M_WIN]
     jz      .draw
     div     bl
     add     al, GX_FIRST + 1
@@ -719,7 +821,7 @@ gxScrollBar:
     mov     bl, SU_SEL
     call    suPlot
     inc     dh
-    cmp     dh, GX_LAST - 1
+    cmp     dh, [es:GX_M_LM1]
     ja      .out
     loop    .thumb
 .out:
@@ -748,7 +850,7 @@ gxPci:
     mov     byte [es:CON_ATTR], SU_PAPER
     mov     si, msg_gx_pci
     call    gxStrLen
-    mov     dl, GX_RR
+    mov     dl, [es:GX_M_RR]
     sub     dl, al
     dec     dl
     mov     dh, GX_FIRST
@@ -758,7 +860,8 @@ gxPci:
     call    suPrint
     mov     dh, GX_FIRST + 1
     mov     dl, GX_TX
-    mov     cx, GX_TW
+    mov     cl, [es:GX_M_TW]
+    mov     ch, 0
     mov     al, G_HBAR
     mov     bl, SU_SEL
     call    suBar
@@ -860,7 +963,7 @@ gxMemory:
     mov     byte [es:CON_ATTR], SU_PAPER
     mov     si, msg_gx_mem
     call    gxStrLen
-    mov     dl, GX_RR
+    mov     dl, [es:GX_M_RR]
     sub     dl, al
     dec     dl
     mov     dh, GX_FIRST
@@ -870,7 +973,8 @@ gxMemory:
     call    suPrint
     mov     dh, GX_FIRST + 1
     mov     dl, GX_TX
-    mov     cx, GX_TW
+    mov     cl, [es:GX_M_TW]
+    mov     ch, 0
     mov     al, G_HBAR
     mov     bl, SU_SEL
     call    suBar
@@ -1007,7 +1111,7 @@ gxMonitor:
     ; static pages get from gxDrawRight
     mov     si, msg_gx_hwmon
     call    gxStrLen
-    mov     dl, GX_RR
+    mov     dl, [es:GX_M_RR]
     sub     dl, al
     dec     dl
     mov     dh, GX_FIRST
@@ -1017,7 +1121,8 @@ gxMonitor:
     call    suPrint
     mov     dh, GX_FIRST + 1
     mov     dl, GX_TX
-    mov     cx, GX_TW
+    mov     cl, [es:GX_M_TW]
+    mov     ch, 0
     mov     al, G_HBAR
     mov     bl, SU_SEL
     call    suBar
@@ -1202,7 +1307,7 @@ gxDrive:
     mov     byte [es:CON_ATTR], SU_PAPER
     mov     si, msg_gx_drive0
     call    gxStrLen
-    mov     dl, GX_RR
+    mov     dl, [es:GX_M_RR]
     sub     dl, al
     dec     dl
     mov     dh, GX_FIRST
@@ -1212,7 +1317,8 @@ gxDrive:
     call    suPrint
     mov     dh, GX_FIRST + 1
     mov     dl, GX_TX
-    mov     cx, GX_TW
+    mov     cl, [es:GX_M_TW]
+    mov     ch, 0
     mov     al, G_HBAR
     mov     bl, SU_SEL
     call    suBar
@@ -1440,12 +1546,13 @@ gxDrawRight:
     mov     dh, GX_FIRST
 .blank:
     mov     dl, GX_TX
-    mov     cx, GX_TW
+    mov     cl, [es:GX_M_TW]
+    mov     ch, 0
     mov     al, ' '
     mov     bl, SU_PAPER
     call    suBar
     inc     dh
-    cmp     dh, GX_LAST
+    cmp     dh, [es:GX_M_LAST]
     jbe     .blank
     call    gxNodeOf
     mov     si, [di + 4]
@@ -1477,7 +1584,7 @@ gxDrawRight:
     ; the title, flush right
     mov     si, [si]
     call    gxStrLen
-    mov     dl, GX_RR
+    mov     dl, [es:GX_M_RR]
     sub     dl, al
     dec     dl
     mov     dh, GX_FIRST
@@ -1489,7 +1596,8 @@ gxDrawRight:
     mov     si, [di + 4]
     mov     dh, GX_FIRST + 1
     mov     dl, GX_TX
-    mov     cx, GX_TW
+    mov     cl, [es:GX_M_TW]
+    mov     ch, 0
     mov     al, G_HBAR
     mov     bl, SU_SEL
     call    suBar
@@ -1501,7 +1609,7 @@ gxDrawRight:
     test    bx, bx
     jz      .out
     mov     al, [es:GX_LINE]
-    cmp     al, GX_LAST
+    cmp     al, [es:GX_M_LAST]
     ja      .out
     mov     dl, GX_TX
     mov     dh, al
@@ -1537,22 +1645,29 @@ gxHint:
     push    bx
     push    dx
     push    si
+    mov     al, [es:GX_M_HINT]
+    test    al, al                  ; no room for the box, so nothing to say
+    jz      .out
     mov     dl, 2
-    mov     dh, GX_HINT + 1
+    mov     dh, al
+    inc     dh
     call    suGoto
     mov     si, msg_gx_hint1
     mov     bl, SU_PAPER
     call    suPrint
     mov     dl, 2
-    mov     dh, GX_HINT + 2
+    mov     dh, [es:GX_M_HINT]
+    add     dh, 2
     call    suGoto
     mov     si, msg_gx_hint2
     call    suPrint
     mov     dl, 2
-    mov     dh, GX_HINT + 3
+    mov     dh, [es:GX_M_HINT]
+    add     dh, 3
     call    suGoto
     mov     si, msg_gx_hint3
     call    suPrint
+.out:
     pop     si
     pop     dx
     pop     bx
