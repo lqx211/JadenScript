@@ -99,7 +99,7 @@ start:
     mov     ax, TEXT_SEG
     mov     es, ax
     xor     di, di
-    mov     cx, COLS * ROWS
+    mov     cx, MAXCOLS * MAXROWS
     mov     ax, 0x0720              ; space, light grey on black
     rep     stosw
 
@@ -669,7 +669,7 @@ clear_text:
     mov     ax, TEXT_SEG
     mov     es, ax
     xor     di, di
-    mov     cx, COLS * ROWS
+    mov     cx, MAXCOLS * MAXROWS
     mov     ax, 0x0720
     rep     stosw
     pop     es
@@ -714,9 +714,10 @@ tty:
 .wrap:
     mov     cl, [es:BDA_CURSOR_ROW]
     xor     ch, ch
-    mov     dx, COLS
-    mov     ax, cx
-    mul     dx                      ; ax = row * 80
+    mov     dl, [es:CON_W]          ; the card's stride, not the 80 this was
+    xor     dh, dh                  ; written against: at 128 columns a row is
+    mov     ax, cx                  ; 128 cells, and using 80 puts every line
+    mul     dx                      ; of the log on the row above
     mov     cl, [es:BDA_CURSOR_COL]
     xor     ch, ch
     add     ax, cx
@@ -750,11 +751,17 @@ tty:
     mov     al, [es:CON_T]
     xor     ah, ah
     mov     bp, COLS * 2
+    mov     bl, [es:CON_W]
+    xor     bh, bh
+    add     bp, 0
+    mov     bp, bx
+    add     bp, bp                  ; the card's stride, in bytes
     mul     bp
     mov     di, ax                  ; the window's top left, in the plane
     mov     si, ax
     add     si, bp                  ; one row further down
-    mov     bp, COLS * 2
+    mov     bp, bx
+    add     bp, bp
     sub     bp, cx
     sub     bp, cx                  ; the gap at the end of each row
     push    es
@@ -776,7 +783,10 @@ tty:
     ; and the window's last row is blanked
     mov     al, [es:CON_B]
     xor     ah, ah
-    mov     bp, COLS * 2
+    mov     bl, [es:CON_W]
+    xor     bh, bh
+    mov     bp, bx
+    add     bp, bp
     mul     bp
     mov     di, ax
     mov     ah, [es:CON_ATTR]
@@ -1383,7 +1393,7 @@ mode10:
 
 getmode10:
     mov     al, [es:BDA_VIDEO_MODE]
-    mov     ah, COLS
+    mov     ah, [es:CON_W]
     ret
 
 setpos10:
