@@ -528,18 +528,18 @@ class I386SetupTests(unittest.TestCase):
         value that stayed on the first entry. Boot Sequence has four entries and
         starts at zero, which is where it showed."""
         first = self._setup([self.F2] + [self.DOWN] * 11
-                            + [self.ENTER, self.LEFT, self.ENTER])
+                            + [self.ENTER, self.DOWN, self.ENTER])
         self.assertEqual(first.read(0x540 + 8, 1), 3,
-                         "Left on the first entry lands on the last")
+                         "Down on the first entry lands on the last")
         last = self._setup([self.F2] + [self.DOWN] * 11
-                           + [self.ENTER] + [self.RIGHT] * 4 + [self.ENTER])
+                           + [self.ENTER] + [self.UP] * 4 + [self.ENTER])
         self.assertEqual(last.read(0x540 + 8, 1), 0,
-                         "Right on the last entry lands on the first")
+                         "Up on the last entry lands on the first")
 
     def test_the_clock_wraps_down_past_midnight(self) -> None:
         # 12 o'clock, thirteen steps left: 11, 10 ... 0, then 23
         # the editor is modal and Asks for a key per step, so this drives it
-        # the way a person does: Enter in, thirteen Lefts, Enter out
+        # the way a person does: Enter in, twelve Downs, Enter out
         # the editor redraws between keys, so each one needs its own frame
         keys = [self.F2] + [self.DOWN] * 8
         mach = rv.Machine()
@@ -549,7 +549,7 @@ class I386SetupTests(unittest.TestCase):
         mach.eip = rv.RESET_IP
         while mach.keys:
             mach.run(limit=mach.steps + 250_000)
-        for key in [self.ENTER] + [self.LEFT] * 12:
+        for key in [self.ENTER] + [self.DOWN] * 12:
             mach.keys.append(key)
             mach.run(limit=mach.steps + 250_000)
         self.assertEqual(mach.read(0x540 + 3, 1), 12,
@@ -584,10 +584,10 @@ class I386SetupTests(unittest.TestCase):
         a table the chipset is handed."""
         keys = ([self.F2] + self.TO_CPU
                 + [self.RIGHT, self.DOWN, self.DOWN, self.DOWN, self.ENTER,
-                   self.RIGHT]                      # performance, one step up
+                   self.UP]                         # performance, one step up
                 + [self.ENTER, self.DOWN, self.RIGHT, self.DOWN,
                    self.ENTER,
-                   self.RIGHT, self.RIGHT]          # clock rate, two steps down
+                   self.UP, self.UP]                # clock rate, two steps down
                 + [self.ENTER, self.ESC, self.ENTER])
         mach = self._setup(keys)
         self.assertEqual(mach.cmos[0x3A], 1, "2x")
@@ -598,7 +598,7 @@ class I386SetupTests(unittest.TestCase):
     def test_the_thread_count_takes_the_whole_frame(self) -> None:
         keys = ([self.F2] + self.TO_CPU
                 + [self.RIGHT, self.DOWN, self.DOWN, self.ENTER,
-                   self.RIGHT, self.ENTER, self.ESC, self.ENTER])
+                   self.UP, self.ENTER, self.ESC, self.ENTER])
         mach = self._setup(keys)
         self.assertEqual(mach.cmos[0x39], 1, "two per core")
         self.assertEqual(mach.threads, 2)
@@ -640,13 +640,81 @@ class I386SetupTests(unittest.TestCase):
         """Left on socket 0 takes 128 MB off the board and puts 64 on it, and
         the total follows -- 0x17 is what E820 and int 15h AH=88 read."""
         keys = ([self.F2] + self.TO_SLOT0
-                + [self.ENTER, self.LEFT, self.ENTER]
+                + [self.ENTER, self.DOWN, self.ENTER]
                 + [self.ESC, self.ENTER])
         mach = self._setup(keys)
         self.assertEqual(mach.cmos[0x40], 7, "socket 0: index 7 = 64 MB")
         self.assertEqual(mach.cmos[0x17], 64, "and the total came with it")
         self.assertEqual(mach.cmos[0x58], 0xA5, "the map is recorded")
         self.assertEqual(mach.ram[0x4F5], 1, "and the board was asked to restart")
+
+    #: the two run nodes under Memory, after its ten value rows
+    TO_OVERVIEW = TO_MEMORY + [0x4D] + [0x50] * 11
+    TO_AUTO = TO_MEMORY + [0x4D] + [0x50] * 12
+
+    #: the digit keys, "0" last because it sits after "9" on the keyboard
+    DIGITS = {str(d): 0x02 + d - 1 for d in range(1, 10)} | {"0": 0x0B}
+
+    def _typed(self, text: str) -> list[int]:
+        return [self.DIGITS[c] for c in text]
+
+    def test_the_overview_lists_what_is_in_each_socket(self) -> None:
+        mach = self._setup([self.F2] + self.TO_OVERVIEW + [self.ENTER])
+        screen = mach.text()
+        self.assertIn("Memory Overview", screen)
+        self.assertIn("Total  128 MB in 1 of 4 sockets", screen)
+        self.assertIn("Mode   Extended (module)", screen)
+        self.assertIn("Slot 0 128 MB DDR4 DIMM", screen,
+                      "the module the battery has in the first socket")
+        self.assertIn("Slot 1 empty", screen)
+        self.assertIn("[ OK ]", screen)
+
+    def test_auto_allocation_offers_plans_fewest_sockets_first(self) -> None:
+        """96 MB is two modules of 64 and 32, three of 32, or six of 16: the
+        plans come out in that order, and the one a person would pick is the
+        one with the fewest modules in it."""
+        keys = ([self.F2] + self.TO_AUTO + [self.ENTER] + self._typed("96")
+                + [self.ENTER])
+        screen = self._setup(keys).text()
+        self.assertIn("Fit 96 MB into the sockets", screen)
+        self.assertIn("1. 64+32  2 slots", screen)
+        self.assertIn("2. 32+32+32  3 slots", screen)
+        self.assertIn("3. 16+16+16+16+16+16  6 slots", screen)
+        self.assertIn("[ Cancel ]", screen)
+        self.assertIn("[ OK ]", screen)
+
+    def test_auto_allocation_fills_the_sockets_with_the_plan_it_is_given(self):
+        keys = ([self.F2] + self.TO_AUTO + [self.ENTER] + self._typed("96")
+                + [self.ENTER, self.DOWN, self.ENTER])
+        mach = self._setup(keys)
+        self.assertEqual(mach.read(0x540 + 4, 1), 3, "three sockets in use")
+        self.assertEqual(bytes(mach.ram[0x540 + 20:0x540 + 23]),
+                         bytes([6, 6, 6]), "three 32 MB modules")
+        self.assertEqual(mach.read(0x540 + 44, 1), 96, "and they add up")
+
+    def test_auto_allocation_leaves_the_sockets_alone_when_cancelled(self) -> None:
+        keys = ([self.F2] + self.TO_AUTO + [self.ENTER] + self._typed("96")
+                + [self.ENTER, self.LEFT, self.ENTER])
+        mach = self._setup(keys)
+        self.assertEqual(mach.read(0x540 + 4, 1), 4, "still the battery's four")
+        self.assertEqual(mach.read(0x540 + 20, 1), 8, "and still 128 MB in slot 0")
+
+    def test_the_editor_is_a_window_with_cancel_and_ok(self) -> None:
+        mach = self._setup([self.F2] + self.TO_SLOT0 + [self.ENTER])
+        screen = mach.text()
+        self.assertIn("[ Cancel ]", screen)
+        self.assertIn("[ OK ]", screen)
+        self.assertIn("Slot 0", screen)
+
+    def test_enter_on_cancel_throws_the_edit_away(self) -> None:
+        """Left and right move the light between the two buttons, so the value
+        has to be stepped with up and down -- and Enter on [ Cancel ] is the
+        same as Escape, which is what makes the pair worth having."""
+        keys = ([self.F2] + self.TO_SLOT0
+                + [self.ENTER, self.DOWN, self.LEFT, self.ENTER, self.ESC,
+                   self.ENTER])
+        mach = self._setup(keys)
+        self.assertEqual(mach.cmos[0x40], 8, "socket 0 is still 128 MB")
 
     def test_the_editor_names_the_row_it_is_editing(self) -> None:
         mach = self._setup([self.F2] + self.TO_SLOT0 + [self.ENTER])

@@ -37,9 +37,11 @@ GX_NODE  equ 0x57C                  ; the node the drawing loops are on
 GX_ROW   equ 0x57D                  ; ... and the screen row
 GX_COL   equ 0x57E                  ; ... and the column
 GX_LINE  equ 0x57F                  ; ... and the line of a detail being printed
-GX_EXP   equ 0x580                  ; one byte per node: a group is open at 1
+GX_EXP   equ 0x580                  ; one byte per node: a group is open at 1.
+                                    ; Fifty-one nodes reach 0x5B2, so the frame
+                                    ; measurements below moved out of their way
 GX_VIS   equ 0x5C0                  ; 64 bytes: the node index of each visible row
-GX_NODES equ 48
+GX_NODES equ 51
 GX_LIVE  equ 0xFFFE                 ; a page that reads the hardware, not the ROM
 GX_LIVEDRV equ 0xFFFD               ; ... the drive's identity, which it answers
 GX_LIVEPCI equ 0xFFFC               ; ... the PCI bus, which it walks
@@ -65,21 +67,22 @@ GX_HINT_H equ 5
 ; frame's fixed 80 x 30 is a frame with its right border and its hint box off
 ; the side of the screen. gxLayout measures it once, on the way in, from the
 ; geometry POST already read out of the card.
-GX_M_RR   equ 0x5B0                 ; the frame's right edge
-GX_M_TW   equ 0x5B1                 ; the right pane's text width
-GX_M_BOT  equ 0x5B2                 ; ... its bottom border row
-GX_M_LAST equ 0x5B3                 ; ... the last row a pane can use
-GX_M_SPAN equ 0x5B4                 ; ... last - first: a full window, less one
-GX_M_WIN  equ 0x5B5                 ; ... and how many rows that is
-GX_M_HINT equ 0x5B6                 ; ... the hint box's top row, or 0 for none
-GX_M_LM1  equ 0x5B7                 ; ... and one row above the bottom border
-GX_M_COLS equ 0x5B8                 ; ... the card's width in cells
+GX_M_RR   equ 0x6D1                 ; the frame's right edge
+GX_M_TW   equ 0x6D2                 ; the right pane's text width
+GX_M_BOT  equ 0x6D3                 ; ... its bottom border row
+GX_M_LAST equ 0x6D4                 ; ... the last row a pane can use
+GX_M_SPAN equ 0x6D5                 ; ... last - first: a full window, less one
+GX_M_WIN  equ 0x6D6                 ; ... and how many rows that is
+GX_M_HINT equ 0x6D7                 ; ... the hint box's top row, or 0 for none
+GX_M_LM1  equ 0x6D8                 ; ... and one row above the bottom border
+GX_M_COLS equ 0x6D9                 ; ... the card's width in cells
 
 GX_RR_MAX  equ 118                  ; the frame stops growing before the card
                                     ; does, so a very wide stage still has a
                                     ; margin instead of a wall of frame
 KIND_GROUP equ 0x40
 KIND_EDIT  equ 0x80
+KIND_RUN   equ 0x20                 ; a node that opens a window; low bits = which
 
 ; ---------------------------------------------------------------------------
 ; gxLayout -- measure the frame against the card the picture is on.
@@ -216,8 +219,21 @@ gxEnter:
     call    gxNodeOf                ; di = the record under the light
     mov     al, [di + 1]            ; its kind
     test    al, KIND_GROUP
-    jz      .editable
+    jz      .run
     call    gxFold
+    call    gxDraw
+    jmp     .key
+.run:
+    test    al, KIND_RUN
+    jz      .editable
+    and     al, 0x1F                ; which window
+    test    al, al
+    jnz     .alloc
+    call    suMemOverview
+    jmp     .redraw
+.alloc:
+    call    suMemPlan
+.redraw:
     call    gxDraw
     jmp     .key
 .editable:
@@ -1745,6 +1761,8 @@ gx_nodes:
     NODE 2, KIND_EDIT | 26,         msg_gx_slot5,    gx_d_slot
     NODE 2, KIND_EDIT | 27,         msg_gx_slot6,    gx_d_slot
     NODE 2, KIND_EDIT | 28,         msg_gx_slot7,    gx_d_slot
+    NODE 2, KIND_RUN | 0,           msg_gx_overview, gx_d_overview
+    NODE 2, KIND_RUN | 1,           msg_gx_autofit,  gx_d_autofit
     NODE 0, 0,                      msg_gx_video,    gx_d_video
     NODE 0, 0,      msg_gx_pci,      gx_d_pci
     NODE 0, 0,                      msg_gx_perf,     gx_d_perf
@@ -1794,6 +1812,8 @@ gx_d_memg:      dw msg_gx_memg, l_mg1, l_mg2, l_mg3, l_blank, l_mg4, 0
 gx_d_slots:     dw msg_gx_slots, l_ms1, l_ms2, l_blank, l_mg5, 0
 gx_d_memmode:   dw msg_gx_memmode, l_mm1, l_mm2, l_blank, l_mg5, 0
 gx_d_slot:      dw msg_gx_slot, l_msl1, l_msl2, l_blank, l_mg5, 0
+gx_d_overview:  dw msg_gx_overview, l_ov1, l_ov2, l_blank, l_ov3, 0
+gx_d_autofit:   dw msg_gx_autofit, l_af1, l_af2, l_blank, l_af3, 0
 gx_d_security:  dw msg_gx_security, l_se1, l_se2, l_blank, l_fixed, 0
 gx_d_power:     dw msg_gx_power, l_pw1, l_blank, l_fixed, 0
 gx_d_maint:     dw msg_gx_maint, l_mt1, l_mt2, l_blank, l_fixed, 0
@@ -1875,6 +1895,8 @@ msg_me_empty:      db "empty", 0
 msg_gx_memg:       db "Memory", 0
 msg_gx_slots:      db "Available Slots", 0
 msg_gx_memmode:    db "Mode", 0
+msg_gx_overview:   db "Memory Overview", 0
+msg_gx_autofit:    db "Auto Allocation", 0
 msg_gx_slot0:      db "Slot 0", 0
 msg_gx_slot1:      db "Slot 1", 0
 msg_gx_slot2:      db "Slot 2", 0
@@ -1986,6 +2008,12 @@ l_mm2:    db "list; Extended uses the memory module.", 0
 l_msl1:   db "One module. Size is what is fitted; the", 0
 l_msl2:   db "generation and form are what it says it is.", 0
 l_mg5:    db "Saving this restarts the board.", 0
+l_ov1:    db "What the sockets add up to, and what", 0
+l_ov2:    db "is in each of them.", 0
+l_ov3:    db "Enter shows the board's memory map.", 0
+l_af1:    db "Type the memory to fit and the board", 0
+l_af2:    db "offers plans, fewest sockets first.", 0
+l_af3:    db "Enter picks one and fills the slots.", 0
 l_vd1:    db "Video Controller   = JSW VGA", 0
 l_vd2:    db "Video Memory       = 4 KB of text plane", 0
 l_vd3:    db "Mode               = 03h text, 13h, 12h", 0

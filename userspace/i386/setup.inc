@@ -38,6 +38,11 @@ SU_OLD   equ 0x570                  ; the value before an edit, for Esc
 SU_OPT   equ 0x571                  ; which button the exit prompt has lit
 SU_AUTO_N equ 0x572                 ; the socket count auto-alloc is using
 SU_AUTO_MB equ 0x573                ; ... and the megabytes it has left (a word)
+SU_PL_CAP equ 0x682                 ; the biggest module each plan may use
+SU_PL_N   equ 0x687                 ; ... and the sockets each of them needs
+SU_PL_MAX equ 0x68C                 ; how many plans the last fit produced
+SU_PL_SEL equ 0x68D                 ; ... and which of them is lit
+SU_PL_TOT equ 0x68E                 ; the megabytes the fit was given (a word)
 SU_N     equ 11                     ; how many rows (the last is read-only)
 ; the memory panel's own layout inside SU_BUF: rows 0..3, then eight sockets
 ; whose size, kind and form live at +20, +28 and +36, and the total at 44
@@ -59,12 +64,14 @@ SU_HEAD  equ 0x1E                   ; blue paper, yellow ink
 SU_SEL   equ 0x70                   ; light grey paper, black ink
 SU_GREEN equ 0x20                   ; green paper, black ink: the Dell light
 SU_SHADOW equ 0x00                  ; black on black: the drop shadow
+SU_FOCUS equ 0x0F                   ; white on black: the lit button
 SU_INK   equ 0x575                  ; the ink of the row being drawn. It cannot
                                     ; share 0x4F5 with BDA_RESET: every redraw
                                     ; would clear the board's reboot request.
 SU_INBOX equ 0x576                  ; 1 while the modal editor owns the screen
 SU_TYP   equ 0x6A0                  ; digits typed into the editor, up to eight
 SU_TYL   equ 0x6A8                  ; how many of them there are
+SU_FOC   equ 0x6D0                  ; which of the editor's buttons is lit
 SU_TS    equ 0x6C0                  ; the same digits as a string, for the field
 SU_DLG_L equ 0x4F6                  ; a dialog's left column, while it draws
 SU_DLG_T equ 0x4F7                  ; its top row
@@ -1311,6 +1318,7 @@ suEdit:
     mov     [es:SU_OLD], al
     mov     byte [es:SU_INBOX], 1
     mov     byte [es:SU_TYL], 0
+    mov     byte [es:SU_FOC], 1
     call    suEditBox
 .key:
     call    keyScan
@@ -1320,6 +1328,10 @@ suEdit:
     je      .accept
     cmp     al, 0x0E
     je      .erase
+    cmp     al, 0x48                ; up steps the value on
+    je      .up
+    cmp     al, 0x50                ; down steps it back
+    je      .down
     cmp     al, 0x4B
     je      .left
     cmp     al, 0x4D
@@ -1330,17 +1342,25 @@ suEdit:
     ja      .key
     call    suTyped
     jmp     .key
-.left:
+.up:
+    mov     byte [es:SU_TYL], 0
+    mov     dl, 1
+    call    suAdjust
+    call    suEditValue
+    jmp     .key
+.down:
     mov     byte [es:SU_TYL], 0
     mov     dl, -1
     call    suAdjust
     call    suEditValue
     jmp     .key
+.left:
+    mov     byte [es:SU_FOC], 0
+    call    suButtons
+    jmp     .key
 .right:
-    mov     byte [es:SU_TYL], 0
-    mov     dl, 1
-    call    suAdjust
-    call    suEditValue
+    mov     byte [es:SU_FOC], 1
+    call    suButtons
     jmp     .key
 .erase:
     mov     al, [es:SU_TYL]
@@ -1351,6 +1371,10 @@ suEdit:
     call    suEditTyped
     jmp     .key
 .accept:
+    cmp     byte [es:SU_FOC], 0     ; Enter on [ Cancel ] throws the edit away
+    jne     .keep
+    jmp     .revert
+.keep:
     call    suTypCommit
     jmp     .done
 .revert:
@@ -1576,11 +1600,47 @@ suEditBox:
     mov     si, msg_su_gt
     mov     bl, SU_SEL
     call    suPrint
+    call    suButtons
+    pop     si
+    pop     dx
+    pop     cx
+    pop     bx
+    pop     ax
+    ret
+
+; suButtons -- the editor's [ Cancel ] [ OK ] pair, the one SU_FOC names lit.
+; Left and right move the light, Enter presses the lit one.
+suButtons:
+    push    ax
+    push    bx
+    push    cx
+    push    dx
+    push    si
     mov     dl, 26
     mov     dh, 15
-    call    suGoto
-    mov     si, msg_su_edit_hint
+    mov     cx, 31
+    mov     al, ' '
     mov     bl, SU_SEL
+    call    suBar
+    mov     dl, 30
+    mov     dh, 15
+    call    suGoto
+    mov     si, msg_su_btncancel
+    mov     bl, SU_SEL
+    cmp     byte [es:SU_FOC], 0
+    jne     .cancel
+    mov     bl, SU_FOCUS
+.cancel:
+    call    suPrint
+    mov     dl, 46
+    mov     dh, 15
+    call    suGoto
+    mov     si, msg_su_btnok
+    mov     bl, SU_SEL
+    cmp     byte [es:SU_FOC], 0
+    je      .ok
+    mov     bl, SU_FOCUS
+.ok:
     call    suPrint
     pop     si
     pop     dx
@@ -2056,6 +2116,738 @@ suMemTotal:
     mov     cx, 255                 ; the CMOS byte is the limit, not the idea
 .fits:
     mov     [es:SU_BUF + SU_M_TOTAL], cl
+    pop     si
+    pop     dx
+    pop     cx
+    pop     bx
+    pop     ax
+    ret
+
+; ---------------------------------------------------------------------------
+; The memory overview and the auto-allocation plans.
+;
+; Neither is a value the tree can hold, so both are "run" nodes: Enter on one
+; opens a window instead of an editor. The overview reads the sockets back; the
+; allocation offers the few ways the megabytes a person typed could be loaded
+; into the sockets, fewest modules first.
+; ---------------------------------------------------------------------------
+
+; suMemSum -- ax = the megabytes the sockets add up to, cl = how many carry one
+suMemSum:
+    push    bx
+    push    dx
+    push    si
+    xor     ax, ax
+    xor     cl, cl
+    xor     bx, bx
+.loop:
+    cmp     bx, 8
+    jae     .out
+    mov     si, bx
+    add     si, SU_BUF + SU_M_SIZE
+    mov     dl, [es:si]
+    test    dl, dl
+    jz      .next
+    inc     cl
+    xor     dh, dh
+    add     dx, dx
+    mov     si, dx
+    add     ax, [cs:su_ramsizes + si]
+.next:
+    inc     bx
+    jmp     .loop
+.out:
+    pop     si
+    pop     dx
+    pop     bx
+    ret
+
+; suPlanTry -- al = the biggest module a plan may use (index 0..7), cx = the
+; megabytes to place. Returns bl = how many sockets that takes, or 0xFF when
+; the megabytes cannot be placed at all.
+; bl is the answer, so bx is the one register this routine does not give back
+suPlanTry:
+    push    ax
+    push    cx
+    push    dx
+    push    si
+    push    di
+    mov     di, ax
+    xor     bh, bh                  ; sockets so far
+    mov     dx, cx                  ; megabytes still to place
+.more:
+    test    dx, dx
+    jz      .done
+    cmp     bh, 8
+    jae     .no                     ; a ninth module is not a plan
+    mov     si, di
+.try:
+    mov     ax, si
+    add     ax, ax
+    push    bx
+    mov     bx, ax
+    mov     cx, [cs:su_ramsizes + bx]
+    pop     bx
+    cmp     cx, dx
+    jbe     .fits
+    test    si, si
+    jz      .no                     ; even a megabyte is more than is left
+    dec     si
+    jmp     .try
+.fits:
+    sub     dx, cx
+    inc     bh
+    jmp     .more
+.done:
+    mov     bl, bh
+    jmp     .out
+.no:
+    mov     bl, 0xFF
+.out:
+    pop     di
+    pop     si
+    pop     dx
+    pop     cx
+    pop     ax
+    ret
+
+; suPlanBuild -- cx = the megabytes wanted. Fills the plan tables: a cap is the
+; largest module that plan may use, and walking the caps down from the largest
+; that fits at all gives plans in order of increasing socket count, each one
+; different from the last.
+suPlanBuild:
+    push    ax
+    push    bx
+    push    cx
+    push    dx
+    push    si
+    push    di
+    push    bp
+    mov     [es:SU_PL_TOT], cx
+    mov     [es:SU_PL_TOT + 1], ch
+    mov     byte [es:SU_PL_MAX], 0
+    mov     byte [es:SU_PL_SEL], 0
+    test    cx, cx
+    jz      .out
+    mov     bp, 8
+.find:
+    mov     ax, bp
+    add     ax, ax
+    mov     si, ax
+    mov     ax, [cs:su_ramsizes + si]
+    cmp     ax, cx
+    jbe     .cap
+    dec     bp                      ; 1 MB always fits a non-zero total
+    jmp     .find
+.cap:
+    mov     ax, bp
+    mov     cx, [es:SU_PL_TOT]
+    call    suPlanTry
+    cmp     bl, 0xFF
+    je      .next
+    mov     al, [es:SU_PL_MAX]
+    xor     ah, ah
+    mov     si, ax
+    push    bp
+    mov     ax, bp
+    mov     [es:SU_PL_CAP + si], al
+    pop     bp
+    mov     [es:SU_PL_N + si], bl
+    inc     byte [es:SU_PL_MAX]
+    cmp     byte [es:SU_PL_MAX], 5
+    jae     .out
+.next:
+    cmp     bp, 1
+    jbe     .out
+    dec     bp
+    jmp     .cap
+.out:
+    pop     bp
+    pop     di
+    pop     si
+    pop     dx
+    pop     cx
+    pop     bx
+    pop     ax
+    ret
+
+; suPlanStore -- al = a plan's cap, cx = the megabytes. Writes the sockets.
+suPlanStore:
+    push    ax
+    push    bx
+    push    cx
+    push    dx
+    push    si
+    push    di
+    mov     di, ax
+    xor     bx, bx
+.blank:
+    mov     byte [es:SU_BUF + SU_M_SIZE + bx], 0
+    inc     bx
+    cmp     bx, 8
+    jb      .blank
+    xor     bx, bx
+    mov     dx, cx
+.more:
+    test    dx, dx
+    jz      .done
+    cmp     bx, 8
+    jae     .done
+    mov     si, di
+.try:
+    mov     ax, si
+    add     ax, ax
+    push    bx
+    mov     bx, ax
+    mov     cx, [cs:su_ramsizes + bx]
+    pop     bx
+    cmp     cx, dx
+    jbe     .fits
+    test    si, si
+    jz      .done
+    dec     si
+    jmp     .try
+.fits:
+    mov     ax, si
+    mov     [es:SU_BUF + SU_M_SIZE + bx], al
+    sub     dx, cx
+    inc     bx
+    jmp     .more
+.done:
+    mov     [es:SU_BUF + SU_M_COUNT], bl
+    call    suMemTotal
+    pop     di
+    pop     si
+    pop     dx
+    pop     cx
+    pop     bx
+    pop     ax
+    ret
+
+; suMbDigits -- the digits typed so far as characters, on the ask window's field
+suMbDigits:
+    push    ax
+    push    bx
+    push    cx
+    push    dx
+    push    si
+    mov     dl, 15
+    mov     dh, 11
+    mov     cx, 12
+    mov     al, ' '
+    mov     bl, SU_SEL
+    call    suBar
+    mov     cl, [es:SU_TYL]
+    xor     ch, ch
+    xor     bx, bx
+.copy:
+    test    cx, cx
+    jz      .show
+    mov     si, bx
+    add     si, SU_TYP
+    mov     al, [es:si]
+    add     al, '0'
+    mov     si, bx
+    add     si, SU_TS
+    mov     [es:si], al
+    inc     bx
+    dec     cx
+    jmp     .copy
+.show:
+    mov     si, bx
+    add     si, SU_TS
+    mov     byte [es:si], 0
+    mov     dl, 15
+    mov     dh, 11
+    call    suGoto
+    push    ds
+    xor     ax, ax
+    mov     ds, ax
+    mov     si, SU_TS
+    mov     bl, SU_SEL
+    call    suPrint
+    pop     ds
+    pop     si
+    pop     dx
+    pop     cx
+    pop     bx
+    pop     ax
+    ret
+
+; suMbValue -- ax = the digits as a number, capped at 1024
+suMbValue:
+    push    bx
+    push    cx
+    push    dx
+    push    si
+    xor     bx, bx
+    xor     cx, cx
+.more:
+    mov     al, [es:SU_TYL]
+    xor     ah, ah
+    cmp     cx, ax
+    jae     .done
+    mov     ax, bx
+    mov     dx, 10
+    mul     dx
+    mov     bx, ax
+    mov     si, cx
+    add     si, SU_TYP
+    mov     al, [es:si]
+    xor     ah, ah
+    add     bx, ax
+    inc     cx
+    cmp     bx, 1024
+    jbe     .more
+    mov     bx, 1024
+.done:
+    mov     ax, bx
+    pop     si
+    pop     dx
+    pop     cx
+    pop     bx
+    ret
+
+; suMemAskMb -- the window that asks how much memory to fit. Returns ax = the
+; megabytes, or 0 when it was cancelled.
+suMemAskMb:
+    push    bx
+    push    cx
+    push    dx
+    push    si
+    mov     byte [es:SU_TYL], 0
+    mov     si, msg_su_mbask
+    mov     dl, 12
+    mov     dh, 8
+    mov     cx, 36
+    mov     bl, 7
+    mov     bh, SU_SEL
+    call    suDialogN
+    mov     byte [es:CON_ATTR], SU_SEL
+    mov     dl, 15
+    mov     dh, 10
+    call    suGoto
+    mov     si, msg_su_mbhow
+    mov     bl, SU_SEL
+    call    suPrint
+    mov     dl, 15
+    mov     dh, 12
+    call    suGoto
+    mov     si, msg_su_mbkey
+    mov     bl, SU_SEL
+    call    suPrint
+    call    suMbDigits
+.key:
+    call    keyScan
+    cmp     al, 0x01
+    je      .cancel
+    cmp     al, 0x0E
+    je      .erase
+    cmp     al, 0x1C
+    je      .take
+    cmp     al, 0x02
+    jb      .key
+    cmp     al, 0x0B
+    ja      .key
+    mov     bl, al
+    mov     al, [es:SU_TYL]
+    cmp     al, 5
+    jae     .key
+    mov     al, bl
+    sub     al, 0x02
+    cmp     al, 9
+    jb      .digit
+    xor     al, al
+    jmp     .put
+.digit:
+    inc     al
+.put:
+    mov     bl, [es:SU_TYL]
+    xor     bh, bh
+    mov     si, bx
+    add     si, SU_TYP
+    mov     [es:si], al
+    inc     byte [es:SU_TYL]
+    call    suMbDigits
+    jmp     .key
+.erase:
+    cmp     byte [es:SU_TYL], 0
+    je      .key
+    dec     byte [es:SU_TYL]
+    call    suMbDigits
+    jmp     .key
+.take:
+    call    suMbValue
+    jmp     .out
+.cancel:
+    xor     ax, ax
+.out:
+    mov     byte [es:CON_ATTR], SU_PAPER
+    pop     si
+    pop     dx
+    pop     cx
+    pop     bx
+    ret
+
+; suPlanChain -- al = a cap, cx = the megabytes: prints the modules that fill
+; them, biggest first, joined by plus signs
+suPlanChain:
+    push    ax
+    push    bx
+    push    cx
+    push    dx
+    push    si
+    push    di
+    mov     di, ax
+    mov     dx, cx
+    xor     bh, bh
+.more:
+    test    dx, dx
+    jz      .out
+    cmp     bh, 8
+    jae     .out
+    mov     si, di
+.try:
+    mov     ax, si
+    add     ax, ax
+    push    bx
+    mov     bx, ax
+    mov     cx, [cs:su_ramsizes + bx]
+    pop     bx
+    cmp     cx, dx
+    jbe     .fits
+    test    si, si
+    jz      .out
+    dec     si
+    jmp     .try
+.fits:
+    sub     dx, cx
+    inc     bh
+    cmp     bh, 1
+    je      .size
+.plus:
+    push    ax
+    push    bx
+    push    cx
+    push    dx
+    mov     al, '+'
+    call    putc
+    pop     dx
+    pop     cx
+    pop     bx
+    pop     ax
+.size:
+    mov     ax, cx
+    call    putn
+    jmp     .more
+.out:
+    pop     di
+    pop     si
+    pop     dx
+    pop     cx
+    pop     bx
+    pop     ax
+    ret
+
+; suPlanBox -- the plan window, drawn whole: five lines, the lit one picked out
+suPlanBox:
+    push    ax
+    push    bx
+    push    cx
+    push    dx
+    push    si
+    push    di
+    mov     si, msg_su_plan
+    mov     dl, 8
+    mov     dh, 2
+    mov     cx, 50
+    mov     bl, 16
+    mov     bh, SU_SEL
+    call    suDialogN
+    mov     byte [es:CON_ATTR], SU_SEL
+    mov     dl, 11
+    mov     dh, 4
+    call    suGoto
+    mov     si, msg_su_fit
+    mov     bl, SU_SEL
+    call    suPrint
+    mov     ax, [es:SU_PL_TOT]
+    call    putn
+    mov     si, msg_su_fit2
+    mov     bl, SU_SEL
+    call    suPrint
+    xor     di, di
+.line:
+    mov     al, [es:SU_PL_MAX]
+    xor     ah, ah
+    cmp     di, ax
+    jae     .hint
+    ; the row's band, lit when it is the one being picked
+    mov     bl, SU_SEL
+    mov     al, [es:SU_PL_SEL]
+    xor     ah, ah
+    cmp     ax, di
+    jne     .band
+    mov     bl, SU_FOCUS
+.band:
+    mov     [es:CON_ATTR], bl
+    push    bx
+    push    di
+    mov     ax, di
+    mov     dh, al
+    add     dh, 6
+    mov     dl, 10
+    mov     cx, 46
+    mov     al, ' '
+    call    suBar
+    pop     di
+    pop     bx
+    push    di
+    mov     ax, di
+    mov     dh, al
+    add     dh, 6
+    mov     dl, 11
+    call    suGoto
+    pop     di
+    lea     ax, [di + 1]
+    call    putn
+    mov     al, '.'
+    call    putc
+    mov     al, ' '
+    call    putc
+    xor     ah, ah
+    mov     al, [es:SU_PL_CAP + di]
+    mov     cx, [es:SU_PL_TOT]
+    call    suPlanChain
+    mov     si, msg_su_gap
+    mov     bl, [es:CON_ATTR]
+    call    suPrint
+    xor     ah, ah
+    mov     al, [es:SU_PL_N + di]
+    call    putn
+    mov     si, msg_su_slotsuf
+    mov     bl, [es:CON_ATTR]
+    call    suPrint
+    inc     di
+    jmp     .line
+.hint:
+    mov     byte [es:CON_ATTR], SU_SEL
+    mov     dl, 11
+    mov     dh, 13
+    call    suGoto
+    mov     si, msg_su_plankey
+    mov     bl, SU_SEL
+    call    suPrint
+    call    suButtons
+    pop     di
+    pop     si
+    pop     dx
+    pop     cx
+    pop     bx
+    pop     ax
+    ret
+
+; suMemPlan -- ask for a size, offer the plans, and load the sockets with the
+; one that is picked
+suMemPlan:
+    push    ax
+    push    bx
+    push    cx
+    push    dx
+    push    si
+    push    di
+    call    suMemAskMb
+    test    ax, ax
+    jz      .out
+    mov     cx, ax
+    call    suPlanBuild
+    cmp     byte [es:SU_PL_MAX], 0
+    je      .out
+    mov     byte [es:SU_FOC], 1
+    call    suPlanBox
+.key:
+    call    keyScan
+    cmp     al, 0x01
+    je      .out
+    cmp     al, 0x0E
+    je      .out
+    cmp     al, 0x48                ; up: the plan before
+    je      .up
+    cmp     al, 0x50                ; down: the plan after
+    je      .down
+    cmp     al, 0x4B
+    je      .left
+    cmp     al, 0x4D
+    je      .right
+    cmp     al, 0x1C
+    jne     .key
+    cmp     byte [es:SU_FOC], 0     ; Enter on [ Cancel ] takes nothing
+    je      .out
+    xor     ah, ah
+    mov     al, [es:SU_PL_SEL]
+    mov     di, ax
+    xor     ah, ah
+    mov     al, [es:SU_PL_CAP + di]
+    mov     cx, [es:SU_PL_TOT]
+    call    suPlanStore
+    jmp     .out
+.up:
+    cmp     byte [es:SU_PL_SEL], 0
+    je      .key
+    dec     byte [es:SU_PL_SEL]
+    call    suPlanBox
+    jmp     .key
+.down:
+    mov     al, [es:SU_PL_SEL]
+    inc     al
+    cmp     al, [es:SU_PL_MAX]
+    jae     .key
+    mov     [es:SU_PL_SEL], al
+    call    suPlanBox
+    jmp     .key
+.left:
+    mov     byte [es:SU_FOC], 0
+    call    suButtons
+    jmp     .key
+.right:
+    mov     byte [es:SU_FOC], 1
+    call    suButtons
+    jmp     .key
+.out:
+    mov     byte [es:CON_ATTR], SU_PAPER
+    pop     di
+    pop     si
+    pop     dx
+    pop     cx
+    pop     bx
+    pop     ax
+    ret
+
+; suMemOverview -- what the sockets add up to, one line each
+suMemOverview:
+    push    ax
+    push    bx
+    push    cx
+    push    dx
+    push    si
+    push    di
+    mov     si, msg_su_overview
+    mov     dl, 10
+    mov     dh, 3
+    mov     cx, 46
+    mov     bl, 15
+    mov     bh, SU_SEL
+    call    suDialogN
+    mov     byte [es:CON_ATTR], SU_SEL
+    call    suMemSum
+    push    cx
+    mov     dl, 13
+    mov     dh, 5
+    call    suGoto
+    mov     si, msg_su_total
+    mov     bl, SU_SEL
+    call    suPrint
+    call    putn
+    mov     si, msg_su_in
+    mov     bl, SU_SEL
+    call    suPrint
+    pop     ax
+    xor     ah, ah
+    call    putn
+    mov     si, msg_su_of
+    mov     bl, SU_SEL
+    call    suPrint
+    mov     al, [es:SU_BUF + SU_M_COUNT]
+    xor     ah, ah
+    call    putn
+    mov     si, msg_su_sockets
+    mov     bl, SU_SEL
+    call    suPrint
+    ; the mode, named
+    mov     dl, 13
+    mov     dh, 6
+    call    suGoto
+    mov     si, msg_su_mode
+    mov     bl, SU_SEL
+    call    suPrint
+    mov     al, [es:SU_BUF + SU_M_MODE]
+    xor     ah, ah
+    add     ax, ax
+    mov     si, ax
+    mov     si, [cs:su_mem_mode + si]
+    mov     bl, SU_SEL
+    call    suPrint
+    xor     di, di
+.socket:
+    cmp     di, 8
+    jae     .buttons
+    push    di
+    mov     ax, di
+    mov     dh, al
+    add     dh, 8
+    pop     di
+    mov     dl, 13
+    call    suGoto
+    mov     si, msg_su_socket
+    mov     bl, SU_SEL
+    call    suPrint
+    mov     ax, di                  ; the tree's own numbering, from zero
+    call    putn
+    mov     al, ' '
+    call    putc
+    xor     ah, ah
+    mov     al, [es:SU_BUF + SU_M_SIZE + di]
+    add     ax, ax
+    mov     si, ax
+    mov     si, [cs:su_ramsize_names + si]
+    mov     al, [es:SU_BUF + SU_M_SIZE + di]
+    test    al, al
+    jnz     .named
+    mov     si, msg_su_empty
+.named:
+    mov     bl, SU_SEL
+    call    suPrint
+    mov     al, [es:SU_BUF + SU_M_SIZE + di]
+    test    al, al
+    jz      .next
+    mov     al, ' '
+    call    putc
+    mov     al, [es:SU_BUF + SU_M_KIND + di]
+    xor     ah, ah
+    add     ax, ax
+    mov     si, ax
+    mov     si, [cs:su_kdnames + si]
+    mov     bl, SU_SEL
+    call    suPrint
+    mov     al, [es:SU_BUF + SU_M_FORM + di]
+    xor     ah, ah
+    add     ax, ax
+    mov     si, ax
+    mov     si, [cs:su_formnames + si]
+    mov     bl, SU_SEL
+    call    suPrint
+.next:
+    inc     di
+    jmp     .socket
+.buttons:
+    mov     dl, 44
+    mov     dh, 16
+    call    suGoto
+    mov     si, msg_su_btnok
+    mov     bl, SU_FOCUS
+    call    suPrint
+.key:
+    call    keyScan
+    cmp     al, 0x01
+    je      .out
+    cmp     al, 0x1C
+    je      .out
+    cmp     al, 0x0E
+    je      .out
+    jmp     .key
+.out:
+    mov     byte [es:CON_ATTR], SU_PAPER
+    pop     di
     pop     si
     pop     dx
     pop     cx
@@ -3208,8 +4000,27 @@ msg_su_discardhelp: db "Leave CMOS as it was", 0
 
 ; the dialogs
 msg_su_edit_hint: db "< > changes, Enter keeps", 0
-msg_su_lt:      db "<", 0
-msg_su_gt:      db ">", 0
+msg_su_overview: db "Memory Overview", 0
+msg_su_plan:     db "Auto Allocation", 0
+msg_su_mbask:    db "Fit memory into the sockets", 0
+msg_su_mbhow:    db "Megabytes to fit:", 0
+msg_su_mbkey:    db "Enter fits it, Esc cancels", 0
+msg_su_fit:      db "Fit ", 0
+msg_su_fit2:     db " MB into the sockets:", 0
+msg_su_gap:      db "  ", 0
+msg_su_slotsuf:  db " slots", 0
+msg_su_plankey:  db "Up/Down picks a plan, Enter takes it", 0
+msg_su_total:    db "Total  ", 0
+msg_su_in:       db " MB in ", 0
+msg_su_of:       db " of ", 0
+msg_su_sockets:  db " sockets", 0
+msg_su_mode:     db "Mode   ", 0
+msg_su_socket:   db "Slot ", 0
+msg_su_empty:    db "empty", 0
+msg_su_lt:      db "^", 0
+msg_su_gt:      db "v", 0
+msg_su_btncancel: db "[ Cancel ]", 0
+msg_su_btnok:   db "[ OK ]", 0
 msg_su_ask_title: db "Save the changes?", 0
 msg_su_ask_hint: db "Enter picks, Esc stays", 0
 msg_su_yes:     db "Save", 0
