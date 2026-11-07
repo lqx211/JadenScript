@@ -1,0 +1,62 @@
+/*
+ * speaker — the 8254's channel 2, as sound a browser can make.
+ *
+ * The machine already knows what it sounds like. `X.toneHz` is channel 2's
+ * divisor divided into the 1.193182 MHz clock, and `X.speakerGate` is the gate
+ * on port 0x61 that lets it out; both are kept up to date by the CPU itself, so
+ * nothing here has to understand the timer. All this sprite does is answer one
+ * question, sixty times a second: is the speaker sounding a note, and is it a
+ * different one from the note it was sounding last frame?
+ *
+ * The sounds are not recordings. `tools/i386_tones.py` writes a square wave per
+ * note, which is what a PC speaker is: there is no instrument to record. The
+ * pitch is decided by the machine, so a guest that programs divisor 2281 hears
+ * the 523 Hz sample -- the same relationship a real speaker has to the timer,
+ * one table lookup away.
+ *
+ * Scratch cannot change a sound's pitch without an effect that shifts playback
+ * speed, so the four notes the boot sector's tune uses get four samples and a
+ * note outside them is silent rather than wrong. That is a deliberate limit:
+ * a machine that plays the nearest note is not this machine.
+ */
+class Speaker {
+    private lastHz = 0;
+
+    /* Sounds belong to the sprite that plays them, so the imports sit inside
+     * the class: each file becomes an asset on this target. */
+    import "assets/sounds/tone440.wav" as tone440;
+    import "assets/sounds/tone523.wav" as tone523;
+    import "assets/sounds/tone659.wav" as tone659;
+    import "assets/sounds/tone784.wav" as tone784;
+
+    public void speakerStart() { // hook: green flag
+        Looks.hide();
+        lastHz = 0;
+        while (1 == 1) {
+            speakerPoll();
+            Control.wait(0);
+        }
+    }
+
+    private void speakerPoll() { // warp
+        /* The gate is two bits on a real board -- timer 2 through, then the
+         * speaker itself -- so anything below 3 is silence. */
+        if (X.speakerGate % 4 < 3 || X.toneHz <= 0) {
+            if (lastHz > 0) {
+                Sound.stopAllSounds();
+                lastHz = 0;
+            }
+            return;
+        }
+        if (X.toneHz == lastHz) {
+            return;                         // still the same note
+        }
+        Sound.stopAllSounds();
+        lastHz = X.toneHz;
+        if (X.toneHz < 480) { Sound.playSound("tone440"); return; }
+        if (X.toneHz < 590) { Sound.playSound("tone523"); return; }
+        if (X.toneHz < 720) { Sound.playSound("tone659"); return; }
+        if (X.toneHz < 850) { Sound.playSound("tone784"); return; }
+        lastHz = 0;                         // a note we have no sample for
+    }
+}

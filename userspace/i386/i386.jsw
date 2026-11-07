@@ -341,7 +341,7 @@ public X.hwToneLoPort = 1466;    // 0x5BA, read: speaker Hz, low byte
 public X.hwToneHiPort = 1467;    // 0x5BB, read: speaker Hz, high byte
 public X.hwGatePort = 1468;      // 0x5BC, read: 3 while the gate is open
 public X.speakerGate = 0;
-public X.toneHz = 0;              // filled in by speakerTone
+public X.toneHz = 0;              // what the gate is sounding, live
 public X.hwSmartSel = 1;
 public X.hwSmart = [100, 100, 100, 100, 100, 100, 100, 100, 100, 100];
 public X.hwSmartWorst = [100, 100, 100, 100, 100, 100, 100, 100, 100, 100];
@@ -474,6 +474,9 @@ import "assets/lists/ident.jsa" as ident;   // the drive's IDENTIFY DEVICE block
  * it simply has nothing on the other end of the wire. */
 #ifdef TURBOWARP
 // include "netdisk.jsw"
+/* Sound is the same story: the machine can compute a pitch, but only a browser
+ * can play one, and only where a sprite may hold sound assets. */
+// include "speaker.jsw"
 #endif
 
 /*
@@ -2256,8 +2259,8 @@ class Cpu {
         if (p == X.hwSmartValPort) { v = X.hwSmart.get(X.hwSmartSel) + 0; return; }
         if (p == X.hwSmartWorstPort) { v = X.hwSmartWorst.get(X.hwSmartSel) + 0; return; }
         if (p == X.hwGatePort) { v = X.speakerGate; return; }
-        if (p == X.hwToneLoPort) { speakerTone(); v = X.toneHz % 256; return; }
-        if (p == X.hwToneHiPort) { speakerTone(); v = Operators.math("floor", X.toneHz / 256) % 256; return; }
+        if (p == X.hwToneLoPort) { v = X.toneHz % 256; return; }
+        if (p == X.hwToneHiPort) { v = Operators.math("floor", X.toneHz / 256) % 256; return; }
     }
 
     private void portOut(p, val) { // warp
@@ -2358,7 +2361,7 @@ class Cpu {
             if (_oV >= 1 && _oV <= 5) { X.hwSmartSel = _oV; }
             return;
         }
-        if (p == 97) { X.speakerGate = _oV; return; }
+        if (p == 97) { X.speakerGate = _oV; speakerUpdate(); return; }
         if (p == X.coreReleasePort) {
             // wake core n: the device owns the flag, not the firmware
             if (_oV >= 1 && _oV <= X.cores) {
@@ -2407,7 +2410,7 @@ class Cpu {
     /* What the speaker sounds like. Both gate bits have to be up: bit 0 lets
      * timer 2's output through, bit 1 enables the speaker behind it, which is
      * why a guest that programs the divisor alone still hears nothing. */
-    private void speakerTone() { // warp
+    private void speakerUpdate() { // warp
         X.toneHz = 0;
         if (X.speakerGate % 4 >= 3) {
             _pv = X.pitReload.get(3) + 0;
@@ -2459,6 +2462,7 @@ class Cpu {
         }
         X.pitCount.set(ch + 1, X.pitReload.get(ch + 1) + 0);
         if (ch == 0) { X.pitOn = 1; }
+        if (ch == 2) { speakerUpdate(); }
     }
 
     private void pitRead(ch) { // warp

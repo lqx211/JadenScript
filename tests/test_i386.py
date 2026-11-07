@@ -2728,5 +2728,79 @@ console.log(JSON.stringify({ got, asks }));
         self.assertGreater(data["asks"], 1, "it asked again with less")
 
 
+class I386SpeakerTests(unittest.TestCase):
+    """The tone, from the timer to a sound a browser can play.
+
+    Two halves, because they fail differently: the machine has to publish the
+    pitch it is making (`X.toneHz`, kept live by the CPU itself rather than
+    computed on demand), and the TurboWarp build has to carry a sprite that can
+    actually make a noise.
+    """
+
+    def test_the_cpu_publishes_the_tone_it_is_programming(self) -> None:
+        """The speaker state is not derived: it is what the machine is doing.
+
+        A port read that computed it on demand would look identical to a guest,
+        and useless to the sprite -- the sprite cannot call into the CPU. So the
+        divisor write itself updates `X.toneHz`.
+        """
+        env, cpu = I386MemoryMapTests.jsw(self)
+
+        def run(name, args):
+            gen = jsw_sim.call(env, cpu[name], args)
+            try:
+                next(gen)
+            except StopIteration:
+                pass
+
+        run("pitControl", [0xB6])              # channel 2, lo/hi, mode 3
+        run("pitWrite", [2, 0xE9])             # 2281 = C5, low byte
+        self.assertEqual(int(env.vars["X.toneHz"]), 0,
+                         "the gate is still shut, so nothing is sounding")
+        run("pitWrite", [2, 0x08])             # ... and the high byte
+        self.assertEqual(int(env.lists["X.pitReload"][2]), 2281)
+        run("portOut", [0x61, 3])              # timer 2 through, speaker on
+        self.assertEqual(int(env.vars["X.toneHz"]), 523, "C5, and it is live")
+        run("portOut", [0x61, 0])              # shut it
+        self.assertEqual(int(env.vars["X.toneHz"]), 0)
+
+    def test_the_turbowarp_build_carries_the_speaker_sprite(self) -> None:
+        """A sound cannot be computed in this language: Scratch plays assets.
+
+        So the artifact must carry one square wave per note the machine can
+        name, and the block that plays each one must point at a dropdown that
+        resolves to it -- a mismatch here is silent, not loud.
+        """
+        import json
+        import subprocess
+        import zipfile
+
+        out = ROOT / "build" / "i386" / "i386-speaker-test.sb3"
+        subprocess.run([sys.executable, "-m", "jswc", "build",
+                        str(RVDIR / "i386.jsw"), "-o", str(out),
+                        "--target", "turbowarp"],
+                       cwd=ROOT, check=True, capture_output=True)
+        with zipfile.ZipFile(out) as zipf:
+            project = json.loads(zipf.read("project.json"))
+            waves = [n for n in zipf.namelist() if n.endswith(".wav")]
+        speaker = [t for t in project["targets"] if t["name"] == "Speaker"]
+        self.assertEqual(len(speaker), 1, "the sprite is in the build")
+        sounds = sorted(s["name"] for s in speaker[0]["sounds"])
+        self.assertEqual(sounds, ["tone440", "tone523", "tone659", "tone784"])
+        self.assertEqual(len(waves), 4, "and the audio came with them")
+
+        blocks = speaker[0]["blocks"]
+        played = set()
+        for block in blocks.values():
+            if not isinstance(block, dict) or block.get("opcode") != "sound_play":
+                continue
+            menu = blocks[block["inputs"]["SOUND_MENU"][1]]
+            played.add(menu["fields"]["SOUND_MENU"][0])
+        self.assertEqual(played, set(sounds), "every sample is reachable")
+        hats = [b for b in blocks.values()
+                if isinstance(b, dict) and b.get("opcode") == "event_whenflagclicked"]
+        self.assertTrue(hats, "the sprite starts with the green flag")
+
+
 if __name__ == "__main__":
     unittest.main()
