@@ -2728,6 +2728,68 @@ console.log(JSON.stringify({ got, asks }));
         self.assertGreater(data["asks"], 1, "it asked again with less")
 
 
+class I386Address32Tests(unittest.TestCase):
+    """Base + index*scale + displacement, which is how a 32-bit program spells
+    every address it uses.
+
+    Sixteen-bit code picks a pair out of a fixed list; a 386 with a flat
+    descriptor uses a second byte to name a scaled index and a 32-bit offset.
+    `userspace/i386/ea32.asm` walks into protected mode and exercises each form
+    in turn, then the instruction families that had quietly stayed sixteen bits
+    -- mov, test, xchg, mov-imm, mul/div, push/pop -- because a correct address
+    read at the wrong width is no more use than a wrong address.
+    """
+
+    BIN = ROOT / "userspace/i386/ea32.bin"
+
+    def run_ea32(self) -> rv.Machine:
+        blob = self.BIN.read_bytes()
+        mach = rv.Machine()
+        mach.ram[:] = i386_image.build()
+        mach.ram[0x1000:0x1000 + len(blob)] = blob
+        mach.sreg[rv.SEG_CS] = 0x100
+        mach.eip = 0
+        for _ in range(400):
+            mach.step()
+            if mach.halted:
+                break
+        return mach
+
+    def test_every_addressing_form_lands_where_it_says(self) -> None:
+        mach = self.run_ea32()
+        self.assertTrue(mach.halted, mach.error)
+        word = lambda a: mach.read(a, 4)
+        self.assertEqual(word(0x42C), 0x11223344, "SIB, scale 4, disp8")
+        self.assertEqual(word(0x800), 0x11223344, "mod 00 rm 101: bare disp32")
+        self.assertEqual(word(0x90C), 0x11223344, "SIB with no base")
+        self.assertEqual(word(0xA10), 0x11223344, "EBP-relative through SS")
+        self.assertEqual(word(0xB00), 0x41C, "lea of base + index*8 + 4")
+
+    def test_the_widened_instruction_families_carry_four_bytes(self) -> None:
+        mach = self.run_ea32()
+        self.assertEqual(mach.read(0x500, 4), 0x55667788, "mov r/m32, imm32")
+        self.assertEqual(mach.read(0xC00, 4), 0x55667788, "mov moffs32")
+        self.assertEqual(mach.read(0x404, 2), 0xC0DE, "a 66-prefixed word store")
+        self.assertEqual(mach.read(0x406, 2), 0x3344, "and its high half")
+        self.assertEqual(mach.read(0x408, 2), 0, "the word store stopped there")
+        self.assertEqual(mach.read(0xC0C, 4), 21845, "div ecx, 32-bit")
+        self.assertEqual(mach.read(0xC10, 4), 1, "and its remainder")
+        self.assertEqual(mach.read(0xC08, 4), 0, "xchg read what was there")
+        self.assertEqual(mach.read(0xC14, 4), 0xAABBCCDD, "push dword, pop eax")
+
+    def test_both_machines_agree_on_all_of_it(self) -> None:
+        args = [sys.executable, "tools/i386_jsw_check.py",
+                "--code", str(self.BIN), "--steps", "600"]
+        # the checker runs the decompiled project; another test class builds it,
+        # and skipping the rebuild keeps this one quick when it is already there
+        if (ROOT / "build" / "i386" / "i386-test.back.jsw").exists():
+            args.append("--no-build")
+        done = subprocess.run(args, cwd=ROOT, capture_output=True, text=True,
+                              timeout=900)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("agree on 53 instructions", done.stdout)
+
+
 class I386SpeakerTests(unittest.TestCase):
     """The tone, from the timer to a sound a browser can play.
 

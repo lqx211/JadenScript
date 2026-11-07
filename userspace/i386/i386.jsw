@@ -1381,6 +1381,7 @@ class Cpu {
         if (mmod == 3) {
             return;
         }
+        if (dsz == 4) { modrm32(); return; }
         _mrm = mrm;
         if (_mrm == 0) { ea = r.get(4) + r.get(7); }
         if (_mrm == 1) { ea = r.get(4) + r.get(8); }
@@ -1406,6 +1407,50 @@ class Cpu {
             ea = ea + v;
         }
         ea = ea % 65536;
+    }
+
+    /* ---- the 32-bit forms --------------------------------------------- *
+     * Same two fields, different arithmetic: rm 4 means a second byte follows
+     * that names a scaled index and a base, rm 5 with mod 0 is a bare
+     * thirty-two-bit offset, and every offset is 32 bits wide. This is what
+     * sixteen-bit code never needed and every 32-bit program assumes -- a
+     * kernel indexes through `[ebx+ecx*4+disp]` from its first hundred
+     * instructions.
+     */
+    private void modrm32() { // warp
+        ea = 0;
+        if (mrm == 4) {
+            f8();
+            _sSib = v;
+            _sScale = X.pow2.get(Operators.math("floor", _sSib / 64) + 1);
+            _sIndex = Operators.math("floor", _sSib / 8) % 8;
+            _sBase = _sSib % 8;
+            if (_sIndex != 4) { ea = r.get(_sIndex + 1) * _sScale; }
+            if (_sBase == 5 && mmod == 0) {
+                f32();                      // no base: just an offset
+                ea = ea + v;
+            } else {
+                ea = ea + r.get(_sBase + 1);
+                if (_sBase == 4 || _sBase == 5) { eseg = 3; }
+            }
+        } elif (mrm == 5 && mmod == 0) {
+            f32();
+            ea = v;
+        } else {
+            ea = r.get(mrm + 1);
+            if (mrm == 5) { eseg = 3; }
+        }
+        if (mmod == 1) {
+            f8();
+            _sDisp = v;
+            if (_sDisp >= 128) { _sDisp = _sDisp - 256; }
+            ea = ea + _sDisp;
+        }
+        if (mmod == 2) {
+            f32();
+            ea = ea + v;
+        }
+        ea = ea % 4294967296;
     }
 
     private void getOp(size) { // warp
@@ -1676,6 +1721,30 @@ class Cpu {
             if (X.portLog.length() < 40) { X.portLog.add(join("push ir=", ir, " ip=", ip - 1, " sp=", r.get(5), " ss=", sr.get(3), " at=", v, " v=", val)); }
         }
         wrw(v, val);
+    }
+
+    /* A push at the operand size. In sixteen-bit code that is the word form
+     * above; in thirty-two-bit code the stack pointer moves four and two words
+     * land, exactly the way a dword load is built out of two. */
+    private void pushOp(size, val) { // warp
+        if (size != 4) { push16(val); return; }
+        r.set(5, (r.get(5) + 4294967292) % 4294967296);
+        phys(3, r.get(5));
+        _p4A = v;
+        _p4V = val % 4294967296;
+        wrw(_p4A, _p4V % 65536);
+        wrw(_p4A + 2, Operators.math("floor", _p4V / 65536));
+    }
+
+    private void popOp(size) { // warp
+        if (size != 4) { pop16(); return; }
+        phys(3, r.get(5));
+        _q4A = v;
+        rdw(_q4A);
+        _q4Lo = v;
+        rdw(_q4A + 2);
+        v = _q4Lo + v * 65536;
+        r.set(5, (r.get(5) + 4) % 4294967296);
     }
 
     private void pop16() { // warp
@@ -3036,20 +3105,22 @@ class Cpu {
         /* --- mov, the six forms --- */
         if (op == 136 || op == 137) {
             _sz = 1;
-            if (op == 137) { _sz = 2; }
+            if (op == 137) { _sz = oz; }
             modrm();
-            getReg8(mreg);
-            if (_sz == 2) { getReg16(mreg); }
+            if (_sz == 1) { getReg8(mreg); }
+            elif (_sz == 4) { getReg32(mreg); }
+            else { getReg16(mreg); }
             putOp(_sz, v);
             return;
         }
         if (op == 138 || op == 139) {
             _sz = 1;
-            if (op == 139) { _sz = 2; }
+            if (op == 139) { _sz = oz; }
             modrm();
             getOp(_sz);
             if (_sz == 1) { putReg8(mreg, v); }
-            if (_sz == 2) { putReg16(mreg, v); }
+            elif (_sz == 4) { putReg32(mreg, v); }
+            else { putReg16(mreg, v); }
             return;
         }
         if (op == 140) {
@@ -3069,24 +3140,37 @@ class Cpu {
         }
         if (op == 141) {                       // lea
             modrm();
-            putReg16(mreg, ea);
+            if (dsz == 4) {
+                putReg32(mreg, ea);
+            } else {
+                putReg16(mreg, ea);
+            }
             return;
         }
         if (op == 161 || op == 163 || op == 160 || op == 162) {
-            f16();
+            if (dsz == 4) { f32(); } else { f16(); }
             _mOff = v;
             phys(seg, _mOff);
             _mAddr = v;
             _sz = 1;
-            if (op == 161 || op == 163) { _sz = 2; }
+            if (op == 161 || op == 163) { _sz = oz; }
             if (op == 160 || op == 161) {
                 if (_sz == 1) { rdb(_mAddr); putReg8(0, v); }
-                if (_sz == 2) { rdw(_mAddr); putReg16(0, v); }
+                elif (_sz == 4) { rdd(_mAddr); putReg32(0, v); }
+                else { rdw(_mAddr); putReg16(0, v); }
             }
             if (op == 162 || op == 163) {
-                getReg16(0);
-                if (_sz == 1) { wrb(_mAddr, r.get(1) % 256); }
-                if (_sz == 2) { wrw(_mAddr, v); }
+                if (_sz == 1) {
+                    getReg8(0);
+                    wrb(_mAddr, v);
+                } elif (_sz == 4) {
+                    getReg32(0);
+                    wrw(_mAddr, v % 65536);
+                    wrw(_mAddr + 2, Operators.math("floor", v / 65536));
+                } else {
+                    getReg16(0);
+                    wrw(_mAddr, v);
+                }
             }
             return;
         }
@@ -3107,10 +3191,11 @@ class Cpu {
         }
         if (op == 198 || op == 199) {          // mov r/m, imm
             _sz = 1;
-            if (op == 199) { _sz = 2; }
+            if (op == 199) { _sz = oz; }
             modrm();
             if (_sz == 1) { f8(); }
-            if (_sz == 2) { f16(); }
+            elif (_sz == 4) { f32(); }
+            else { f16(); }
             putOp(_sz, v);
             return;
         }
@@ -3181,13 +3266,13 @@ class Cpu {
             return;
         }
         if (op >= 80 && op <= 87) {
-            getReg16(op % 8);
-            push16(v);
+            if (oz == 4) { getReg32(op % 8); } else { getReg16(op % 8); }
+            pushOp(oz, v);
             return;
         }
         if (op >= 88 && op <= 95) {
-            pop16();
-            putReg16(op % 8, v);
+            popOp(oz);
+            if (oz == 4) { putReg32(op % 8, v); } else { putReg16(op % 8, v); }
             return;
         }
         if (op == 6 || op == 14 || op == 22 || op == 30) {
@@ -3249,17 +3334,25 @@ class Cpu {
             putReg16(0, v);                    // and AX
             return;
         }
-        if (op == 104) { f16(); push16(v); return; }
-        if (op == 106) {
+        if (op == 104) {
+            if (oz == 4) { f32(); } else { f16(); }
+            pushOp(oz, v);
+            return;
+        }
+        if (op == 106) {                       // push imm8, sign-extended
             getSignedDisp8();
-            push16(v % 65536);
+            if (oz == 4) {
+                if (v < 0) { pushOp(4, v + 4294967296); } else { pushOp(4, v); }
+            } else {
+                push16(v % 65536);
+            }
             return;
         }
         if (op == 143) {                       // pop r/m
-            pop16();
+            popOp(oz);
             _v0 = v;
             modrm();
-            putOp(2, _v0);
+            putOp(oz, _v0);
             return;
         }
 
@@ -3354,39 +3447,42 @@ class Cpu {
         }
         if (op == 132 || op == 133) {
             _sz = 1;
-            if (op == 133) { _sz = 2; }
+            if (op == 133) { _sz = oz; }
             modrm();
             getOp(_sz);
             _v0 = v;
             if (_sz == 1) { getReg8(mreg); }
-            if (_sz == 2) { getReg16(mreg); }
+            elif (_sz == 4) { getReg32(mreg); }
+            else { getReg16(mreg); }
             alu(4, _v0, v, _sz);
             return;
         }
         if (op == 134 || op == 135) {
             _sz = 1;
-            if (op == 135) { _sz = 2; }
+            if (op == 135) { _sz = oz; }
             modrm();
             getOp(_sz);
             _v0 = v;
             if (_sz == 1) { getReg8(mreg); }
-            if (_sz == 2) { getReg16(mreg); }
+            elif (_sz == 4) { getReg32(mreg); }
+            else { getReg16(mreg); }
             _v1 = v;
             putOp(_sz, _v1);
             if (_sz == 1) { putReg8(mreg, _v0); }
-            if (_sz == 2) { putReg16(mreg, _v0); }
+            elif (_sz == 4) { putReg32(mreg, _v0); }
+            else { putReg16(mreg, _v0); }
             return;
         }
         if (op == 246 || op == 247) {
             _sz = 1;
-            if (op == 247) { _sz = 2; }
+            if (op == 247) { _sz = oz; }
             modrm();
             group3(_sz);
             return;
         }
         if (op == 254 || op == 255) {
             _sz = 1;
-            if (op == 255) { _sz = 2; }
+            if (op == 255) { _sz = oz; }
             modrm();
             group45(_sz, op);
             return;
@@ -3834,7 +3930,7 @@ class Cpu {
             return;
         }
         getOp(size);
-        push16(v);
+        pushOp(size, v);
     }
 
     /* ---- the string instructions -------------------------------------- *
