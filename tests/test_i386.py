@@ -2728,6 +2728,80 @@ console.log(JSON.stringify({ got, asks }));
         self.assertGreater(data["asks"], 1, "it asked again with less")
 
 
+class I386FirmwareApiTests(unittest.TestCase):
+    """The two questions a kernel's loader asks the firmware.
+
+    `int 15h, E820` is how a kernel learns what memory exists and what it must
+    not touch; `int 13h, AH=41/42/48` is how a loader reads a sector by number
+    instead of arithmetic on a cylinder count. Both are contracts with a
+    caller we do not control, so `apiprobe.asm` asks them from a boot sector
+    and writes the answers to fixed addresses for a test to read back.
+    """
+
+    BIN = ROOT / "userspace/i386/apiprobe.bin"
+
+    def boot(self, extended_kb: int = 0) -> rv.Machine:
+        blob = self.BIN.read_bytes()
+        image = bytearray(i386_image.build())
+        image[i386_image.DISK_AT:i386_image.DISK_AT + 512] = blob
+        mach = rv.Machine()
+        mach.ram[:] = bytes(image)
+        mach.cmos[0x17] = extended_kb & 0xFF        # extended memory, KiB
+        mach.cmos[0x18] = (extended_kb >> 8) & 0xFF
+        mach.keys.append(0x39)                      # skip the countdown
+        mach.sreg[rv.SEG_CS] = rv.RESET_CS
+        mach.eip = rv.RESET_IP
+        mach.run(limit=400_000)
+        return mach
+
+    def entries(self, mach) -> list[tuple[int, int, int]]:
+        found = []
+        for n in range(mach.read(0x7F0, 2)):
+            at = 0x800 + n * 20
+            found.append((mach.read(at, 4), mach.read(at + 8, 4), mach.read(at + 16, 4)))
+        return found
+
+    def test_e820_describes_the_board(self) -> None:
+        mach = self.boot()
+        self.assertTrue(mach.halted, mach.error)
+        self.assertEqual(self.entries(mach),
+                         [(0x0000_0000, 0x9FC00, 1),        # 639 KiB usable
+                          (0x0009_FC00, 0x400, 2)])         # then the video card
+
+    def test_e820_reports_extended_memory_when_there_is_some(self) -> None:
+        """A board with 16 MiB of extended memory says so, in bytes, from
+        0x10_0000 -- and the map ends after it."""
+        mach = self.boot(extended_kb=0x4000)
+        self.assertEqual(self.entries(mach)[-1], (0x0010_0000, 0x0100_0000, 1))
+
+    def test_e820_says_when_it_has_no_more(self) -> None:
+        """The last call has to come back with EBX = 0, or a loader takes one
+        zeroed entry as a memory range and puts its page tables in it."""
+        mach = self.boot()
+        self.assertEqual(mach.read(0x7F0, 2), 2, "two entries, not three")
+        for n in range(2):
+            self.assertNotEqual(mach.read(0x800 + n * 20 + 16, 4), 0,
+                                f"entry {n} is a real type")
+
+    def test_the_drive_speaks_edd(self) -> None:
+        mach = self.boot()
+        self.assertEqual(mach.read(0x7F2, 2), 0xAA55, "BX: the signature")
+        self.assertEqual(mach.read(0x7F5, 1), 0x30, "AH: the version")
+        self.assertEqual(mach.read(0x7F6, 2) & 1, 1, "CX bit 0: packets work")
+
+    def test_a_packet_read_moves_the_sector_the_guest_asked_for(self) -> None:
+        """LBA 1 is the second sector and says STAGE2; the packet names LBA 1,
+        and that is where it lands -- the arithmetic is the firmware's."""
+        mach = self.boot()
+        self.assertEqual(bytes(mach.ram[0x900:0x906]), b"STAGE2")
+
+    def test_the_packet_drive_parameters_describe_the_image(self) -> None:
+        mach = self.boot()
+        total = mach.read(0x960 + 12, 4) | mach.read(0x960 + 16, 4) << 32
+        self.assertEqual(total, 128, "128 sectors of staged disk")
+        self.assertEqual(mach.read(0x960 + 20, 2), 512, "512 bytes a sector")
+
+
 class I386Address32Tests(unittest.TestCase):
     """Base + index*scale + displacement, which is how a 32-bit program spells
     every address it uses.

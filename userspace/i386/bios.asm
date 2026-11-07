@@ -193,6 +193,9 @@ start:
     mov     bx, 0x09 * 4
     mov     dx, int09
     call    set_vector
+    mov     bx, 0x15 * 4
+    mov     dx, int15
+    call    set_vector
     mov     bx, 0x1C * 4
     mov     dx, int1c
     call    set_vector
@@ -854,12 +857,68 @@ int13:
     je      .read
     cmp     ah, 0x00                ; reset: nothing to reset yet
     je      .ok
-    cmp     ah, 0x08                ; drive parameters
+    cmp     ah, 0x41                ; does this drive speak EDD?
+    je      .edd_check
+    cmp     ah, 0x42                ; read sectors through a packet
+    je      .edd_read
+    cmp     ah, 0x48                ; drive parameters, the EDD way
+    je      .edd_params
+    cmp     ah, 0x08                ; drive parameters, the old way
     jne     .fail
     mov     ch, 79
     mov     cl, 63
     mov     dh, 15
     mov     dl, 1
+    mov     [ss:bp - 4], cx         ; outputs leave through the slots they were
+    mov     [ss:bp - 6], dx         ; pushed into, because the pops below
+    jmp     .ok                     ; put the caller's registers back
+.edd_check:
+    ; BX = the signature and AH = the version we speak; CX bit 0 says packet
+    ; commands work, which is the only thing a loader actually asks about
+    mov     bx, 0xAA55
+    mov     ah, 0x30
+    mov     cx, 1                   ; packet commands work
+    mov     [ss:bp - 2], bx
+    mov     [ss:bp - 4], cx
+    jmp     .ok_ah                  ; AH is the version, not a status byte
+.edd_params:
+    ; a 1.44-megabyte-shape geometry that describes the staged image: 128
+    ; sectors, less than one cylinder's worth, so the numbers stay honest
+    push    es
+    push    di
+    mov     ax, ds
+    mov     es, ax                  ; the caller's buffer is at ds:si
+    mov     byte [si], 0x1A
+    mov     byte [si + 1], 0
+    mov     word [si + 2], 1        ; cylinders
+    mov     word [si + 4], 0
+    mov     word [si + 6], 1        ; heads
+    mov     word [si + 8], 0
+    mov     word [si + 10], 63      ; sectors a track
+    mov     word [si + 12], 0
+    mov     dword [si + 12], 128    ; total sectors, a qword
+    mov     dword [si + 16], 0
+    mov     word [si + 20], 512     ; bytes a sector
+    pop     di
+    pop     es
+    jmp     .ok
+.edd_read:
+    ; the disk address packet: count, offset, segment, then a 64-bit lba
+    mov     cx, [si + 2]            ; how many sectors
+    shl     cx, 8                   ; ... in words
+    mov     di, [si + 4]            ; where the caller wants them
+    mov     dx, [si + 6]
+    mov     eax, [si + 8]           ; the lba, low half, sectors to bytes
+    shl     eax, 9
+    push    ds
+    push    es
+    mov     si, ax
+    mov     ax, DISK_SEG
+    mov     ds, ax
+    mov     es, dx
+    rep     movsw
+    pop     es
+    pop     ds
     jmp     .ok
 .read:
     ; the sector count rides on the stack: ax is about to become the lba
@@ -890,6 +949,9 @@ int13:
     and     word [ss:bp + 6], 0xFFFE ; clear carry: it worked
     xor     ah, ah
     jmp     .out
+.ok_ah:
+    and     word [ss:bp + 6], 0xFFFE
+    jmp     .out
 .fail:
     or      word [ss:bp + 6], 1     ; set carry: it did not
     mov     ah, 0x04                ; sector not found
@@ -902,6 +964,131 @@ int13:
     pop     bx
     pop     bp
     iret
+
+; ---------------------------------------------------------------------------
+; int 15h: the memory map
+;
+; E820 is how everything after 1995 finds out what memory it may use. The caller
+; hands a buffer in ES:DI, a continuation index in EBX and the signature
+; 'SMAP' in EDX; each call fills one twenty-byte entry -- base, length, type --
+; and returns the next index, with zero meaning "that was the last one". A
+; loader that loops until EBX is zero will draw a map of this board:
+;
+;   0000_0000  640 KiB  usable      (the low half of the first megabyte)
+;   0009_FC00    1 KiB  reserved    (where the video card is)
+;   0010_0000   ...     usable      (extended memory, from the CMOS)
+;
+; The extended entry is only there when the board actually has some. A machine
+; that reports memory it cannot write is worse than one that reports nothing:
+; the kernel trusts this table and puts its own page tables in it.
+; ---------------------------------------------------------------------------
+int15:
+    push    bp
+    mov     bp, sp
+    push    bx                      ; [bp - 2]: the caller's, and our way out
+    push    si
+    push    di
+    push    ds
+    push    es
+    cmp     ah, 0xE8
+    je      .e820
+    cmp     ah, 0x88                ; the old question: how much, in KiB
+    jne     .bad
+    mov     al, 0x17
+    call    cmos_read
+    mov     bl, al
+    mov     al, 0x18
+    call    cmos_read
+    mov     bh, al
+    mov     ax, bx
+    and     word [ss:bp + 6], 0xFFFE
+    jmp     .out
+.bad:
+    or      word [ss:bp + 6], 1     ; carry: not supported
+    mov     ah, 0x86
+    jmp     .out
+.e820:
+    mov     eax, 0x534D4150
+    cmp     edx, eax                ; the caller has to know what it is asking
+    jne     .bad
+    cmp     ecx, 20
+    jb      .bad
+    cmp     ebx, 0
+    je      .e0
+    cmp     ebx, 1
+    je      .e1
+    cmp     ebx, 2
+    je      .e2
+    xor     ebx, ebx                ; past the end: say so
+    jmp     .e820out
+.e0:
+    call    e820_clear
+    mov     dword [es:di + 8], 0x9FC00
+    mov     dword [es:di + 16], 1
+    mov     ebx, 1
+    jmp     .e820out
+.e1:
+    call    e820_clear
+    mov     dword [es:di], 0x9FC00
+    mov     dword [es:di + 8], 0x400
+    mov     dword [es:di + 16], 2
+    mov     al, 0x17
+    call    cmos_read
+    mov     bl, al
+    mov     al, 0x18
+    call    cmos_read
+    mov     bh, al
+    or      bx, bx
+    jnz     .e1_more
+    xor     ebx, ebx                ; the map ends here: this was the last one
+    jmp     .e820out
+.e1_more:
+    mov     ebx, 2
+    jmp     .e820out
+.e2:
+    mov     al, 0x17
+    call    cmos_read
+    mov     bl, al
+    mov     al, 0x18
+    call    cmos_read
+    mov     bh, al
+    or      bx, bx
+    jz      .e820end               ; no extended memory: the map ends here
+    call    e820_clear
+    mov     dword [es:di], 0x100000
+    mov     dx, bx                  ; kilobytes, zero-extended into a dword
+    xor     edx, edx
+    mov     dx, bx
+    shl     edx, 10                 ; and bytes
+    mov     dword [es:di + 8], edx
+    mov     dword [es:di + 16], 1
+.e820end:
+    xor     ebx, ebx               ; no more entries
+    jmp     .e820out
+.e820out:
+    mov     eax, 0x534D4150        ; still the signature
+    mov     ecx, 20
+    and     word [ss:bp + 6], 0xFFFE
+.out:
+    ; bx leaves through the slot it was pushed into, so the pops below restore
+    ; the caller's other registers and still hand back our answer
+    mov     [ss:bp - 2], bx
+    pop     es
+    pop     ds
+    pop     di
+    pop     si
+    pop     bx
+    pop     bp
+    iret
+
+; a zeroed twenty-byte entry at es:di, so every field not written is zero
+e820_clear:
+    mov     dword [es:di], 0
+    mov     dword [es:di + 4], 0
+    mov     dword [es:di + 8], 0
+    mov     dword [es:di + 12], 0
+    mov     dword [es:di + 16], 0
+    ret
 
 ; ---------------------------------------------------------------------------
 ; int 16h: the keyboard
