@@ -1,0 +1,93 @@
+/*
+ * net — the wire, on a thread of its own.
+ *
+ * The card in this machine (an RTL8139 at IO port 0xD000) moves frames between
+ * the guest's memory and its own registers. What it cannot do is reach a
+ * socket: the CPU is a loop that must not wait, and a socket is a thing you
+ * wait on. So the two lists in `X` are the boundary, and this sprite is the
+ * only thing on the other side of them:
+ *
+ *   X.nicTxq   frames the card has transmitted, as text, ready to send
+ *   X.nicRx    frames that arrived, as text, for the card to put in its ring
+ *
+ * The text is decimal 32-bit words because a Scratch string has no character
+ * arithmetic: `Op + 0` turns "7" into seven and turns everything else into
+ * zero, so decimal is the one encoding both ends can do cheaply. A frame
+ * carries its own length, because four bytes at a time does not divide evenly
+ * and the last word of a 61-byte frame is three bytes of somebody else's
+ * memory.
+ *
+ * Nothing here is required. With no server listening the socket fails to open,
+ * `X.netLink` stays 0, and the machine boots exactly as it always did -- the
+ * card is still there, its registers still read back, and a driver that tries
+ * to send just watches its buffer go.
+ */
+class Net {
+    private url = "ws://127.0.0.1:65450";
+    private waited = 0;
+    private sent = 0;
+    private msg = "";
+
+    public void netStart() { // hook: green flag
+        Looks.hide();
+        X.netLink = 0;
+        X.netSent = 0;
+        X.netDrop = 0;
+        WebSocket.connectTo(url);
+        /* A refused socket has to report back, and on a backgrounded tab a
+         * frame is a second long, so this waits in frames rather than spins. */
+        waited = 0;
+        while (WebSocket.isConnected < 1 && waited < 120) {
+            Control.wait(0);
+            waited += 1;
+        }
+        if (WebSocket.isConnected < 1) {
+            return;
+        }
+        X.netLink = 1;
+        while (1) {
+            pump();
+            Control.wait(0);
+        }
+    }
+
+    /* Eight frames a frame: enough that a burst of transmits drains, few enough
+     * that the socket never becomes the frame's whole cost. */
+    private void pump() { // warp
+        sent = 0;
+        while (X.nicTxq.length() > 0 && sent < 8) {
+            msg = X.nicTxq.get(1);
+            X.nicTxq.delete(1);
+            WebSocket.sendMessage(msg);
+            X.netSent += 1;
+            sent += 1;
+        }
+    }
+
+    /* One frame, one message. The queue is bounded because the guest can send
+     * faster than a frame is drawn, and a machine that buffers for ever is a
+     * machine that runs out of memory before it runs out of packets. */
+    public void netMessage() { // hook: WebSocket.onMessage
+        msg = WebSocket.receivedMessageData;
+        if (Operators.length(msg) < 1) {
+            return;
+        }
+        X.nicRx.add(msg);
+        if (X.nicRx.length() > 64) {
+            X.nicRx.delete(1);
+            X.netDrop += 1;
+        }
+    }
+
+    public void netOpened() { // hook: WebSocket.onOpen
+        X.netLink = 1;
+    }
+
+    public void netClosed() { // hook: WebSocket.onClose
+        X.netLink = 0;
+    }
+
+    public void netErrored() { // hook: WebSocket.onError
+        X.netLink = 0;
+    }
+}

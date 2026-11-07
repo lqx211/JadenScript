@@ -375,6 +375,12 @@ class Tftp:
         session.sent_at = time.time()
         return struct.pack(">HH", OP_DATA, session.block + 1) + chunk
 
+    def _finished(self, session: TftpSession) -> bool:
+        """A file that ends exactly on a block boundary needs one more block,
+        of nothing, to say so -- a short block is the only end-of-file TFTP
+        has, and 512 bytes is not short."""
+        return session.block * self.BLOCK >= len(session.blob)
+
     def request(self, guest: tuple[str, int], payload: bytes) -> bytes | None:
         """A datagram to port 69. Returns what to send back, or None."""
         if len(payload) < 4:
@@ -401,7 +407,9 @@ class Tftp:
                 return None                       # an old ACK: already moved on
             session.block += 1
             self.blocks += 1
-            if session.block * self.BLOCK >= len(session.blob):
+            sent = session.block * self.BLOCK
+            exact = len(session.blob) % self.BLOCK == 0
+            if sent > len(session.blob) or (sent == len(session.blob) and not exact):
                 session.done = True
                 del self.sessions[guest]
                 return None
@@ -1197,10 +1205,7 @@ async def main(argv: list[str]) -> int:
                 if not line:
                     continue
                 if line[0] == "T":
-                    try:
-                        net.from_guest(bytes.fromhex(line[1:].strip()))
-                    except ValueError:
-                        net.dropped_frames += 1
+                    net.from_guest(_frame_from_text(line))
                 elif line[0] == "P":
                     net.pump()
                 elif line[0] == "S":
@@ -1221,12 +1226,38 @@ async def main(argv: list[str]) -> int:
             except asyncio.TimeoutError:
                 await asyncio.sleep(0)
                 continue
-            await sock.send("R" + frame.hex())
+            await sock.send(_text_from_frame(frame))
 
     print(f"[net] machine:  ws://127.0.0.1:{args.port}", flush=True)
     async with websockets_serve(echo, args.port):
         await asyncio.Future()
     return 0
+
+
+def _frame_from_text(line: str) -> bytes:
+    """`T <length> <word> <word> ...`, little-endian, as the card holds them."""
+    parts = line.split()
+    if len(parts) < 2:
+        return b""
+    try:
+        length = int(parts[1])
+        words = [int(word) & 0xFFFFFFFF for word in parts[2:]]
+    except ValueError:
+        return b""
+    blob = b"".join(word.to_bytes(4, "little") for word in words)
+    return blob[:length] if length <= len(blob) else blob
+
+
+def _text_from_frame(frame: bytes) -> str:
+    """The other way, in the same shape -- and with no prefix, because the
+    socket carries frames and nothing else."""
+    words = []
+    for i in range(0, len(frame), 4):
+        chunk = frame[i:i + 4]
+        if len(chunk) < 4:
+            chunk = chunk + b"\x00" * (4 - len(chunk))
+        words.append(str(int.from_bytes(chunk, "little")))
+    return " ".join(words)
 
 
 def websockets_serve(handler, port: int):

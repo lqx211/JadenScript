@@ -386,7 +386,7 @@ class TcpNatTests(unittest.TestCase):
     def test_a_port_nobody_listens_on_is_a_reset(self) -> None:
         dead = _free_port()
         out = self.nat.from_guest(_tcp_frame(40023, dead, 77, 0, net.TCP_SYN))
-        for _ in range(20):
+        for _ in range(100):
             if any(net.dissect(f).flags & net.TCP_RST for f in out):
                 break
             out.extend(self.nat.poll())

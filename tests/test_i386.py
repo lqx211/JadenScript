@@ -1152,11 +1152,12 @@ class I386PciTests(unittest.TestCase):
         mach.sreg[rv.SEG_CS] = rv.RESET_CS
         mach.eip = rv.RESET_IP
         mach.run(limit=200_000)
-        self.assertIn("PCI: 5 function(s) on bus 0", mach.text())
-        self.assertEqual(mach.ram[0x6FF], 5)
+        # five on the 440FX board plus the network card in slot 4
+        self.assertIn("PCI: 6 function(s) on bus 0", mach.text())
+        self.assertEqual(mach.ram[0x6FF], 6)
         self.assertEqual(sorted(tuple(mach.ram[0x700 + i * 8:0x702 + i * 8])
-                                for i in range(5)),
-                         [(0, 0), (1, 0), (1, 1), (2, 0), (3, 0)])
+                                for i in range(6)),
+                         [(0, 0), (1, 0), (1, 1), (2, 0), (3, 0), (4, 0)])
 
     def test_the_setup_page_lists_the_devices_and_their_classes(self) -> None:
         mach = self._machine()

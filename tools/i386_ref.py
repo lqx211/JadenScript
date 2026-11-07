@@ -116,6 +116,11 @@ REG32 = ("eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi")
 #: table through 0xCF8/0xCFC, which is the whole point of PCI: nothing is at a
 #: fixed address that a driver may assume.
 #:   (bus, device, function, vendor, device, class<<16|sub<<8|progif, bars...)
+#: the network card's IO window, and the address on the wire: a locally
+#: administered MAC, which is what a virtual machine is supposed to use
+NIC_IO = 0xD000
+NIC_MAC = bytes.fromhex("525400123456")
+
 PCI_DEVICES = [
     (0, 0, 0, 0x8086, 0x1237, 0x060000, []),                # 440FX host bridge
     (0, 1, 0, 0x8086, 0x7000, 0x068000, []),                # PIIX3 ISA bridge
@@ -123,6 +128,8 @@ PCI_DEVICES = [
      [0x000001F1, 0x000003F5, 0x00000171, 0x00000375, 0x0000C001]),
     (0, 2, 0, 0x1234, 0x1111, 0x030000, [0xE0000000]),      # JSW VGA
     (0, 3, 0, 0x8086, 0x2829, 0x010601, [0x000D0000]),      # AHCI (SATA)
+    (0, 4, 0, 0x10EC, 0x8139, 0x020000,                     # RTL8139, IO at D000
+     [0x0000D001, 0xE0000000]),
 ]
 
 CMOS_DEFAULTS = {
@@ -543,6 +550,9 @@ class Machine:
         self.core_run = [0] * 16
         self.pci_addr = 0                 # 0xCF8: which dword the next read means
         self.pci_devices = PCI_DEVICES
+        self.nic = bytearray(256)
+        self.nic_wire = None               # what a frame handed to the wire does
+        self.nic_reset()
         self.threads = 1                  # instruction budget multiplier per core
         self.perf_factor = 1              # multiplier on the reported clock
         self.time_rate = 100              # per cent: how fast the guest's clock runs
@@ -988,6 +998,8 @@ class Machine:
         return value
 
     def port_in(self, port, size):
+        if NIC_IO <= port < NIC_IO + 256:
+            return self.nic_register(port - NIC_IO, size)
         if 0x40 <= port <= 0x42:
             return self.pit.read(port - 0x40)
         if port == 0x43:
@@ -1119,6 +1131,9 @@ class Machine:
         return PIT_HZ // divisor
 
     def port_out(self, port, value, size):
+        if NIC_IO <= port < NIC_IO + 256:
+            self.nic_register_write(port - NIC_IO, value, size)
+            return
         if port == 0xCF8:
             self.pci_addr = value & 0xFFFFFFFF
             return
@@ -1549,6 +1564,90 @@ class Machine:
                 return 0x0100 | (device + 10)       # INTA, and a plausible line
             return 0
         return 0xFFFFFFFF                            # nothing there
+
+    # ---- the network card --------------------------------------------
+
+    def nic_reset(self) -> None:
+        """A reset leaves the MAC and nothing else, which is what a driver
+        finds on a card it has just reset."""
+        self.nic = bytearray(256)
+        self.nic[0:6] = NIC_MAC
+        self.nic[0x5C] = 0x24              # MSR: link up, 100 Mb/s, duplex
+
+    def nic_word(self, offset: int) -> int:
+        return self.nic[offset] | (self.nic[offset + 1] << 8)
+
+    def nic_dword(self, offset: int) -> int:
+        return int.from_bytes(self.nic[offset:offset + 4], "little")
+
+    def nic_put_dword(self, offset: int, value: int) -> None:
+        self.nic[offset:offset + 4] = (value & 0xFFFF_FFFF).to_bytes(4, "little")
+
+    def nic_register(self, offset: int, size: int) -> int:
+        if offset == 0x37 and size == 1:
+            cmd = self.nic[0x37]
+            if self.nic_word(0x3A) == self.nic_word(0x38):
+                cmd = (cmd + 1) & 0xFF     # BUFE: the ring is empty
+            return cmd
+        return int.from_bytes(self.nic[offset:offset + size], "little")
+
+    def nic_register_write(self, offset: int, value: int, size: int) -> None:
+        value &= MASK[size]
+        if offset == 0x10 and size == 4 or offset in (0x14, 0x18, 0x1C) and size == 4:
+            self.nic_put_dword(offset, value)
+            self.nic_transmit((offset - 0x10) // 4)
+            return
+        if offset == 0x3E and size == 2:
+            self.nic[0x3E] = 0             # write one to clear
+            self.nic[0x3F] = 0
+            return
+        if offset == 0x37 and size == 1 and value & 0x10:
+            self.nic_reset()
+            return
+        self.nic[offset:offset + size] = (value).to_bytes(size, "little")
+        if offset == 0x37:
+            pass
+
+    def nic_transmit(self, slot: int) -> None:
+        """A buffer with OWN set is the card's: read it, put it on the wire,
+        and give the buffer back the way silicon does."""
+        tsd = self.nic_dword(0x10 + slot * 4)
+        if not tsd & 0x2000:
+            return
+        length = tsd & 0x1FFF
+        address = self.nic_dword(0x20 + slot * 4)
+        if 14 <= length <= 1792:
+            frame = bytes(self.ram[address:address + length])
+            if self.nic_wire is not None:
+                self.nic_wire(frame)
+        self.nic_put_dword(0x10 + slot * 4, 0x8000)      # TOK, OWN cleared
+        self.nic_raise(0x0004)
+
+    def nic_receive(self, frame: bytes) -> bool:
+        """The wire's frame, into the ring the driver allocated."""
+        ring = self.nic_dword(0x30)
+        if not ring:
+            return False
+        wrap = 8192 if self.nic_dword(0x44) & 0x80 else 65536
+        cbr = self.nic_word(0x3A)
+        total = len(frame) + 4
+        if cbr + total > wrap:
+            cbr = 0                        # a packet never straddles the end
+        header = 1 | (total << 16)          # ROK, and the length with header
+        if ring + cbr + total <= self.ram_size:
+            self.ram[ring + cbr:ring + cbr + 4] = header.to_bytes(4, "little")
+            self.ram[ring + cbr + 4:ring + cbr + 4 + len(frame)] = frame
+        self.nic[0x3A] = (cbr + total) & 0xFF
+        self.nic[0x3B] = ((cbr + total) >> 8) & 0xFF
+        self.nic_raise(0x0001)
+        return True
+
+    def nic_raise(self, bits: int) -> None:
+        status = self.nic_word(0x3E) | bits
+        self.nic[0x3E] = status & 0xFF
+        self.nic[0x3F] = (status >> 8) & 0xFF
+        if status and self.nic_word(0x3C):
+            self.pic2.raise_line(11 - 8)
 
     def pci_read(self, byte_lane, size):
         lane = byte_lane & 3

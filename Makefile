@@ -124,7 +124,25 @@ i386:
 	cd userspace/i386 && nasm -f bin mode13.asm -o mode13.bin -l mode13.lst
 	$(PY) tools/i386_tones.py
 	$(PY) tools/i386_image.py --check
+	mkdir -p build/i386/tftp
+	cp userspace/i386/meow.bin build/i386/tftp/boot.nbp
 	$(PY) -m jswc build userspace/i386/i386.jsw -o build/i386/i386.sb3 --target turbowarp
+
+# The network, in two processes: the wire the machine dials, and (for a real
+# LAN address) the same wire attached to a physical interface as root.
+i386-net:
+	$(PY) tools/i386_net.py
+
+IFACE ?= en10
+i386-net-bridge:
+	sudo $(PY) tools/i386_net.py --mode bridge --iface $(IFACE)
+
+# iPXE is GPL and 400 KiB: it is fetched, not vendored, and only the TFTP
+# directory needs it.
+ipxe:
+	mkdir -p build/i386/tftp
+	curl -fsSL https://boot.ipxe.org/ipxe.pxe -o build/i386/tftp/ipxe.pxe
+	@ls -l build/i386/tftp/ipxe.pxe
 
 # One source, two builds. This one is what could be published to scratch.mit.edu:
 # built-ins only, no extension that TurboWarp would allow.

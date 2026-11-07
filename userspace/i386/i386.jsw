@@ -172,20 +172,54 @@ public X.portLog = [];
 public X.pciAddr = 0;                    // the dword 0xCF8 selected last
 public X.pciAddrPort = 3320;             // 0xCF8, config address
 public X.pciDataPort = 3324;             // 0xCFC, config data
-public X.pciBus = [0, 0, 0, 0, 0];
-public X.pciDev = [0, 1, 1, 2, 3];
-public X.pciFn = [0, 0, 1, 0, 0];
-public X.pciVendor = [0x8086, 0x8086, 0x8086, 0x1234, 0x8086];
-public X.pciId = [0x1237, 0x7000, 0x7010, 0x1111, 0x2829];
-public X.pciClass = [0x060000, 0x068000, 0x010180, 0x030000, 0x010601];
+public X.pciBus = [0, 0, 0, 0, 0, 0];
+public X.pciDev = [0, 1, 1, 2, 3, 4];
+public X.pciFn = [0, 0, 1, 0, 0, 0];
+public X.pciVendor = [0x8086, 0x8086, 0x8086, 0x1234, 0x8086, 0x10EC];
+public X.pciId = [0x1237, 0x7000, 0x7010, 0x1111, 0x2829, 0x8139];
+public X.pciClass = [0x060000, 0x068000, 0x010180, 0x030000, 0x010601, 0x020000];
 /* the header type in bits 16..23; bit 7 says the slot has more than one
  * function, which is how a scan knows to look past function 0 */
-public X.pciHeader = [0, 0x80, 0, 0, 0];
+public X.pciHeader = [0, 0x80, 0, 0, 0, 0];
+/* The last row is the network card: a Realtek 8139, which is the cheapest way
+ * a 1999 board got an Ethernet port and is still the one every bootloader has
+ * a driver for. BAR0 is an IO window at 0xD000 (the low bit says "IO", which is
+ * how a driver tells an IO BAR from a memory one) and BAR1 is the memory window
+ * this machine does not decode -- a driver that maps it finds the same
+ * registers through it on real silicon, and finds nothing here, so the IO path
+ * is the one that has to work. */
 public X.pciBars = [0, 0, 0, 0, 0,
                     0, 0, 0, 0, 0,
                     497, 1013, 369, 885, 49153,
                     3758096384, 0, 0, 0, 0,
-                    851968, 0, 0, 0, 0];
+                    851968, 0, 0, 0, 0,
+                    53249, 3758096384, 0, 0, 0];
+
+/* ---- the network card ------------------------------------------------- *
+ * Registers are a 256-byte file, because that is what the chip is: a driver
+ * writes a byte to 0xD000+0x37 and the chip does something. Nothing here is
+ * invented for the guest's convenience -- the offsets, the bit numbers and the
+ * ring format are the RTL8139's, so a driver written from a datasheet and a
+ * bootloader that has never heard of this machine both work.
+ *
+ * Two lists cross the boundary. `X.nicTxq` holds frames the card has decided to
+ * send, as text, for the socket sprite to take; `X.nicRx` holds frames that
+ * arrived, as text, for the card to put in the guest's ring. Text because the
+ * WebSocket extension carries strings and nothing else.
+ */
+public X.nicBase = 53248;                // 0xD000, the window BAR0 asks for
+public X.nicIrq = 11;                    // where INTA is wired
+public X.nicReg = [];                    // 256 bytes, offset+1
+public X.nicRx = [];                     // frames that arrived, as text
+public X.nicTxq = [];                    // frames to send, as text
+public X.nicWords = [];                  // scratch: one frame, as 32-bit words
+public X.nicSent = 0;
+public X.nicGot = 0;
+public X.netLink = 0;                    // 1 when the wire's socket is open
+public X.netSent = 0;                    // frames the sprite has sent
+public X.netDrop = 0;                    // and frames it had to drop
+public X.nicLost = 0;                    // arrived with nowhere to put them
+public X.nicLast = "";
 
 /* ---- the board's clock and interrupt controller ------------------------ *
  * An 8254 counting down and an 8259 deciding who gets the CPU next. Both are
@@ -514,6 +548,9 @@ import "assets/lists/ident.jsa" as ident;   // the drive's IDENTIFY DEVICE block
  * it simply has nothing on the other end of the wire. */
 #ifdef TURBOWARP
 // include "netdisk.jsw"
+/* The wire needs a socket too, and a socket belongs to a sprite: each sprite
+ * gets its own, which is why the network is not bolted onto the disk's. */
+// include "net.jsw"
 /* Sound is the same story: the machine can compute a pitch, but only a browser
  * can play one, and only where a sprite may hold sound assets. */
 // include "speaker.jsw"
@@ -717,6 +754,12 @@ class Cpu {
         ip = 0xFFF0;
         fbAddr = -1;
         fl = 0x0202;
+        /* a reset is a reset: the card comes back with its MAC and nothing
+         * else, and whatever the wire was holding for the last machine is
+         * not this machine's frame any more */
+        nicReset();
+        X.nicRx.clear();
+        X.nicTxq.clear();
         halted = 0;
         steps = 0;
         err = "";
@@ -979,6 +1022,7 @@ class Cpu {
                 }
                 modePoll();                     // and the card follows int 10h
                 resetPoll();                    // and a save may have restarted it
+                nicPoll();                      // and the wire may have a frame
             }
             /* A halted core is not a stopped machine: the clock still runs and
              * the next tick wakes it. Two things have to be true for that to
@@ -2601,7 +2645,7 @@ class Cpu {
         _pi = Operators.math("floor", X.pciAddr / 4) % 64;
         v = 4294967295;                                // nothing answers there
         _pk = 1;
-        while (_pk <= 5) {
+        while (_pk <= 6) {
             if (X.pciBus.get(_pk) == _pb && X.pciDev.get(_pk) == _pd && X.pciFn.get(_pk) == _pf) {
                 pciRegister(_pk, _pi);
             }
@@ -2618,6 +2662,260 @@ class Cpu {
         }
     }
 
+    /* ---- the network card ------------------------------------------------ *
+     * The register file is the chip. Everything else here is the two transfers
+     * the chip does on its own: a transmit reads the guest's memory and puts
+     * bytes on the wire, a receive writes the wire's bytes into the guest's
+     * ring. Both are driven from the machine's own loop, never from the socket
+     * sprite, because only this thread may touch guest memory.
+     */
+    private void nicReset() { // warp
+        X.nicReg.clear();
+        _i = 1;
+        while (_i <= 256) {
+            X.nicReg.add(0);
+            _i += 1;
+        }
+        /* IDR0..5: the address the host bridge answers for. A driver reads it
+         * here, or out of the serial EEPROM, and both say the same thing. */
+        nicSet(0, 0x52);
+        nicSet(1, 0x54);
+        nicSet(2, 0x00);
+        nicSet(3, 0x12);
+        nicSet(4, 0x34);
+        nicSet(5, 0x56);
+        nicSet(0x5C, 0x24);              // MSR: link up, 100 Mb/s, full duplex
+        nicSet(0x59, 0x60);              // TimerInt
+    }
+
+    private void nicSet(o, b) { // warp
+        X.nicReg.set(o % 256 + 1, b % 256);
+    }
+
+    private void nicByte(o) { // warp
+        v = X.nicReg.get(o % 256 + 1) + 0;
+    }
+
+    /* A register that is two or four bytes wide, little-endian, the way the bus
+     * hands it over. `v` is the answer, because a Scratch custom block has no
+     * return value: the result travels in a variable, and every procedure here
+     * that computes something leaves it there. */
+    private void nicWord(o) { // warp
+        v = X.nicReg.get(o % 256 + 1) + X.nicReg.get((o + 1) % 256 + 1) * 256;
+    }
+
+    private void nicReadW(o, width) { // warp
+        _acc = 0;
+        _sh = 1;
+        _i = 0;
+        while (_i < width) {
+            _acc = _acc + X.nicReg.get((o + _i) % 256 + 1) * _sh;
+            _sh = _sh * 256;
+            _i += 1;
+        }
+        v = _acc % 4294967296;
+    }
+
+    private void nicPutD(o, value) { // warp
+        _val = value % 4294967296;
+        _i = 0;
+        while (_i < 4) {
+            nicSet(o + _i, Operators.math("floor", _val / X.bw.get(_i + 1)) % 256);
+            _i += 1;
+        }
+    }
+
+    /* CR's low bits are the driver's switches, and BUFE is the chip's own
+     * report: the ring is empty when the write pointer has caught the read
+     * pointer. A driver that polls it sees what a real one sees. */
+    private void nicCmd() { // warp
+        _cr = X.nicReg.get(0x38) + 0;                  // 0x37 + 1
+        nicWord(0x3A);
+        _cbr = v;
+        nicWord(0x38);
+        if (_cbr == v) { _cr = _cr + 1; }              // BUFE: the ring is empty
+        v = _cr % 256;
+    }
+
+    private void nicIsr(bits) { // warp
+        nicWord(0x3E);
+        _isr = (v + bits) % 65536;
+        nicSet(0x3E, _isr % 256);
+        nicSet(0x3F, Operators.math("floor", _isr / 256) % 256);
+        nicWord(0x3C);
+        if (_isr > 0 && v > 0) {
+            picRaise(X.nicIrq);
+        }
+    }
+
+    /* One register read. Only the command register is computed: it reports
+     * whether the ring is empty. Everything else is what was last written. */
+    private void nicRead(o, width) { // warp
+        if (o == 0x37 && width == 1) { nicCmd(); return; }
+        nicReadW(o, width);
+    }
+
+    private void nicWrite(o, width, value) { // warp
+        _val = value % 4294967296;
+        if (width == 4) {
+            if (o == 0x10 || o == 0x14 || o == 0x18 || o == 0x1C) {
+                nicPutD(o, _val);
+                nicTransmit(Operators.math("floor", (o - 16) / 4));
+                return;
+            }
+            nicPutD(o, _val);
+            return;
+        }
+        if (width == 2) {
+            if (o == 0x3E) {
+                /* write one to clear: one register, six devices' worth of
+                 * events, and the driver must be able to retire one */
+                nicSet(0x3E, 0);
+                nicSet(0x3F, 0);
+                return;
+            }
+            nicSet(o, _val % 256);
+            nicSet(o + 1, Operators.math("floor", _val / 256) % 256);
+            return;
+        }
+        if (o == 0x37) {
+            /* a write to CR can be a reset, and a reset takes the register back
+             * to zero; the driver sets TE|RE again on the way out */
+            if (Operators.math("floor", _val / 16) % 2 == 1) {
+                nicReset();
+                return;
+            }
+            nicSet(0x37, _val % 256);
+            return;
+        }
+        nicSet(o, _val % 256);
+    }
+
+    /* A frame the guest asked the card to send. The card reads it out of guest
+     * memory itself -- the driver only wrote an address and a length -- and the
+     * buffer goes back to the driver the moment the bytes are away, which is
+     * what clears OWN and raises TOK. */
+    private void nicTransmit(slot) { // warp
+        nicReadW(0x10 + slot * 4, 4);
+        _tsd = v;
+        if (Operators.math("floor", _tsd / 8192) % 2 != 1) { return; }
+        _len = _tsd % 8192;
+        nicReadW(0x20 + slot * 4, 4);
+        _addr = v;
+        if (_len < 14 || _len > 1792) {
+            nicPutD(0x10 + slot * 4, 32768);       // TOK, but a runt went nowhere
+            nicIsr(4);
+            return;
+        }
+        _msg = join("T ", _len);
+        _msg = join(_msg, " ");
+        _w = 0;
+        _n = 0;
+        while (_n < _len) {
+            rdb(_addr + _n);
+            _w = _w + v * X.bw.get(_n % 4 + 1);
+            if (_n % 4 == 3) {
+                _msg = join(_msg, _w % 4294967296);
+                _msg = join(_msg, " ");
+                _w = 0;
+            }
+            _n += 1;
+        }
+        if (_n % 4 != 0) {
+            _msg = join(_msg, _w % 4294967296);
+            _msg = join(_msg, " ");
+        }
+        X.nicTxq.add(_msg);
+        X.nicSent += 1;
+        X.nicLast = "tx";
+        nicPutD(0x10 + slot * 4, 32768);           // TOK, and the buffer is ours
+        nicIsr(4);
+    }
+
+    /* The other direction: a frame arrived, put it in the ring the driver
+     * allocated and move the write pointer. The four-byte header is the chip's
+     * own format -- status first, then the length including that header. */
+    private void nicReceive() { // warp
+        if (X.nicRx.length() < 1) { return; }
+        _msg = X.nicRx.get(1);
+        X.nicRx.delete(1);
+        nicDecode(_msg);
+        _bytes = X.nicWords.length() * 4;
+        if (_bytes < 14) {
+            X.nicLost += 1;
+            return;
+        }
+        nicReadW(0x30, 4);
+        _rb = v;
+        nicWord(0x3A);
+        _cbr = v;
+        /* the ring is 8K, and the driver said so by setting WRAP: a machine
+         * that ignores that writes past the buffer the driver owns */
+        _wrap = 65536;
+        nicReadW(0x44, 4);
+        if (Operators.math("floor", v / 128) % 2 == 1) { _wrap = 8192; }
+        _hdr = _cbr + 4;                            // length counts the header
+        _n = 0;
+        while (_n < 4) {
+            _at = _rb + _cbr + _n;
+            if (_n >= _wrap) { _at = _at - _wrap; }
+            wrb(_at, 0);
+            _n += 1;
+        }
+        wrb(_rb + _cbr, 1);                         // RxStatus: ROK
+        wrb(_rb + _cbr + 2, _hdr % 256);
+        wrb(_rb + _cbr + 3, Operators.math("floor", _hdr / 256) % 256);
+        _i = 0;
+        while (_i < _bytes) {
+            _wv = X.nicWords.get(Operators.math("floor", _i / 4) + 1) + 0;
+            _at = _rb + _cbr + 4 + _i;
+            if (_at >= _rb + _wrap) { _at = _at - _wrap; }
+            wrb(_at, Operators.math("floor", _wv / X.bw.get(_i % 4 + 1)) % 256);
+            _i += 1;
+        }
+        _nxt = (_cbr + 4 + _bytes) % _wrap;
+        nicSet(0x3A, _nxt % 256);
+        nicSet(0x3B, Operators.math("floor", _nxt / 256) % 256);
+        X.nicGot += 1;
+        nicIsr(1);
+    }
+
+    /* The wire's text, back into bytes. One pass, one accumulator: the host
+     * writes decimal words because a Scratch string has no character
+     * arithmetic, and a decimal digit is the one thing `+ 0` turns into a
+     * number. */
+    private void nicDecode(text) { // warp
+        X.nicWords.clear();
+        _n = Operators.length(text);
+        _acc = 0;
+        _on = 0;
+        _i = 1;
+        while (_i <= _n) {
+            _c = Operators.letterOf(_i, text);
+            if (_c == " ") {
+                if (_on == 1) {
+                    X.nicWords.add(_acc % 4294967296);
+                    _acc = 0;
+                    _on = 0;
+                }
+            } else {
+                if (Operators.contains("0123456789", _c)) {
+                    _acc = _acc * 10 + (_c + 0);
+                    _on = 1;
+                }
+            }
+            _i += 1;
+        }
+        if (_on == 1) { X.nicWords.add(_acc % 4294967296); }
+    }
+
+    /* Once a frame, from the machine's own loop: the sprite that owns the
+     * socket cannot touch the guest's ring, and this thread cannot wait for a
+     * socket. The list between them is the only thing they share. */
+    private void nicPoll() { // warp
+        if (X.nicRx.length() > 0) { nicReceive(); }
+    }
+
     private void portIn(p) { // warp
         v = 255;
         if (p == X.pciAddrPort) { v = X.pciAddr; return; }
@@ -2625,6 +2923,7 @@ class Cpu {
             pciLane(p - X.pciDataPort);
             return;
         }
+        if (p >= X.nicBase && p <= X.nicBase + 255) { nicRead(p - X.nicBase, 1); return; }
         if (p == 96) { v = X.port60; X.port64 = 0; return; }
         if (p == 100) { v = X.port64; return; }
         if (p == 112) { v = X.cmosIndex; return; }
@@ -2685,6 +2984,10 @@ class Cpu {
         }
         if (p >= X.pciDataPort && p <= X.pciDataPort + 3) {
             return;                                    // claims, not registers
+        }
+        if (p >= X.nicBase && p <= X.nicBase + 255) {
+            nicWrite(p - X.nicBase, 1, val);
+            return;
         }
         _oV = val % 256;
         if (p == 43) { pitControl(_oV); return; }
@@ -3948,15 +4251,25 @@ class Cpu {
                 /* `in eax, dx` is one 32-bit read, not two 16-bit ones: an ATA
                  * data register hands over a whole word and stepping it twice
                  * would half every sector, and a PCI config register is only
-                 * coherent when it is read whole. */
+                 * coherent when it is read whole. A NIC register is the same
+                 * story: TSD0 is a dword, and half of it is not a register. */
                 if (_p == X.ataDataPort) { ataIn(); putPortReg(_p, v); return; }
                 if (_p == X.scsiDataPort) { scsiData(); putPortReg(_p, v); return; }
+                if (_p >= X.nicBase && _p <= X.nicBase + 255) {
+                    nicRead(_p - X.nicBase, 4);
+                    putPortReg(_p, v);
+                    return;
+                }
                 portIn(_p); putPortReg(_p, v);
                 return;
             }
             if (op == 231) {
                 getPortReg(_p);
                 if (_p == X.ataDataPort) { ataOut(v); return; }
+                if (_p >= X.nicBase && _p <= X.nicBase + 255) {
+                    nicWrite(_p - X.nicBase, 4, v);
+                    return;
+                }
                 portOut(_p, v);
                 return;
             }
@@ -3971,12 +4284,21 @@ class Cpu {
             if (op == 237) {
                 if (_p == X.ataDataPort) { ataIn(); putPortReg(_p, v); return; }
                 if (_p == X.scsiDataPort) { scsiData(); putPortReg(_p, v); return; }
+                if (_p >= X.nicBase && _p <= X.nicBase + 255) {
+                    nicRead(_p - X.nicBase, 2);
+                    putPortReg(_p, v);
+                    return;
+                }
                 portIn(_p); putPortReg(_p, v);
                 return;
             }
             if (op == 239) {
                 getPortReg(_p);
                 if (_p == X.ataDataPort) { ataOut(v); return; }
+                if (_p >= X.nicBase && _p <= X.nicBase + 255) {
+                    nicWrite(_p - X.nicBase, 2, v);
+                    return;
+                }
                 portOut(_p, v);
                 return;
             }

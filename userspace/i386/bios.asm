@@ -1397,6 +1397,7 @@ getpos10:
 %include "pci.inc"
 %include "splash.inc"
 %include "gx620.inc"
+%include "pxe.inc"
 %include "boot.inc"
 
 ; ---------------------------------------------------------------------------

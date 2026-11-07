@@ -41,6 +41,7 @@ DBG_MAX    equ 14
 BM_WIDTH   equ 40
 BM_MAIN_N  equ 5
 BO_N       equ 4
+PB_N       equ 2                    ; PXE, and the loader it chains to
 
 ; ---------------------------------------------------------------------------
 ; bootMenu -- the screen DEL earns you. It does not return: every way out is a
@@ -137,6 +138,37 @@ bootOptions:
     add     bx, ax
     mov     al, [bx]
 .out:
+    ret
+
+; ---------------------------------------------------------------------------
+; bootPxe -- the two ways to boot from a wire. Returns al = 0 for the file the
+; DHCP server names, 1 to chainload iPXE, or 0xFF for Esc.
+;
+; iPXE is under PXE because that is what it is: a PXE client that fetched
+; itself and then does the same job with more features. A machine that has the
+; first has a way to get the second, which is the whole reason it exists.
+; ---------------------------------------------------------------------------
+bootPxe:
+    push    ax
+    mov     ax, cs
+    mov     ds, ax
+    pop     ax
+    mov     word [es:BM_TBL], pb_items
+    mov     word [es:BM_TITLE], msg_pb_title
+    mov     byte [es:BM_CNT], PB_N
+    call    bmGeometry
+    mov     byte [es:BM_SEL], 0
+    call    bmRedraw
+    call    bmList
+    cmp     al, 0xFF
+    je      .out
+    mov     bx, pb_modes
+    add     bx, ax
+    mov     al, [bx]
+    clc
+    ret
+.out:
+    stc
     ret
 
 ; ---------------------------------------------------------------------------
@@ -351,6 +383,8 @@ bmRow:
 ; ---------------------------------------------------------------------------
 bmBoot:
     push    ax
+    cmp     al, 0xE0                ; the network is not a disk: it has no
+    je      .pxe                    ; sectors to read, it has a story
     mov     [es:BM_DEV], al
     mov     [es:BDA_BOOTDEV], al
     mov     byte [es:CON_ATTR], 0x07
@@ -363,6 +397,23 @@ bmBoot:
     int     0x19                    ; does not return when it worked
     mov     si, msg_bm_nodev
     call    puts
+    ret
+.pxe:
+    mov     ax, cs
+    mov     ds, ax
+    mov     [es:BDA_BOOTDEV], al
+    mov     byte [es:CON_ATTR], 0x07
+    call    clear_text
+    xor     dl, dl
+    xor     dh, dh
+    call    suGoto
+    call    bootPxe                 ; which of the two: PXE, or iPXE
+    jc      .back                   ; Esc: nothing was tried, so say nothing
+    call    pxeBoot                 ; does not return when it worked
+    mov     si, msg_bm_nodev
+    call    puts
+.back:
+    pop     ax
     ret
 
 ; bmSayBoot -- "Booting from device XX", the line POST and the menu both print
@@ -938,6 +989,12 @@ msg_bo_2:       db "CD-ROM (0x9F)", 0
 msg_bo_3:       db "Network (PXE)", 0
 bo_items:       dw msg_bo_0, msg_bo_1, msg_bo_2, msg_bo_3
 bo_devs:        db 0x80, 0x00, 0x9F, 0xE0
+
+pb_items:       dw msg_pb_0, msg_pb_1
+pb_modes:       db 0, 1
+msg_pb_title:   db "Network Boot", 0
+msg_pb_0:       db "PXE (boot file)", 0
+msg_pb_1:       db "iPXE (chainload)", 0
 
 msg_bm_booting: db "Booting from device 0x", 0
 msg_bm_nodev:   db "No bootable device.", 13, 10, 0
