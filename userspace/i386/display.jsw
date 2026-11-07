@@ -38,6 +38,10 @@ class Display {
         while (1) {
             if (X.dispReq == 1) {
                 X.dispBooted = 0;
+                /* The stage can be resized while the page is open, and the
+                 * machine reboots more often than the page reloads: measure
+                 * again here so a reboot is enough to pick up a new window. */
+                dispMeasure();
                 dispBoot();
                 X.dispReq = 0;
                 X.dispAck = 1;
@@ -106,8 +110,16 @@ class Display {
             _w = _w * 2 + 2;                    // the fence held half of it back
             _h = _h * 2 + 2;
         }
-        if (_w < 320) { _w = X.stageW; }        // no answer worth having
-        if (_h < 240) { _h = X.stageH; }
+        /* A walk that stopped early reports half a stage -- the sprite was
+         * already on the edge when the axis it is walking began, so the loop
+         * exits at once and the number is the distance it did not travel. A
+         * stage does not shrink to half its size between two frames, so a
+         * measurement smaller than half of what the card last saw is not a
+         * resize: it is the walk failing. */
+        if (_w < 320 || _w * 2 <= X.stageW) { _w = X.stageW; }
+        if (_h < 240 || _h * 2 <= X.stageH) { _h = X.stageH; }
+        if (_w > 4096) { _w = 4096; }
+        if (_h > 4096) { _h = 4096; }
 #endif
         Motion.setXY(0, 0);
         /* The fence gives up half a costume on some VMs and not on others, so
