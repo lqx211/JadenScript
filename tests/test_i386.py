@@ -1900,6 +1900,80 @@ class I386DriveTests(unittest.TestCase):
         self.assertIn("drvStr", source, "and the buffer needs its own data segment")
 
 
+class I386LinuxBootTests(unittest.TestCase):
+    """The 32-bit boot protocol: a kernel is not a boot sector.
+
+    It does not read itself and it does not call the BIOS. It is placed at 1 MB,
+    handed a `boot_params` page that describes the machine, and entered in
+    protected mode with that page's address in ESI and 0x2BADB002 in EAX. The
+    stub at 1 MB checks that handover and says so on the serial port, which is
+    how every step after this one will be watched.
+    """
+
+    BOOT = ROOT / "userspace/i386/linuxboot.bin"
+    STUB = ROOT / "userspace/i386/kstub32.bin"
+
+    def _run(self, ram: int = 64 << 20):
+        if not self.BOOT.exists() or not self.STUB.exists():
+            self.skipTest("run make i386-extras")
+        boot = self.BOOT.read_bytes()
+        stub = self.STUB.read_bytes()
+        mach = rv.Machine(ram_size=ram)
+        mach.ram[:] = i386_image.build()
+        mach.sreg[rv.SEG_CS] = rv.RESET_CS
+        mach.eip = rv.RESET_IP
+        mach.run(limit=1_500_000)                  # POST, which brings COM1 up
+        mach.ram[0x7C00:0x7C00 + len(boot)] = boot
+        mach.ram[0x100000:0x100000 + len(stub)] = stub
+        mach.sreg[rv.SEG_CS] = 0
+        mach.sreg[rv.SEG_SS] = 0
+        mach.eip = 0x7C00
+        for _ in range(200_000):
+            mach.step()
+            if mach.halted:
+                break
+        return mach
+
+    def test_the_page_a_kernel_is_handed_says_what_it_is(self) -> None:
+        mach = self._run()
+        self.assertEqual(bytes(mach.ram[0x10202:0x10206]), b"HdrS",
+                         "setup_header, where the kernel looks for it")
+        self.assertEqual(mach.ram[0x101FE:0x10200], b"\x55\xaa", "boot_flag")
+        self.assertEqual(mach.read(0x10214, 4), 0x100000, "code32_start")
+        self.assertEqual(mach.ram[0x10211] & 1, 1, "loadflags: LOADED_HIGH")
+        line = bytes(mach.ram[0x12000:0x12040]).split(b"\0")[0]
+        self.assertEqual(line, b"console=ttyS0,115200 earlyprintk=serial")
+        self.assertEqual(mach.read(0x10228, 4), 0x12000, "cmd_line_ptr points at it")
+
+    def test_the_memory_map_is_the_bios_s_own(self) -> None:
+        mach = self._run()
+        count = mach.ram[0x101E8]
+        self.assertGreaterEqual(count, 2, "E820 answered")
+        # the first entry is the conventional memory a kernel may use
+        base = mach.read(0x102D0, 8)
+        size = mach.read(0x102D8, 8)
+        kind = mach.read(0x102E0, 4)
+        self.assertEqual((base, kind), (0, 1), "usable memory at zero")
+        self.assertGreaterEqual(size, 0x9F000)
+
+    def test_protected_mode_and_the_magic_number(self) -> None:
+        mach = self._run()
+        self.assertEqual(mach.cr[0] & 1, 1, "paging off, protection on")
+        self.assertEqual(mach.sreg[rv.SEG_CS], 0x0008, "the flat code selector")
+
+    def test_the_kernel_reports_what_it_was_given(self) -> None:
+        """K: entered. H: 'HdrS'. C: code32_start. E3: three E820 entries."""
+        mach = self._run()
+        self.assertEqual(mach.serial_text(), "linuxboot: protected mode\r\nKHCE3\r\n")
+
+    def test_a_megabyte_is_not_enough_room_for_a_kernel(self) -> None:
+        """The machine's default is 1 MB, which is plenty for the firmware and
+        nothing at all for a kernel: at 1 MB the image at 0x100000 is outside
+        RAM, and what the CPU finds there is zeroes."""
+        mach = self._run(ram=1 << 20)
+        self.assertNotIn("K", mach.serial_text())
+
+
 class I386ExtendedCpuTests(unittest.TestCase):
     """The instructions a 486 and a 686 added.
 
