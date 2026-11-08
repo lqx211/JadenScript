@@ -385,6 +385,34 @@ class I386SetupTests(unittest.TestCase):
         self.assertNotIn("select", screen.lower())
         self.assertNotIn("Setup Utility", screen, "the hint's first line is gone")
 
+    def test_a_big_card_gets_a_big_frame(self) -> None:
+        """TurboWarp can be 1024 x 768, which is 128 x 48 cells. The frame used
+        to stop at row 22 and column 118 whatever the card was, so a tall stage
+        was a frame with half the screen of empty blue under it."""
+        mach = rv.Machine()
+        mach.view_cols, mach.view_rows = 128, 48
+        mach.ram[:] = i386_image.build()
+        mach.keys.extend([self.F2])
+        mach.sreg[rv.SEG_CS] = rv.RESET_CS
+        mach.eip = rv.RESET_IP
+        limit = 40_000_000
+        while mach.keys and mach.steps < limit:
+            mach.run(limit=min(limit, mach.steps + 250_000))
+        mach.run(limit=mach.steps + 900_000)
+        screen = mach.text()
+        self.assertIn("System Info", screen)
+        stride = 128
+        edge = (0xB0, 0xBA, 0xBB)
+        # the frame's right border: the card's width less two
+        self.assertIn(mach.ram[rv.TEXT_BASE + (1 * stride + 126) * 2], edge,
+                      "the frame reaches the right of a wide card")
+        # and its bottom: the card's height, less the border and the hint's six
+        bottom = mach.ram[rv.TEXT_BASE + (40 * stride + 40) * 2]
+        self.assertEqual(bottom, 0xCD, "the bottom rule follows the card's height")
+        # there is room for the explanation again, six rows below the frame
+        self.assertIn("Press Up/Down arrows", screen)
+        self.assertIn("Press Esc to exit Setup", screen)
+
     def test_f2_opens_the_setup_on_the_system_page(self) -> None:
         screen = self._setup([self.F2]).text()
         self.assertIn("JSW System 80386", screen)

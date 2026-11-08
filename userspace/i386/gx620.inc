@@ -77,9 +77,10 @@ GX_M_HINT equ 0x6D7                 ; ... the hint box's top row, or 0 for none
 GX_M_LM1  equ 0x6D8                 ; ... and one row above the bottom border
 GX_M_COLS equ 0x6D9                 ; ... the card's width in cells
 
-GX_RR_MAX  equ 118                  ; the frame stops growing before the card
-                                    ; does, so a very wide stage still has a
-                                    ; margin instead of a wall of frame
+GX_RR_MAX  equ 158                  ; the plane's own ceiling, less a column
+                                    ; of margin each side: a wider stage is a
+                                    ; wider frame, not a frame with empty blue
+                                    ; to the right of it
 KIND_GROUP equ 0x40
 KIND_EDIT  equ 0x80
 KIND_RUN   equ 0x20                 ; a node that opens a window; low bits = which
@@ -133,14 +134,20 @@ gxLayout:
     jnz     .haverows
     mov     al, ROWS
 .haverows:
-    cmp     al, ROWS
-    jbe     .short
-    mov     al, ROWS
+    cmp     al, MAXROWS             ; the plane's ceiling, not the old 30 rows:
+    jbe     .short                  ; a 1024 x 768 stage is 48 rows tall and
+    mov     al, MAXROWS             ; the frame has to be allowed to be too
 .short:
-    sub     al, 2
-    cmp     al, GX_BOT_I            ; the bottom border row
-    jb      .fitrow
-    mov     al, GX_BOT_I
+    sub     al, 2                   ; the bottom border, one row off the edge
+    ; A taller card is a taller frame -- that is the whole point of measuring
+    ; it. The hint box wants six rows to itself underneath, so they come out of
+    ; the frame when there is room for both, and a card too short for both
+    ; keeps the frame and loses the hint, which is the older behaviour.
+    mov     bl, al
+    sub     bl, GX_HINT_H + 1
+    cmp     bl, GX_BOT_I
+    jb      .fitrow                 ; no room to spare: rows - 2 it is
+    mov     al, bl
 .fitrow:
     mov     [es:GX_M_BOT], al
     dec     al

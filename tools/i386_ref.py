@@ -1806,11 +1806,14 @@ class Machine:
     # ---- output ------------------------------------------------------
 
     def text(self):
+        """The screen as the card shows it: the stride is the visible width,
+        not the plane's ceiling, because that is what the guest draws with."""
+        stride = self.view_cols
         lines = []
-        for row in range(TEXT_ROWS):
+        for row in range(self.view_rows):
             chars = []
-            for col in range(TEXT_COLS):
-                cell = self.read(TEXT_BASE + (row * TEXT_COLS + col) * 2, 1)
+            for col in range(stride):
+                cell = self.read(TEXT_BASE + (row * stride + col) * 2, 1)
                 chars.append(chr(cell) if 32 <= cell < 127 else " ")
             lines.append("".join(chars).rstrip())
         return "\n".join(lines).rstrip()
