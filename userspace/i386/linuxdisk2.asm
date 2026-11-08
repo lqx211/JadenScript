@@ -117,6 +117,17 @@ start:
         mov     dword [es:0x238], 2047        ; cmdline_size
         mov     byte  [es:0x1EF], 0xFF        ; sentinel
 
+        ; ---- screen_info: the console asks the card what it was, even with a
+        ;      serial console on the command line
+        mov     word  [es:0x04], 16384        ; ext_mem_k
+        mov     word  [es:0x08], 3            ; orig_video_mode: 80x25 text
+        mov     word  [es:0x0A], 80           ; columns
+        mov     word  [es:0x0C], 3            ; orig_video_ega_bx
+        mov     word  [es:0x0E], 25           ; lines
+        mov     byte  [es:0x0F], 1            ; orig_video_isVGA
+        mov     word  [es:0x10], 16           ; points
+        mov     word  [es:0x20A], 0xFFFF      ; vid_mode: leave the card alone
+
         ; ---- where the kernel is: patched in by the image builder, so the
         ;      loader never has to know how big a kernel is
         mov     eax, [patch + 4]
@@ -153,6 +164,10 @@ start:
         mov     si, msg_pm
         call    puts
 
+        ; Interrupts off across the switch. Between `mov cr0` and the far jump
+        ; the machine is in protected mode with no IDT, and a timer tick that
+        ; lands there reads a descriptor table that does not exist yet.
+        cli
         mov     eax, cr0
         or      eax, 1
         mov     cr0, eax
@@ -209,6 +224,8 @@ pm32:
         jnz     .phdr
 
 kernel_ready:
+        push    0                      ; a defined EFLAGS, not the loader's
+        popfd
         mov     esp, 0x90000
         mov     esi, ZEROPAGE          ; the protocol's one argument
         mov     eax, 0x2BADB002        ; ... and its one magic number
