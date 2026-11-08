@@ -452,6 +452,8 @@ class Machine:
         self.cr = [0] * 5
         self.gdtr = [0, 0]
         self.idtr = [0, 0]
+        self.tlb_page = -1
+        self.tlb_phys = 0
         self.ldtr = 0
         self.tr = 0
         self.pe = False
@@ -582,15 +584,24 @@ class Machine:
         lin = (self.sbase(seg) + off) & 0xFFFF_FFFF
         if not self.pe:
             return lin & 0xFFFFF          # real mode wraps at a megabyte
+        # Protected mode is where extended memory starts. A flat descriptor and
+        # paging off means a linear address is a physical one, untruncated:
+        # that is how a kernel clears its own BSS at 30 MB before it has any
+        # page tables at all, and wrapping here made every byte above the
+        # megabyte read as an open bus.
         if not self.cr[0] & 0x8000_0000:
-            # Protected mode with paging off still wraps at a megabyte here,
-            # which is what this board did before paging existed and what a real
-            # SeaBIOS turns out to depend on. It is not what the hardware does:
-            # on a 386, a linear address above the installed RAM reads an open
-            # bus. Extended memory is reached the way a kernel reaches it --
-            # through page tables, which return a physical address untruncated.
-            return lin & 0xFFFFF
-        return self.translate(lin)
+            return lin
+        # Every instruction byte goes through here, so the last page is kept:
+        # code runs page by page, and a walk per byte was the difference
+        # between the model booting a kernel and the model crawling through one.
+        page = lin >> 12
+        if page == self.tlb_page:
+            return self.tlb_phys | (lin & 0xFFF)
+        physical = self.translate(lin) & ~0xFFF
+        if not self.halted:
+            self.tlb_page = page
+            self.tlb_phys = physical
+        return physical | (lin & 0xFFF)
 
     # ---- paging ------------------------------------------------------
 
@@ -660,6 +671,18 @@ class Machine:
 
     # ---- protected mode ----------------------------------------------
 
+    def physical(self, lin: int) -> int:
+        """A linear address the guest handed to the machine -- a descriptor
+        table's base, an IDT's base -- as the physical address it names.
+
+        These are stored by the kernel as *linear* addresses and they are used
+        long after paging comes on, so reading them as physical addresses finds
+        whatever happens to live at 0xc1xxxxxx, which is nothing."""
+        lin &= 0xFFFF_FFFF
+        if self.pe and self.cr[0] & 0x8000_0000:
+            return self.translate(lin)
+        return lin
+
     def descriptor(self, selector):
         """The hidden half of a segment register: base, limit and flags, read
         out of the descriptor table the selector points into."""
@@ -667,7 +690,7 @@ class Machine:
             table = self.ldtr if self.ldtr else 0
         else:
             table = self.gdtr[0]
-        at = table + (selector & ~7)
+        at = self.physical(table + (selector & ~7))
         raw = self.read(at, 4) | (self.read(at + 4, 4) << 32)
         base = ((raw >> 16) & 0xFFFF) | (((raw >> 32) & 0xFF) << 16) | ((raw >> 56) << 24)
         limit = (raw & 0xFFFF) | (((raw >> 48) & 0x0F) << 16)
@@ -1326,7 +1349,7 @@ class Machine:
     # ---- decode ------------------------------------------------------
 
     def fetch8(self):
-        value = self.read(self.sbase(SEG_CS) + self.eip, 1)
+        value = self.read(self.phys(SEG_CS, self.eip), 1)
         self.eip = (self.eip + 1) & self.ipmask
         return value
 
@@ -1571,7 +1594,7 @@ class Machine:
         if self.pe:
             # an interrupt gate is eight bytes: offset, selector, attributes,
             # and the top half of the offset on a 386
-            at = self.idtr[0] + number * 8
+            at = self.physical(self.idtr[0] + number * 8)
             off = self.read(at, 2) | (self.read(at + 6, 2) << 16)
             self.loadseg(SEG_CS, self.read(at + 2, 2))
             self.eip = off & self.ipmask
@@ -1772,6 +1795,7 @@ class Machine:
         self.cr = [0] * 5
         self.gdtr = [0, 0]
         self.idtr = [0, 0]
+        self.tlb_page = -1
         self.ldtr = 0
         self.tr = 0
         self.pe = False
@@ -2534,6 +2558,8 @@ def two_byte(m, size, seg, addr_size=2):
                 m.write_cr0(m.getreg(rm, 4))
             elif reg < 5:
                 m.cr[reg] = m.getreg(rm, 4)
+                if reg == 3:
+                    m.tlb_page = -1       # a new table: the last page is gone
         return
     if 0x80 <= op <= 0x8F:
         rel = m.fetch32() if size == 4 else m.fetch16()

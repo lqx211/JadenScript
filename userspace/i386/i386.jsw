@@ -1548,14 +1548,15 @@ class Cpu {
             v = _lin % 1048576;
             return;
         }
-        /* Protected mode with paging off still wraps at a megabyte. That is
-         * what this board did before paging existed, and a real SeaBIOS turns
-         * out to depend on it -- the honest hardware answer would be an open
-         * bus above the installed RAM. Extended memory is reached the way a
-         * kernel reaches it: through page tables, which return a physical
-         * address untruncated. */
+        /* Protected mode is where extended memory starts. A flat descriptor
+         * and paging off means a linear address is a physical one, untruncated:
+         * that is how a kernel clears its own BSS at 30 MB before it has any
+         * page tables at all. Wrapping here made every byte above the megabyte
+         * read as an open bus, and no 32-bit Linux can boot on a machine
+         * like that.
+         */
         if (Operators.math("floor", cr0 / 2147483648) % 2 == 0) {
-            v = _lin % 1048576;
+            v = _lin % 4294967296;
             return;
         }
         pageWalk(_lin);

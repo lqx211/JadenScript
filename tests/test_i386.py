@@ -2185,6 +2185,10 @@ class I386PagingTests(unittest.TestCase):
         write(self.PT + 0, self.PHYS_A | 0x07, 4)  # virtual 0x0000
         write(self.PT + 4, self.PHYS_B | 0x07, 4)  # virtual 0x1000
         write(self.PT + 8, 0x0000_0000, 4)         # virtual 0x2000: not present
+        # the descriptor tables are addressed *linearly*, so a machine with
+        # paging on has to be able to walk to them: identity is enough
+        write(self.PT + 6 * 4, 0x006000 | 0x07, 4)
+        write(self.PT + 7 * 4, 0x007000 | 0x07, 4)
 
     def enable(self, mach) -> None:
         mach.cr[3] = self.PD
@@ -2245,11 +2249,9 @@ class I386PagingTests(unittest.TestCase):
         self.assertTrue(mach.halted, "no handler, and none to fault into")
 
     def test_extended_memory_is_reached_through_page_tables(self) -> None:
-        """A segment base of 1 MiB does not get there on its own -- protected
-        mode with paging off wraps at a megabyte, which is what a real SeaBIOS
-        depends on. A page table does, because the physical address it produces
-        is not truncated: that is how a kernel uses the 128 MiB above the hole.
-        """
+        """A page table is one way to reach the 128 MiB above the hole -- it
+        hands back a physical address untruncated, which is how a kernel that
+        has already turned paging on uses memory it never identity-mapped."""
         mach = self.ref()
         mach.write(0x2000, 0x3000 | 0x07, 4)
         mach.write(0x3000, 0x0020_0000 | 0x07, 4)   # virtual 0 -> physical 2 MiB
@@ -2258,12 +2260,23 @@ class I386PagingTests(unittest.TestCase):
         self.assertEqual(mach.phys(rv.SEG_DS, 0x40), 0x0020_0040,
                          "a mapped page above 1 MiB keeps its address")
 
-    def test_protected_mode_without_paging_still_wraps(self) -> None:
+    def test_protected_mode_without_paging_reaches_past_a_megabyte(self) -> None:
+        """A flat descriptor and CR0.PG clear: a linear address is a physical
+        one, all thirty-two bits of it. A kernel clears its own BSS at 30 MB
+        before it owns a single page table, and truncating here made every byte
+        above the first megabyte read as an open bus."""
         mach = self.ref()
         mach.write_cr0(0x0000_0001)
         mach.base[rv.SEG_DS] = 0x0010_0000
-        self.assertEqual(mach.phys(rv.SEG_DS, 0x40), 0x40,
-                         "the board aliases above a megabyte; a real SeaBIOS needs it")
+        self.assertEqual(mach.phys(rv.SEG_DS, 0x40), 0x0010_0040,
+                         "protected mode does not alias back to the IVT")
+
+    def test_real_mode_still_wraps_at_a_megabyte(self) -> None:
+        """Real mode is where the wrap belongs: an 8086 with a segment of
+        0xFFFF and an offset of 0xFFFF really does come back round."""
+        mach = self.ref()
+        mach.base[rv.SEG_DS] = 0xFFFF0
+        self.assertEqual(mach.phys(rv.SEG_DS, 0xFFFF), 0x0FFEF)
 
     def test_the_scratch_machine_walks_the_same_tables(self) -> None:
         """The generated project, stepped to the same state and asked the same
