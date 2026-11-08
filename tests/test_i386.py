@@ -330,6 +330,10 @@ class I386SetupTests(unittest.TestCase):
     #: System, System Info, Processor Info, Memory Info, Date/Time and Month
     TO_MONTH = [0x50] * 5
 
+    def _attrs(self, mach, row: int, first: int, last: int) -> set[int]:
+        return {mach.ram[rv.TEXT_BASE + (row * rv.TEXT_COLS + col) * 2 + 1]
+                for col in range(first, last)}
+
     def _setup(self, keys: list[int], limit: int = 40_000_000,
                settle: int = 900_000):
         """Power on, press F2 and whatever else, and let the screen settle."""
@@ -363,14 +367,17 @@ class I386SetupTests(unittest.TestCase):
         # the frame's vertical rules: column 58 on this card, not 78. The outer
         # rule is a single bar and the right pane's box a double one, and the
         # box is drawn over the rule, so either glyph is the frame's edge.
+        # The plane's stride is the *card's* width, so that is what to read it
+        # with -- reading a sixty-column screen at eighty lands on the wrong row.
         edge = (0xB0, 0xBA, 0xBB)
-        self.assertIn(mach.ram[rv.TEXT_BASE + (1 * rv.TEXT_COLS + 58) * 2], edge,
+        stride = 60
+        self.assertIn(mach.ram[rv.TEXT_BASE + (1 * stride + 58) * 2], edge,
                       "the right border is on the card, not off it")
-        self.assertIn(mach.ram[rv.TEXT_BASE + (1 * rv.TEXT_COLS) * 2], edge,
+        self.assertIn(mach.ram[rv.TEXT_BASE + (1 * stride) * 2], edge,
                       "and so is the left one")
         # the bottom rule is on the last row the card has, and the tree's own
         # last row is above it
-        bottom = mach.ram[rv.TEXT_BASE + (20 * rv.TEXT_COLS + 20) * 2]
+        bottom = mach.ram[rv.TEXT_BASE + (20 * stride + 20) * 2]
         self.assertEqual(bottom, 0xCD, "the bottom rule is on row 20")
         # the hint box needs six rows below the frame and there are not that
         # many: the tree keeps its rows and the explanation is dropped
@@ -524,17 +531,17 @@ class I386SetupTests(unittest.TestCase):
 
     def test_a_setting_wraps_at_both_ends(self) -> None:
         """0 - 1 is 0xFF, which is bigger than every count on the screen, so a
-        plain "over the top, wrap to zero" turned Left on the first entry into a
-        value that stayed on the first entry. Boot Sequence has four entries and
-        starts at zero, which is where it showed."""
+        plain "over the top, wrap to zero" left Up on the first entry showing
+        the first entry. Boot Sequence has four entries and starts at zero,
+        which is where it showed -- and the chooser wraps the same way."""
         first = self._setup([self.F2] + [self.DOWN] * 11
-                            + [self.ENTER, self.DOWN, self.ENTER])
+                            + [self.ENTER, self.UP, self.ENTER])
         self.assertEqual(first.read(0x540 + 8, 1), 3,
-                         "Down on the first entry lands on the last")
+                         "Up on the first entry lands on the last")
         last = self._setup([self.F2] + [self.DOWN] * 11
-                           + [self.ENTER] + [self.UP] * 4 + [self.ENTER])
+                           + [self.ENTER] + [self.DOWN] * 4 + [self.ENTER])
         self.assertEqual(last.read(0x540 + 8, 1), 0,
-                         "Up on the last entry lands on the first")
+                         "Down on the last entry lands on the first")
 
     def test_the_clock_wraps_down_past_midnight(self) -> None:
         # 12 o'clock, thirteen steps left: 11, 10 ... 0, then 23
@@ -583,12 +590,11 @@ class I386SetupTests(unittest.TestCase):
         """Row 17 is Performance Emu, row 18 Fake OS Time; both are indexes into
         a table the chipset is handed."""
         keys = ([self.F2] + self.TO_CPU
-                + [self.RIGHT, self.DOWN, self.DOWN, self.DOWN, self.ENTER,
-                   self.UP]                         # performance, one step up
-                + [self.ENTER, self.DOWN, self.RIGHT, self.DOWN,
-                   self.ENTER,
-                   self.UP, self.UP]                # clock rate, two steps down
-                + [self.ENTER, self.ESC, self.ENTER])
+                + [self.RIGHT, self.DOWN, self.DOWN, self.DOWN,
+                   self.ENTER, self.DOWN, self.ENTER]   # performance, one up
+                + [self.DOWN, self.RIGHT, self.DOWN,
+                   self.ENTER, self.DOWN, self.DOWN, self.ENTER]  # clock, two
+                + [self.ESC, self.ENTER])
         mach = self._setup(keys)
         self.assertEqual(mach.cmos[0x3A], 1, "2x")
         self.assertEqual(mach.perf_factor, 2)
@@ -598,7 +604,7 @@ class I386SetupTests(unittest.TestCase):
     def test_the_thread_count_takes_the_whole_frame(self) -> None:
         keys = ([self.F2] + self.TO_CPU
                 + [self.RIGHT, self.DOWN, self.DOWN, self.ENTER,
-                   self.UP, self.ENTER, self.ESC, self.ENTER])
+                   self.DOWN, self.ENTER, self.ESC, self.ENTER])
         mach = self._setup(keys)
         self.assertEqual(mach.cmos[0x39], 1, "two per core")
         self.assertEqual(mach.threads, 2)
@@ -637,10 +643,10 @@ class I386SetupTests(unittest.TestCase):
                          "SU_M_FORM is still the battery's: DIMM in socket 0")
 
     def test_a_slot_edit_is_saved_with_the_total_it_adds_up_to(self) -> None:
-        """Left on socket 0 takes 128 MB off the board and puts 64 on it, and
-        the total follows -- 0x17 is what E820 and int 15h AH=88 read."""
+        """One step up from 128 MB in socket 0 leaves 64 MB in it, and the
+        total follows -- 0x17 is what E820 and int 15h AH=88 read."""
         keys = ([self.F2] + self.TO_SLOT0
-                + [self.ENTER, self.DOWN, self.ENTER]
+                + [self.ENTER, self.UP, self.ENTER]
                 + [self.ESC, self.ENTER])
         mach = self._setup(keys)
         self.assertEqual(mach.cmos[0x40], 7, "socket 0: index 7 = 64 MB")
@@ -716,12 +722,20 @@ class I386SetupTests(unittest.TestCase):
         mach = self._setup(keys)
         self.assertEqual(mach.cmos[0x40], 8, "socket 0 is still 128 MB")
 
-    def test_the_editor_names_the_row_it_is_editing(self) -> None:
+    def test_a_slot_is_chosen_from_a_list_not_stepped_through(self) -> None:
+        """A socket holds one of nine sizes, so the window offers all nine and
+        lights the one the battery has in it -- the value between two arrows
+        made a person press Left six times to go from 128 MB to 2 MB."""
         mach = self._setup([self.F2] + self.TO_SLOT0 + [self.ENTER])
         screen = mach.text()
-        self.assertIn("Slot 0", screen)
-        self.assertIn("128 MB, DDR4 DIMM", screen,
-                      "the whole value fits the field between the arrows")
+        self.assertIn("Slot 0", screen, "the window is titled with its row")
+        for size in ("none", "1 MB", "2 MB", "4 MB", "8 MB", "16 MB",
+                     "32 MB", "64 MB", "128 MB"):
+            self.assertIn(size, screen)
+        # nine names fill the first column five deep, so 128 MB -- the ninth --
+        # is the fourth row of the second column
+        self.assertEqual(self._attrs(mach, 9, 31, 49), {0x0F},
+                         "128 MB is the lit cell")
 
     def test_a_blank_battery_comes_up_as_the_board_this_machine_is(self):
         mach = rv.Machine()
@@ -806,9 +820,26 @@ class I386BootMenuTests(unittest.TestCase):
             self.assertIn(entry, screen)
         self.assertNotIn("^/v select", screen, "the menu carries no key hints")
 
+    @staticmethod
+    def _stride(mach) -> int:
+        """The plane's row stride is the card's visible width, so a screen
+        read any other way is somebody else's screen. It was eighty here for
+        long enough that the panel could be drawn at the wrong stride and the
+        test would agree with it."""
+        return mach.view_cols
+
     def _attrs(self, mach, row: int, first: int, last: int) -> set[int]:
-        return {mach.ram[rv.TEXT_BASE + (row * rv.TEXT_COLS + col) * 2 + 1]
+        stride = self._stride(mach)
+        return {mach.ram[rv.TEXT_BASE + (row * stride + col) * 2 + 1]
                 for col in range(first, last)}
+
+    def _screen(self, mach) -> list[str]:
+        stride = self._stride(mach)
+        return ["".join(
+            chr(mach.ram[rv.TEXT_BASE + (row * stride + col) * 2])
+            if 32 <= mach.ram[rv.TEXT_BASE + (row * stride + col) * 2] < 127
+            else " " for col in range(stride)).rstrip()
+            for row in range(mach.view_rows)]
 
     def test_the_panel_is_blue_with_one_lit_row(self) -> None:
         """Blue paper, a light bar on the entry the arrows are pointing at, and
@@ -839,9 +870,12 @@ class I386BootMenuTests(unittest.TestCase):
         return mach
 
     def test_the_splash_is_a_window_anchored_at_the_logo(self) -> None:
-        """The power-on picture is 80 x 30. Scratch's stage is 60 x 22, and the
-        logo is in the last two rows of the artwork -- so a narrow card shows
-        the bottom of the picture, and the rows it trims are the ones above."""
+        """The power-on picture is 80 x 30. A card too small for it gets the
+        picture the artwork is mostly made of and the logo on its last two rows;
+        a bigger one gets the artwork itself, centred in a field of the same
+        blue, because cropping eighty columns to sixty would cut the logo in
+        half and a card that is bigger than the picture should show the
+        picture."""
         def post(cols: int, rows: int):
             mach = rv.Machine()
             mach.view_cols, mach.view_rows = cols, rows
@@ -849,7 +883,7 @@ class I386BootMenuTests(unittest.TestCase):
             mach.sreg[rv.SEG_CS] = rv.RESET_CS
             mach.eip = rv.RESET_IP
             mach.run(limit=1_600_000)
-            return mach.text().splitlines()
+            return self._screen(mach)
 
         small = post(60, 22)
         self.assertIn("TurboWarp", small[20], "the logo sits on the last rows")
@@ -857,6 +891,12 @@ class I386BootMenuTests(unittest.TestCase):
         self.assertNotIn("TurboWarp", small[0], "and nowhere else")
         wide = post(80, 30)
         self.assertIn("TurboWarp", wide[28])
+        # 120 x 30 holds the artwork with twenty columns of blue either side,
+        # so the logo is still the artwork's own, at column 55 rather than 35
+        bigger = post(120, 30)
+        self.assertIn("TurboWarp", bigger[28])
+        self.assertEqual(bigger[28].index("TurboWarp"), 20 + 35,
+                         "the artwork is centred, not stretched")
 
     def test_the_panel_centres_itself_on_the_card(self) -> None:
         """Forty cells of panel on an eighty-cell card sit at column twenty, and
@@ -869,8 +909,8 @@ class I386BootMenuTests(unittest.TestCase):
         # the title bar is the row under the panel's top rule, and it is lit
         self.assertEqual(self._attrs(small, 7, 12, 47), {0x1E}, "the title bar")
         # nothing of the panel may hang off the right edge
-        title = small.text().splitlines()[7]
-        self.assertIn("Boot Menu", title, small.text())
+        title = self._screen(small)[7]
+        self.assertIn("Boot Menu", title, "\n".join(self._screen(small)))
         self.assertTrue(title.rstrip().endswith("\u2557") or True)
 
     def test_the_down_arrow_moves_the_light_to_the_next_row(self) -> None:
@@ -916,13 +956,20 @@ class I386BootMenuTests(unittest.TestCase):
 
     def test_the_floppy_is_not_there(self) -> None:
         """Picking a device this board does not have is refused by int 13h, the
-        way a real machine refuses it: nothing boots, and the menu comes back
-        rather than the machine dying. The boot sector never runs, which is the
-        part that says the refusal was real."""
+        way a real machine refuses it: nothing boots, the reason stays on the
+        screen until a key is pressed, and then the menu comes back rather than
+        the machine dying. The boot sector never runs, which is the part that
+        says the refusal was real."""
         mach = self._at_menu([0x1C, 0x50, 0x1C])   # Boot Options, Floppy, Enter
         self.assertEqual(mach.ram[0x4FE], 0x00, "the device that was tried")
         self.assertNotIn("MBR: hello", mach.text(), "nothing booted")
-        self.assertIn("Boot Menu", mach.text(), "and back to the list")
+        self.assertIn("No bootable device", mach.text(),
+                      "and the failure is held, not wiped by a redraw")
+        self.assertIn("Press any key to return", mach.text())
+        mach.keys.append(0x39)                     # space
+        mach.run(limit=mach.steps + 900_000)
+        screen = "\n".join(self._screen(mach))
+        self.assertIn("Boot Menu", screen, "and back to the list")
 
     def test_the_debug_shell_dumps_memory(self) -> None:
         keys = [0x32, 0x39, 0x05, 0x0B, 0x0B, 0x1C]      # "m 0400" and Enter

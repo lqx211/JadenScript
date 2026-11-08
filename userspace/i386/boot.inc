@@ -35,7 +35,11 @@ BM_DEV     equ 0x519                ; the device the menu asked for
 BM_DBG     equ 0x51A                ; the debug shell's address pointer
 BM_TITLE   equ 0x51C                ; word: the panel's title
 
-DBG_BUF    equ 0x530                ; the shell's line
+; The shell's line buffer used to live at 0x530, which is CON_W -- the console
+; window's width. The first character typed into the shell became its width, so
+; every line after it wrapped around a number of columns nobody chose. 0x6E0 is
+; above the setup's own bytes and below the PCI table.
+DBG_BUF    equ 0x6E0                ; the shell's line
 DBG_MAX    equ 14
 
 BM_WIDTH   equ 40
@@ -159,6 +163,7 @@ bootPxe:
     call    bmGeometry
     mov     byte [es:BM_SEL], 0
     call    bmRedraw
+    call    pbWire                ; whether there is anything to boot from
     call    bmList
     cmp     al, 0xFF
     je      .out
@@ -169,6 +174,43 @@ bootPxe:
     ret
 .out:
     stc
+    ret
+
+; ---------------------------------------------------------------------------
+; pbWire -- a line in the panel that says whether the card has a wire.
+;
+; Choosing PXE with nothing plugged in used to be a wait followed by an unclear
+; failure. The card knows whether the link is up, so the menu says it before a
+; key is pressed: "no link - start the host wire" is a thing a person can act
+; on, and it is the same sentence as the one the loader prints if they go ahead
+; anyway.
+; ---------------------------------------------------------------------------
+pbWire:
+    push    ax
+    push    bx
+    push    dx
+    push    si
+    call    pxeFind
+    jc      .nocard
+    call    pxeLink
+    mov     si, msg_pb_up
+    jnc     .say
+    mov     si, msg_pb_down
+    jmp     .say
+.nocard:
+    mov     si, msg_pb_nocard
+.say:
+    mov     dl, [es:BM_L]
+    add     dl, 2
+    mov     dh, [es:BM_TOP_V]
+    add     dh, 2
+    call    suGoto
+    mov     bl, SU_HEAD
+    call    suPrint
+    pop     si
+    pop     dx
+    pop     bx
+    pop     ax
     ret
 
 ; ---------------------------------------------------------------------------
@@ -397,6 +439,7 @@ bmBoot:
     int     0x19                    ; does not return when it worked
     mov     si, msg_bm_nodev
     call    puts
+    call    bmWaitKey
     ret
 .pxe:
     mov     ax, cs
@@ -412,7 +455,23 @@ bmBoot:
     call    pxeBoot                 ; does not return when it worked
     mov     si, msg_bm_nodev
     call    puts
+    call    bmWaitKey               ; the reason stays on the screen
 .back:
+    pop     ax
+    ret
+
+; bmWaitKey -- hold the screen until somebody has read it.
+;
+; A failure that is wiped by the menu redraw a moment later is a failure nobody
+; can act on: the ROM's network loader prints why it gave up, and this is what
+; keeps that on the screen until a key is pressed.
+bmWaitKey:
+    push    ax
+    push    si
+    mov     si, msg_bm_anykey
+    call    puts
+    call    keyScan
+    pop     si
     pop     ax
     ret
 
@@ -545,28 +604,21 @@ gxSplashShow:
     push    di
     push    ds
     push    es
-; The artwork is eighty by thirty cells, drawn for a card exactly that size. A
-; card of any other size gets the same picture the artwork is mostly made of --
-; blue paper -- and the two logo lines at their own size, centred, on its last
-; two rows. Blitting the artwork at another stride is a different picture (the
-; curve shears), and cropping it cuts the logo in half.
+; The artwork is eighty by thirty cells. A card exactly that size gets it
+; cell for cell; a bigger one gets it centred in a field of the same blue, which
+; is what a real board with a logo does on a bigger panel. A card too small to
+; hold it gets the picture the artwork is mostly made of -- blue paper -- and
+; the two logo lines at their own size, centred, on its last two rows: cropping
+; eighty columns to sixty would cut the logo in half.
     xor     ax, ax
     mov     es, ax
     mov     al, [es:BDA_VIDCOLS]
     cmp     al, COLS
-    jne     .plain
+    jb      .plain
     mov     al, [es:BDA_VIDROWS]
     cmp     al, ROWS
-    jne     .plain
-    mov     ax, cs
-    mov     ds, ax
-    mov     si, splash_cells
-    mov     ax, TEXT_SEG
-    mov     es, ax
-    xor     di, di
-    mov     cx, COLS * ROWS
-    cld
-    rep     movsw
+    jb      .plain
+    call    splashFit
     jmp     .flag
 .plain:
     call    splashPlain
@@ -578,6 +630,94 @@ gxSplashShow:
     pop     ds
     pop     di
     pop     si
+    pop     dx
+    pop     cx
+    pop     bx
+    pop     ax
+    ret
+
+; ---------------------------------------------------------------------------
+; splashFit -- the artwork, centred on a card that could hold it.
+;
+; The plane's stride is the card's width, not the artwork's, so the copy is a
+; row at a time: eighty words out of the artwork, then a gap the width of the
+; blue margin the row does not use.
+; ---------------------------------------------------------------------------
+splashFit:
+    push    ax
+    push    bx
+    push    cx
+    push    dx
+    push    di
+    push    si
+    push    bp
+    push    ds
+    push    es
+    xor     ax, ax
+    mov     es, ax
+    ; the field of blue: the whole card, in the paper colour
+    mov     al, [es:BDA_VIDROWS]
+    mov     [es:SPL_H], al
+    mov     bl, al
+    xor     bh, bh
+    mov     [es:SPL_W], 0
+    mov     al, [es:BDA_VIDCOLS]
+    mov     [es:SPL_W], al
+    mov     si, bx                  ; rows, for the multiply below
+    xor     ah, ah
+    mul     si                      ; ax = columns * rows
+    shr     ax, 1
+    mov     cx, ax
+    mov     ax, TEXT_SEG
+    push    es
+    mov     es, ax
+    mov     ax, 0x1F20              ; a space on blue
+    xor     di, di
+    cld
+    rep     stosw
+    pop     es
+    ; where the picture starts: the blue margins, halved
+    mov     bl, [es:BDA_VIDCOLS]
+    sub     bl, COLS
+    shr     bl, 1
+    mov     bh, [es:BDA_VIDROWS]
+    sub     bh, ROWS
+    shr     bh, 1
+    xor     ax, ax
+    mov     al, bh
+    mov     cl, [es:BDA_VIDCOLS]
+    mul     cl                      ; ax = the first row of the picture
+    xor     ch, ch
+    mov     cl, bl
+    add     ax, cx                  ; ... plus the cell it starts at
+    shl     ax, 1                   ; two bytes a cell
+    mov     di, ax
+    ; the gap at the end of each artwork row, in bytes
+    xor     ax, ax
+    mov     al, [es:BDA_VIDCOLS]
+    sub     al, COLS
+    shl     ax, 1
+    mov     bp, ax
+    mov     bx, ROWS
+    mov     ax, cs
+    mov     ds, ax
+    mov     si, splash_cells
+    mov     ax, TEXT_SEG
+    mov     es, ax
+    cld
+.row:
+    push    cx
+    mov     cx, COLS
+    rep     movsw
+    pop     cx
+    add     di, bp
+    dec     bx
+    jnz     .row
+    pop     es
+    pop     ds
+    pop     bp
+    pop     si
+    pop     di
     pop     dx
     pop     cx
     pop     bx
@@ -771,6 +911,15 @@ dbgShell:
     xor     ax, ax
     mov     es, ax
     mov     byte [es:CON_ATTR], 0x07
+    ; the shell owns the whole card. It used to inherit the window the menu
+    ; left behind -- a pane of the frame, twenty-eight columns wide -- and every
+    ; line longer than that wrapped into the one below it.
+    mov     byte [es:CON_T], 0
+    mov     al, [es:BDA_VIDROWS]
+    dec     al
+    mov     byte [es:CON_B], al
+    mov     al, [es:BDA_VIDCOLS]
+    mov     byte [es:CON_W], al
     call    clear_text
     xor     dl, dl
     xor     dh, dh
@@ -1086,12 +1235,16 @@ msg_bo_0:       db "Hard Disk (0x80)", 0
 msg_bo_1:       db "Floppy (0x00)", 0
 msg_bo_2:       db "CD-ROM (0x9F)", 0
 msg_bo_3:       db "Network (PXE)", 0
+msg_bm_anykey:  db "Press any key to return.", 13, 10, 0
 bo_items:       dw msg_bo_0, msg_bo_1, msg_bo_2, msg_bo_3
 bo_devs:        db 0x80, 0x00, 0x9F, 0xE0
 
 pb_items:       dw msg_pb_0, msg_pb_1
 pb_modes:       db 0, 1
 msg_pb_title:   db "Network Boot", 0
+msg_pb_up:      db "link up, 100 Mb/s", 0
+msg_pb_down:    db "no link - start the host wire", 0
+msg_pb_nocard:  db "no network card on the bus", 0
 msg_pb_0:       db "PXE (boot file)", 0
 msg_pb_1:       db "iPXE (chainload)", 0
 

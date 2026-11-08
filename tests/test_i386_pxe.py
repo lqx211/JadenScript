@@ -92,6 +92,58 @@ class NetworkBootTests(unittest.TestCase):
                          "the loader recorded why, instead of sitting still")
         self.assertEqual(machine.ram[0x670:0x672], b"\x00\x00", "and loaded nothing")
 
+    def _screen(self, machine) -> str:
+        return "".join(chr(machine.ram[0xB8000 + i * 2]) for i in range(80 * 30))
+
+    def test_a_card_with_no_wire_says_so_before_it_waits(self) -> None:
+        """The fault a person actually hits is not a DHCP bug: there is no host
+        wire, so there is nobody to answer. The card reports the link, so the
+        menu says it before a key is pressed and the loader says it again --
+        through the menu, because that is the way in a person has."""
+        machine = rv.Machine()
+        machine.ram[:] = i386_image.build()
+        # DEL, Boot Options, Network (PXE), PXE (boot file)
+        machine.keys.extend([0x32, 0x1C, 0x50, 0x50, 0x50, 0x1C, 0x1C])
+        machine.sreg[rv.SEG_CS] = rv.RESET_CS
+        machine.eip = rv.RESET_IP
+        limit = 12_000_000
+        while machine.keys and machine.steps < limit:
+            machine.run(limit=min(limit, machine.steps + 250_000))
+        machine.run(limit=machine.steps + 900_000)
+        self.assertEqual(machine.nic_register(0x5C, 1) & 4, 4,
+                         "MSR says LINK_FAIL with nothing plugged in")
+        screen = self._screen(machine)
+        self.assertIn("no network link", screen)
+        self.assertIn("the host wire is not running", screen)
+        self.assertIn("Press any key to return", screen,
+                      "the reason is held on the screen, not wiped by a redraw")
+        self.assertNotEqual(machine.sreg[rv.SEG_CS], 0x07C0, "nothing was booted")
+
+    def test_the_network_menu_reports_the_link_it_finds(self) -> None:
+        """Both answers, on the panel, before anything is waited for."""
+        def panel(wire):
+            machine = rv.Machine()
+            machine.ram[:] = i386_image.build()
+            machine.nic_wire = wire
+            machine.keys.extend([0x32, 0x1C, 0x50, 0x50, 0x50, 0x1C])
+            machine.sreg[rv.SEG_CS] = rv.RESET_CS
+            machine.eip = rv.RESET_IP
+            limit = 12_000_000
+            while machine.keys and machine.steps < limit:
+                machine.run(limit=min(limit, machine.steps + 250_000))
+            machine.run(limit=machine.steps + 900_000)
+            return self._screen(machine)
+
+        self.assertIn("no link - start the host wire", panel(None))
+        self.assertIn("link up, 100 Mb/s", panel(lambda frame: None))
+
+    def test_a_card_with_a_wire_reports_the_link_and_boots(self) -> None:
+        """The same bit, the other way: a wire is a link, and the boot that
+        follows is the one the rest of this file already proves."""
+        machine, nat = self._run(TFTP)
+        self.assertEqual(machine.sreg[rv.SEG_CS], 0x07C0, "the file was booted")
+        self.assertGreater(nat.dhcp.pxe_requests, 0, "and it was a PXE client")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -102,16 +102,22 @@ gxLayout:
     mov     al, [es:BDA_VIDROWS]
     dec     al
     mov     byte [es:CON_B], al     ; printing may not run off the card
-    mov     byte [es:CON_W], COLS
     mov     al, [es:BDA_VIDCOLS]
     test    al, al
     jnz     .havecols
     mov     al, COLS                ; a card that says nothing has the lot
 .havecols:
-    cmp     al, COLS
-    jbe     .narrow
-    mov     al, COLS
+    cmp     al, MAXCOLS             ; the plane's ceiling, not the old 80: a
+    jbe     .narrow                 ; card wider than that is a card this
+    mov     al, MAXCOLS             ; machine cannot paint anyway
 .narrow:
+    ; The teletype's stride *is* the card's width: a guest -- and this setup --
+    ; writes cell row * cols + col, so printing through a window that claims
+    ; eighty columns on a sixty-column card puts every line twenty cells to the
+    ; right of the one above it. POST already sets CON_W from the card; this
+    ; used to set it back to COLS, which is why the frame came out as a
+    ; staircase on any stage that was not 80 x 30.
+    mov     [es:CON_W], al
     mov     [es:GX_M_COLS], al
     sub     al, 2                   ; the frame's own borders cost a column
     cmp     al, GX_RR_MAX           ; a wide card gets a wide frame: the right
@@ -445,9 +451,14 @@ gxDraw:
     ret
 
 ; ---------------------------------------------------------------------------
-; gxClear -- the whole screen in the paper colour. Seventy-nine cells a row and
-; the last column poked, because a console that writes the last cell of the
-; last row scrolls the screen.
+; gxClear -- the whole screen in the paper colour. One cell short a row and the
+; last column poked, because a console that writes the last cell of the last row
+; scrolls the screen.
+;
+; "The whole screen" is the card's, not eighty columns of it: on a sixty-column
+; stage the eighty it used to clear ran twenty cells off the end of each row and
+; the teletype wrapped them onto the next one, which is the staircase that made
+; the setup look unfinished on any stage that was not 80 x 30.
 ; ---------------------------------------------------------------------------
 gxClear:
     push    ax
@@ -457,16 +468,19 @@ gxClear:
     xor     dh, dh
 .row:
     xor     dl, dl
-    mov     cx, 79
+    mov     cl, [es:GX_M_COLS]
+    dec     cl
+    xor     ch, ch
     mov     al, ' '
     mov     bl, SU_PAPER
     call    suBar
-    mov     dl, 79
+    mov     dl, [es:GX_M_COLS]
+    dec     dl
     mov     al, ' '
     mov     bl, SU_PAPER
     call    suPoke
     inc     dh
-    cmp     dh, ROWS
+    cmp     dh, [es:BDA_VIDROWS]
     jb      .row
     xor     dl, dl
     xor     dh, dh
@@ -489,7 +503,8 @@ gxFrame:
     push    si
     xor     dh, dh
     xor     dl, dl
-    mov     cx, 80
+    mov     cl, [es:GX_M_COLS]
+    xor     ch, ch
     mov     al, G_HBAR
     mov     bl, SU_SEL
     call    suBar
@@ -498,7 +513,8 @@ gxFrame:
     mov     al, G_TL
     mov     bl, SU_SEL
     call    suPlot
-    mov     dl, 79
+    mov     dl, [es:GX_M_COLS]
+    dec     dl
     xor     dh, dh
     mov     al, G_TR
     mov     bl, SU_SEL

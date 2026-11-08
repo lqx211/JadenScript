@@ -1572,7 +1572,9 @@ class Machine:
         finds on a card it has just reset."""
         self.nic = bytearray(256)
         self.nic[0:6] = NIC_MAC
-        self.nic[0x5C] = 0x24              # MSR: link up, 100 Mb/s, duplex
+        # MSR is not stored: nic_register answers it from whether a wire was
+        # handed to the card, so a test can tell the ROM about a machine with
+        # nothing plugged in.
 
     def nic_word(self, offset: int) -> int:
         return self.nic[offset] | (self.nic[offset + 1] << 8)
@@ -1584,6 +1586,10 @@ class Machine:
         self.nic[offset:offset + 4] = (value & 0xFFFF_FFFF).to_bytes(4, "little")
 
     def nic_register(self, offset: int, size: int) -> int:
+        # MSR, 0x5C: bit 2 LINK_FAIL, bit 4 100 Mb/s, bit 5 full duplex
+        if offset in (0x5C, 0x5D):
+            msr = 0x30 if self.nic_wire is not None else 0x04
+            return (msr >> ((offset - 0x5C) * 8)) & 0xFF
         if offset == 0x37 and size == 1:
             cmd = self.nic[0x37]
             if self.nic_word(0x3A) == self.nic_word(0x38):

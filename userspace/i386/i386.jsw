@@ -2692,7 +2692,9 @@ class Cpu {
         nicSet(3, 0x12);
         nicSet(4, 0x34);
         nicSet(5, 0x56);
-        nicSet(0x5C, 0x24);              // MSR: link up, 100 Mb/s, full duplex
+        /* MSR is not stored: nicRead answers it from X.netLink, because the
+         * host's socket opens a frame or two after the machine starts and a
+         * value written once would be a card that never noticed. */
         nicSet(0x59, 0x60);              // TimerInt
     }
 
@@ -2760,7 +2762,22 @@ class Cpu {
      * whether the ring is empty. Everything else is what was last written. */
     private void nicRead(o, width) { // warp
         if (o == 0x37 && width == 1) { nicCmd(); return; }
+        if (o == 0x5C || o == 0x5D) { nicMsr(o); return; }
         nicReadW(o, width);
+    }
+
+    /* MSR, 0x5C: bit 2 is LINK_FAIL, bit 3 is 10 Mb/s, bit 4 is 100 Mb/s, bit 5
+     * is full duplex. A card with nothing plugged into it says so here, which is
+     * the one thing a driver can check before it starts waiting for a DHCP
+     * server that was never going to answer. */
+    private void nicMsr(o) { // warp
+        if (X.netLink == 1) {
+            _msr = 0x30;                               // up, 100 Mb/s, full duplex
+        } else {
+            _msr = 0x04;                               // LINK_FAIL, nothing else
+        }
+        if (o == 0x5C) { v = _msr % 256; return; }
+        v = Operators.math("floor", _msr / 256) % 256;
     }
 
     private void nicWrite(o, width, value) { // warp

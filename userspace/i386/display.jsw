@@ -93,8 +93,16 @@ class Display {
                 Motion.x += 1;
                 _n += 1;
             }
+            /* The walk stops with the costume's *edge* on the stage's edge,
+             * so the centre is one pixel inside it -- and the two-pixel
+             * costume hangs one more pixel past the centre. A 960-pixel stage
+             * therefore reads 479, not 480, and 479 x 2 is 958: two short, and
+             * the cell count that comes out of it is a whole column short of
+             * the stage as well, because 958 / 8 rounds up to 120 and then
+             * shrinks back to 119 to fit. Add the two pixels back, exactly the
+             * way the fenced branch below does. */
             if (Sensing.touching("_edge_")) {
-                _w = Motion.x * 2;              // the centre is on the edge
+                _w = Motion.x * 2 + 2;
             }
             Motion.setXY(0, 0);
             _n = 0;
@@ -103,7 +111,7 @@ class Display {
                 _n += 1;
             }
             if (Sensing.touching("_edge_")) {
-                _h = Motion.y * 2;
+                _h = Motion.y * 2 + 2;
             }
             Looks.hide();
         } else {

@@ -72,6 +72,11 @@ SU_INBOX equ 0x576                  ; 1 while the modal editor owns the screen
 SU_TYP   equ 0x6A0                  ; digits typed into the editor, up to eight
 SU_TYL   equ 0x6A8                  ; how many of them there are
 SU_FOC   equ 0x6D0                  ; which of the editor's buttons is lit
+SU_CH_N  equ 0x6DA                  ; how many names the chooser is offering
+SU_CH_SEL equ 0x6DB                 ; ... and which of them is highlighted
+SU_CH_TAB equ 0x6DC                 ; ... and the table they come from (a word)
+SU_CH_R  equ 0x6DE                  ; ... and how many rows one column holds
+SU_CH_C  equ 0x6DF                  ; ... and how many columns there are
 SU_TS    equ 0x6C0                  ; the same digits as a string, for the field
 SU_DLG_L equ 0x4F6                  ; a dialog's left column, while it draws
 SU_DLG_T equ 0x4F7                  ; its top row
@@ -1127,7 +1132,12 @@ suDialogGo:
     mov     al, [es:BDA_VIDROWS]
     dec     al
     mov     byte [es:CON_B], al
-    mov     byte [es:CON_W], COLS
+    mov     al, [es:BDA_VIDCOLS]    ; a dialog prints inside the card, so its
+    test    al, al                  ; window is as wide as the card is
+    jnz     .dlgcols
+    mov     al, COLS
+.dlgcols:
+    mov     [es:CON_W], al
     mov     byte [es:CON_ATTR], SU_PAPER
     push    bx
     mov     [es:SU_DLG_L], dl
@@ -1287,6 +1297,295 @@ dlgRuleBottom:
     ret
 
 ; ---------------------------------------------------------------------------
+; ---------------------------------------------------------------------------
+; The chooser: a setting whose value is one of a handful of names is picked
+; from a list, not stepped through one name at a time.
+;
+; Title bar, the names one under the other -- two columns once there are more
+; than eight -- and [ Cancel ] [ OK ] along the bottom. Up/Down move the
+; highlight and wrap at both ends; Left/Right move the light between the two
+; buttons; Enter presses the lit one; Esc is Cancel.
+;
+; Nothing is written to the buffer until OK is pressed, so Cancel needs no
+; memory of what the value used to be.
+; ---------------------------------------------------------------------------
+suChoose:
+    push    ax
+    push    bx
+    push    cx
+    push    dx
+    push    si
+    push    di
+    mov     byte [es:SU_INBOX], 1
+    mov     byte [es:SU_FOC], 1     ; the box opens with [ OK ] lit
+    call    suChooseFill
+    call    suChooseBox
+.key:
+    call    keyScan
+    cmp     al, 0x01
+    je      .out
+    cmp     al, 0x0E
+    je      .out
+    cmp     al, 0x48                ; up: the name before, wrapping
+    je      .up
+    cmp     al, 0x50                ; down: the name after, wrapping
+    je      .down
+    cmp     al, 0x4B
+    je      .left
+    cmp     al, 0x4D
+    je      .right
+    cmp     al, 0x1C
+    jne     .key
+    cmp     byte [es:SU_FOC], 0     ; Enter on [ Cancel ] takes nothing
+    je      .out
+    call    suChooseTake
+    jmp     .out
+.up:
+    mov     al, [es:SU_CH_SEL]
+    test    al, al
+    jnz     .updec
+    mov     al, [es:SU_CH_N]
+.updec:
+    dec     al
+    mov     [es:SU_CH_SEL], al
+    call    suChooseOpts
+    jmp     .key
+.down:
+    mov     al, [es:SU_CH_SEL]
+    inc     al
+    cmp     al, [es:SU_CH_N]
+    jb      .downset
+    xor     al, al
+.downset:
+    mov     [es:SU_CH_SEL], al
+    call    suChooseOpts
+    jmp     .key
+.left:
+    mov     byte [es:SU_FOC], 0
+    call    suChooseBtns
+    jmp     .key
+.right:
+    mov     byte [es:SU_FOC], 1
+    call    suChooseBtns
+    jmp     .key
+.out:
+    mov     byte [es:SU_INBOX], 0
+    pop     di
+    pop     si
+    pop     dx
+    pop     cx
+    pop     bx
+    pop     ax
+    ret
+
+; suChooseFill -- the highlight starts on the value the setting has now.
+suChooseFill:
+    push    ax
+    push    di
+    call    suRowNow
+    mov     al, [es:SU_BUF + di]
+    cmp     al, [es:SU_CH_N]
+    jb      .fits
+    xor     al, al                  ; a value past the end of the list
+.fits:
+    mov     [es:SU_CH_SEL], al
+    pop     di
+    pop     ax
+    ret
+
+; suChooseTake -- the highlighted name becomes the value.
+suChooseTake:
+    push    ax
+    push    di
+    call    suRowNow
+    mov     al, [es:SU_CH_SEL]
+    mov     [es:SU_BUF + di], al
+    cmp     byte [es:SU_ITEM], 19
+    jb      .out
+    call    suMemTotal              ; a socket changed, so the total did
+.out:
+    pop     di
+    pop     ax
+    ret
+
+; suChooseBox -- the panel, the list and the buttons, drawn whole.
+suChooseBox:
+    push    ax
+    push    bx
+    push    cx
+    push    dx
+    push    si
+    push    di
+    mov     al, [es:SU_CH_N]
+    xor     ah, ah
+    mov     byte [es:SU_CH_C], 1
+    cmp     al, 8
+    jbe     .measure
+    mov     byte [es:SU_CH_C], 2    ; sixteen names need a second column
+.measure:
+    mov     cl, [es:SU_CH_C]
+    xor     ch, ch
+    div     cl
+    test    ah, ah
+    jz      .exact
+    inc     al
+.exact:
+    mov     [es:SU_CH_R], al        ; rows in a column
+    mov     al, [es:SU_ITEM]
+    xor     ah, ah
+    add     ax, ax
+    mov     di, ax
+    mov     si, [di + su_labels]    ; the title is the setting's own name
+    mov     al, [es:SU_CH_R]
+    mov     bl, al
+    add     bl, 6                   ; the rules and the two button rows
+    mov     bh, SU_SEL
+    mov     dl, 10
+    mov     dh, 3
+    mov     cx, 42
+    call    suDialogN
+    mov     byte [es:CON_ATTR], SU_SEL
+    call    suChooseOpts
+    call    suChooseBtns
+    pop     di
+    pop     si
+    pop     dx
+    pop     cx
+    pop     bx
+    pop     ax
+    ret
+
+; suChooseBtns -- the button row under the list.
+suChooseBtns:
+    push    ax
+    push    dx
+    mov     al, [es:SU_CH_R]
+    xor     ah, ah
+    add     al, 7
+    mov     dh, al
+    mov     dl, 12
+    call    suButtonsAt
+    pop     dx
+    pop     ax
+    ret
+
+; suChooseOpts -- the list, every name in its cell, the highlighted one lit.
+;
+; The whole list is repainted per key rather than the two cells that changed:
+; a cell is two bytes in the plane plus the cursor, and the card repaints only
+; the cells that differ, so writing sixteen short names is cheaper than the
+; bookkeeping that would avoid it.
+suChooseOpts:
+    push    ax
+    push    bx
+    push    cx
+    push    dx
+    push    si
+    push    di
+    xor     di, di
+.clear:
+    mov     al, [es:SU_CH_R]
+    xor     ah, ah
+    cmp     di, ax
+    jae     .paint
+    mov     ax, di
+    mov     dh, al
+    add     dh, 6
+    mov     dl, 11
+    mov     cx, 40                  ; both columns at once, band and gap
+    mov     al, ' '
+    mov     bl, SU_SEL
+    call    suBar
+    inc     di
+    jmp     .clear
+.paint:
+    xor     di, di
+.one:
+    mov     al, [es:SU_CH_N]
+    xor     ah, ah
+    cmp     di, ax
+    jae     .out
+    ; the cell: down the first column, then down the second
+    mov     ax, di
+    xor     dx, dx
+    mov     cl, [es:SU_CH_R]
+    xor     ch, ch
+    div     cx                      ; ax = the column, dx = the row
+    mov     cx, ax
+    mov     ax, dx
+    add     al, 6
+    mov     dh, al
+    mov     ax, cx
+    mov     cl, 20
+    mul     cl                      ; a cell is twenty columns wide
+    add     al, 11
+    mov     dl, al
+    ; the band, in the lit ink when this is the highlighted name
+    push    di
+    mov     bl, SU_SEL
+    mov     al, [es:SU_CH_SEL]
+    xor     ah, ah
+    cmp     ax, di
+    jne     .band
+    mov     bl, SU_FOCUS
+.band:
+    mov     al, ' '                 ; after the compare: al is suBar's character
+    mov     cx, 19
+    call    suBar
+    pop     di
+    inc     dl
+    call    suGoto
+    ; and the name, out of the table the setting points at
+    mov     si, di
+    add     si, si
+    mov     bx, [es:SU_CH_TAB]
+    mov     si, [bx + si]
+    mov     bl, SU_SEL
+    mov     al, [es:SU_CH_SEL]
+    xor     ah, ah
+    cmp     ax, di
+    jne     .print
+    mov     bl, SU_FOCUS
+.print:
+    call    suPrint
+    inc     di
+    jmp     .one
+.out:
+    pop     di
+    pop     si
+    pop     dx
+    pop     cx
+    pop     bx
+    pop     ax
+    ret
+
+; suChooseTry -- al = 1 when the setting in SU_ITEM is a list of names, in
+; which case it has already been chosen from.
+suChooseTry:
+    push    bx
+    push    si
+    mov     al, [es:SU_ITEM]
+    xor     ah, ah
+    cmp     al, 28
+    ja      .no
+    mov     si, ax
+    mov     bl, [cs:su_cho_cnt + si]
+    test    bl, bl
+    jz      .no                     ; a number: the typed editor has it
+    mov     [es:SU_CH_N], bl
+    add     si, si
+    mov     bx, [cs:su_cho_tab + si]
+    mov     [es:SU_CH_TAB], bx
+    call    suChoose
+    mov     al, 1
+    jmp     .out
+.no:
+    xor     al, al
+.out:
+    pop     si
+    pop     bx
+    ret
+
 ; suEdit -- Enter on a setting. A dialog holds the value with an arrow either
 ; side of it; Left/Right change it and repaint, Enter keeps it, Esc puts the
 ; old one back.
@@ -1308,6 +1607,11 @@ suRowNow:
     ret
 
 suEdit:
+    call    suChooseTry             ; a list of names is chosen from the list;
+    test    al, al                  ; a number keeps the typed editor
+    jz      .typed
+    ret
+.typed:
     push    ax
     push    bx
     push    cx
@@ -1608,22 +1912,25 @@ suEditBox:
     pop     ax
     ret
 
-; suButtons -- the editor's [ Cancel ] [ OK ] pair, the one SU_FOC names lit.
-; Left and right move the light, Enter presses the lit one.
+; suButtons -- the editor's pair, on the row the hint used to occupy.
 suButtons:
+    mov     dl, 26
+    mov     dh, 15
+    jmp     suButtonsAt
+
+; suButtonsAt -- dl = the bar's left edge, dh = the row. [ Cancel ] sits four
+; cells in and [ OK ] twenty, so both windows can share one painter.
+suButtonsAt:
     push    ax
     push    bx
     push    cx
     push    dx
     push    si
-    mov     dl, 26
-    mov     dh, 15
     mov     cx, 31
     mov     al, ' '
     mov     bl, SU_SEL
     call    suBar
-    mov     dl, 30
-    mov     dh, 15
+    add     dl, 4
     call    suGoto
     mov     si, msg_su_btncancel
     mov     bl, SU_SEL
@@ -1632,8 +1939,7 @@ suButtons:
     mov     bl, SU_FOCUS
 .cancel:
     call    suPrint
-    mov     dl, 46
-    mov     dh, 15
+    add     dl, 16
     call    suGoto
     mov     si, msg_su_btnok
     mov     bl, SU_SEL
@@ -3174,9 +3480,10 @@ suPoke:
     push    ax                      ; the character, out of the way
     mov     al, dh
     xor     ah, ah
-    mov     cl, COLS
-    mul     cl                      ; ax = row * 80
-    xor     dh, dh
+    mov     cl, [es:BDA_VIDCOLS]    ; the card's stride, not eighty: the teletype
+    mul     cl                      ; writes through CON_W and this writes past
+    xor     dh, dh                  ; it, so a poke with a fixed 80 lands on a
+                                    ; different row than the text beside it
     add     ax, dx                  ; ... and the column
     shl     ax, 1
     mov     di, ax
@@ -4237,6 +4544,32 @@ su_bufof:                                       ; words, because both readers
 
 su_ramsizes:
     dw 0, 1, 2, 4, 8, 16, 32, 64, 128
+
+; which settings are a list of names, and which are a number. One row per
+; setting: how many names there are, and where they are. A zero count is a
+; number, and a number keeps the typed editor -- a size, a date or a count of
+; sockets is quicker to type than to walk a list of a hundred entries.
+su_cho_cnt:
+    db 0, 0, 0, 0, 0, 0             ; month, day, year, hour, minute, second
+    db 5, 4, 4                      ; diskette, drive 0, boot sequence
+    db 0, 0                         ; base memory, core count
+    db 2, 2                         ; emulation switch, battery
+    db 5, 5                         ; clock, key repeat
+    db 16, 4, 8, 6                  ; cores, threads, performance, fake time
+    db 0                            ; socket count
+    db 2                            ; memory mode
+    db 9, 9, 9, 9, 9, 9, 9, 9       ; the eight sockets
+su_cho_tab:
+    dw 0, 0, 0, 0, 0, 0
+    dw su_floppy, su_disk, su_boot
+    dw 0, 0
+    dw su_onoff, su_onoff
+    dw su_freq, su_krepeat
+    dw su_cores, su_threads, su_perf, su_time
+    dw 0
+    dw su_mem_mode
+    dw su_ramsize_names, su_ramsize_names, su_ramsize_names, su_ramsize_names
+    dw su_ramsize_names, su_ramsize_names, su_ramsize_names, su_ramsize_names
 
 su_hwtabs:
     dw su_cores, su_threads, su_perf, su_time

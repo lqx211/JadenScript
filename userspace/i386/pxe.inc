@@ -35,6 +35,7 @@ R_CAPR      equ 0x38
 R_CBR       equ 0x3A
 R_IMR       equ 0x3C
 R_ISR       equ 0x3E
+R_MSR       equ 0x5C
 R_TCR       equ 0x40
 R_RCR       equ 0x44
 
@@ -107,6 +108,8 @@ pxeBoot:
     mov     gs, ax
     call    pxeFind
     jc      .nocard
+    call    pxeLink
+    jc      .nolink
     call    pxeInit
     jc      .nocard
     call    pxeDhcp
@@ -119,6 +122,18 @@ pxeBoot:
 .nocard:
     mov     si, msg_pxe_nocard
     jmp     .say
+.nolink:
+    call    pxeClear
+    mov     si, msg_pxe_nolink
+    call    puts
+    mov     si, msg_crlf
+    call    puts
+    mov     si, msg_pxe_nowire
+    call    puts
+    mov     si, msg_crlf
+    call    puts
+    stc
+    jmp     .back
 .nodhcp:
     mov     si, msg_pxe_nodhcp
     jmp     .say
@@ -128,14 +143,18 @@ pxeBoot:
 .nofile:
     mov     si, msg_pxe_nofile
 .say:
-    call    puts
-    mov     al, [es:PXE_ERRS]
+    call    pxeClear
+    call    puts                    ; the reason, on a screen of its own: the
+    mov     al, [es:PXE_ERRS]       ; loader drew a panel of its own before it
+                                    ; gave up, and a message over it is noise
+
     call    puthex
     mov     si, msg_close
     call    puts
     mov     si, msg_crlf
     call    puts
     stc
+.back:
     pop     ds
     pop     gs
     pop     di
@@ -187,6 +206,45 @@ pxeFind:
 .out:
     pop     dx
     pop     eax
+    ret
+
+; ---------------------------------------------------------------------------
+; pxeClear -- a blank screen with the cursor at the top left, for a message
+; that is about to explain a failure.
+; ---------------------------------------------------------------------------
+pxeClear:
+    push    ax
+    push    dx
+    mov     byte [es:CON_ATTR], 0x07
+    call    clear_text
+    xor     dl, dl
+    xor     dh, dh
+    call    suGoto
+    pop     dx
+    pop     ax
+    ret
+
+; ---------------------------------------------------------------------------
+; pxeLink -- is there a wire in the card? MSR bit 2 is LINK_FAIL.
+;
+; A machine with no host wire answers nothing, and the failure a person sees is
+; "no address from DHCP", which is true and useless: the fault is not in the
+; DHCP exchange, it is that there was never anybody to exchange with. The card
+; knows -- it reports the link -- so the ROM asks it first and says what it
+; found.
+; ---------------------------------------------------------------------------
+pxeLink:
+    push    dx
+    mov     dx, [es:PXE_IO]
+    add     dx, R_MSR
+    in      al, dx
+    pop     dx
+    test    al, 4
+    jz      .up
+    stc
+    ret
+.up:
+    clc
     ret
 
 ; ---------------------------------------------------------------------------
@@ -1059,9 +1117,9 @@ pxeRun:
     mov     dl, 0x80
     jmp     0x07C0:0000
 
-msg_pxe_nocard:  db "no network card answered on the bus (", 0
+msg_pxe_nocard:  db "no network card on the bus (", 0
 msg_pxe_nodhcp:  db "no address from DHCP (", 0
-msg_pxe_noserver: db "the boot server never answered (", 0
+msg_pxe_noserver: db "no ARP reply from the server (", 0
 msg_pxe_nofile:  db "no boot file (", 0
 msg_close:       db ")", 0
 msg_pxe_dhcp:    db "DHCP...", 13, 10, 0
@@ -1070,5 +1128,7 @@ msg_pxe_tftp:    db "TFTP...", 13, 10, 0
 msg_pxe_loaded:  db "loaded ", 0
 msg_pxe_bytes:   db " bytes", 13, 10, 0
 msg_pxe_ipxe:    db "ipxe.pxe", 0, 0
+msg_pxe_nolink:  db "no network link", 0
+msg_pxe_nowire:  db "the host wire is not running", 0
 msg_pxe_class:   db "PXEClient"
 msg_pxe_octet:   db 0, "octet", 0
