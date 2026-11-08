@@ -383,7 +383,7 @@ class LexerCoverageTests(unittest.TestCase):
 
     def test_sample_sources(self):
         sources = [ROOT / "sample.jsw"]
-        mast3d = ROOT / "build" / "mast3d" / "TheMast3D.jsw"
+        mast3d = ROOT / "projects" / "TheMast3D.jsw"
         if mast3d.exists():
             sources.append(mast3d)
         for path in sources:

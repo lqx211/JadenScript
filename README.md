@@ -182,7 +182,10 @@ userspace/i386/  an 80386 PC that runs inside TurboWarp: BIOS, setup utility,
 userspace/rv64/  the same idea for RISC-V: bios.S, a console, a disk, a shell
                  (docs/RV64.md)
 docs/            format notes, roadmap, generated opcode reference
-examples/        hello.jsw, demo.jsw, assets_demo.jsw, rules_demo.jsw + assets/, hello/, rules_data/
+examples/        hello.jsw, minimal.jsw, demo.jsw, assets_demo.jsw, rules_demo.jsw
+                 + assets/, hello/, rules_data/
+projects/        whole programs in JadenScript: Linux.jsw (a Linux boot), TheMast3D.jsw
+                 (a 13k-block 3D renderer), NotePlayer-4.jsw (GPL-3.0, see NOTICE.md)
 ```
 
 ## Version control

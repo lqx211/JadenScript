@@ -244,7 +244,7 @@ class ScriptTests(unittest.TestCase):
                 NODE,
                 str(ROOT / "tools" / "check_completion.js"),
                 str(ROOT / "sample.jsw"),
-                str(ROOT / "build" / "mast3d" / "TheMast3D.jsw"),
+                str(ROOT / "projects" / "TheMast3D.jsw"),
             ],
             capture_output=True,
             text=True,
