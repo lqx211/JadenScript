@@ -26,18 +26,12 @@ start:
         mov     sp, 0x7C00
         sti
 
-        ; ---- the next eight sectors, through the BIOS: on a disk this small
-        ;      there is no point writing a driver twice, and sectors 2..9 of
-        ;      track 0 are addressable the way an 8086 always could
-        mov     ax, STAGE2 >> 4         ; a segment, not an address
-        mov     es, ax
-        xor     bx, bx                  ; es:bx = 0x0600
-        mov     ah, 0x02                ; read
-        mov     al, 8                   ; eight sectors
-        xor     ch, ch                  ; cylinder 0
-        mov     cl, 2                   ; from sector 2
-        xor     dh, dh                  ; head 0
+        ; ---- the next eight sectors, through the BIOS, by number: CHS means
+        ;      doing the geometry arithmetic twice, and getting it wrong once
+        ;      reads the sector before the one you asked for
+        mov     si, dap
         mov     dl, 0x80                ; the first hard disk
+        mov     ah, 0x42                ; read, the EDD way
         int     0x13
         jc      .failed
 
@@ -80,6 +74,16 @@ putc:
         ret
 
 ssave:  db      0
+
+; the packet int 13h AH=42h wants: size, count, offset, segment, then a 64-bit
+; lba. It lives in this sector, because the bytes below 0x7C00 that look free
+; are not -- the BIOS uses some of them itself.
+dap:    dw      16
+        dw      8                       ; eight sectors: the stage 2
+        dw      STAGE2                  ; offset
+        dw      0                       ; segment
+        dq      1                       ; lba 1: right behind this sector
+
 msg_nodisk: db "no stage 2", 13, 10, 0
 
         times   510 - ($ - $$) db 0
