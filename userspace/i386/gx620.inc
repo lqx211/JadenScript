@@ -892,7 +892,7 @@ gxPci:
     call    suGoto
     mov     si, msg_gx_pci
     mov     bl, SU_HEAD
-    call    suPrint
+    call    gxFit
     mov     dh, GX_FIRST + 1
     mov     dl, GX_TX
     mov     cl, [es:GX_M_TW]
@@ -1005,7 +1005,7 @@ gxMemory:
     call    suGoto
     mov     si, msg_gx_mem
     mov     bl, SU_HEAD
-    call    suPrint
+    call    gxFit
     mov     dh, GX_FIRST + 1
     mov     dl, GX_TX
     mov     cl, [es:GX_M_TW]
@@ -1019,18 +1019,18 @@ gxMemory:
     call    suGoto
     mov     si, msg_me_base
     mov     bl, SU_PAPER
-    call    suPrint
+    call    gxFit
     mov     ax, [es:BDA_MEMK]
     call    putn
     mov     si, msg_me_kb
-    call    suPrint
+    call    gxFit
     ; ---- extended, out of the battery
     mov     dl, GX_TX
     mov     dh, GX_FIRST + 3
     call    suGoto
     mov     si, msg_me_ext
     mov     bl, SU_PAPER
-    call    suPrint
+    call    gxFit
     mov     al, 0x17
     call    cmos_read
     mov     bl, al
@@ -1042,12 +1042,12 @@ gxMemory:
     jz      .none
     call    putn
     mov     si, msg_me_kb
-    call    suPrint
+    call    gxFit
     jmp     .mode
 .none:
     mov     si, msg_me_none
     mov     bl, SU_PAPER
-    call    suPrint
+    call    gxFit
 .mode:
     ; ---- and where it is held
     mov     dl, GX_TX
@@ -1055,7 +1055,7 @@ gxMemory:
     call    suGoto
     mov     si, msg_me_mode
     mov     bl, SU_PAPER
-    call    suPrint
+    call    gxFit
     mov     al, 0x3D
     call    cmos_read
     cmp     al, 1
@@ -1066,7 +1066,7 @@ gxMemory:
     mov     si, msg_me_int2
 .printmode:
     mov     bl, SU_PAPER
-    call    suPrint
+    call    gxFit
     ; ---- the sockets, one a line
     mov     byte [es:GX_ROW], GX_FIRST + 6
     xor     cx, cx                      ; the socket being printed
@@ -1078,12 +1078,12 @@ gxMemory:
     call    suGoto
     mov     si, msg_me_slot
     mov     bl, SU_PAPER
-    call    suPrint
+    call    gxFit
     mov     ax, cx
     add     al, '0'
     call    putc
     mov     si, msg_me_arrow
-    call    suPrint
+    call    gxFit
     push    cx
     mov     al, cl
     add     al, 0x40                    ; this socket's size, from the battery
@@ -1093,7 +1093,7 @@ gxMemory:
     jne     .fitted
     mov     si, msg_me_empty
     mov     bl, SU_PAPER
-    call    suPrint
+    call    gxFit
     jmp     .next
 .fitted:
     ; "128 MB DDR4 SODIMM": the size is a table of powers of two
@@ -1103,7 +1103,7 @@ gxMemory:
     add     si, si
     mov     si, [cs:su_ramsize_names + si]
     mov     bl, SU_PAPER
-    call    suPrint
+    call    gxFit
     pop     cx
     mov     al, cl
     add     al, 0x48
@@ -1113,7 +1113,7 @@ gxMemory:
     mov     si, ax
     mov     si, [cs:su_kdnames + si]
     mov     bl, SU_PAPER
-    call    suPrint
+    call    gxFit
     mov     al, cl
     add     al, 0x50
     call    cmos_read
@@ -1122,7 +1122,7 @@ gxMemory:
     mov     si, ax
     mov     si, [cs:su_formnames + si]
     mov     bl, SU_PAPER
-    call    suPrint
+    call    gxFit
 .next:
     inc     byte [es:GX_ROW]
     inc     cx
@@ -1153,7 +1153,7 @@ gxMonitor:
     call    suGoto
     mov     si, msg_gx_hwmon
     mov     bl, SU_HEAD
-    call    suPrint
+    call    gxFit
     mov     dh, GX_FIRST + 1
     mov     dl, GX_TX
     mov     cl, [es:GX_M_TW]
@@ -1185,22 +1185,22 @@ gxMonitor:
     call    suGoto
     mov     si, msg_hw_core
     mov     bl, SU_PAPER
-    call    suPrint
+    call    gxFit
     mov     al, [es:GX_NODE]
     add     al, '0'
     call    putc
     mov     si, msg_hw_usage
-    call    suPrint
+    call    gxFit
     mov     al, ch
     xor     ah, ah
     call    putn
     mov     si, msg_hw_pct
-    call    suPrint
+    call    gxFit
     mov     al, bh                   ; the clock, in whole MHz
     xor     ah, ah
     call    putn
     mov     si, msg_hw_mhz
-    call    suPrint
+    call    gxFit
     inc     byte [es:GX_ROW]
     inc     byte [es:GX_NODE]
     jmp     .core
@@ -1218,19 +1218,19 @@ gxMonitor:
     mov     byte [es:CON_ATTR], SU_PAPER
     mov     si, msg_hw_cputherm
     mov     bl, SU_PAPER
-    call    suPrint
+    call    gxFit
     mov     dx, 0x5B0                   ; the die, in whole degrees
     in      al, dx
     xor     ah, ah
     call    hwNum
     mov     si, msg_hw_deg
     mov     bl, SU_PAPER
-    call    suPrint
+    call    gxFit
     call    hwFanRpm                    ; ax = the tachometer
     call    hwNum
     mov     si, msg_hw_rpm
     mov     bl, SU_PAPER
-    call    suPrint
+    call    gxFit
     inc     byte [es:GX_ROW]
     mov     dl, GX_TX
     mov     dh, [es:GX_ROW]
@@ -1239,14 +1239,14 @@ gxMonitor:
     mov     byte [es:CON_ATTR], SU_PAPER
     mov     si, msg_hw_drvtherm
     mov     bl, SU_PAPER
-    call    suPrint
+    call    gxFit
     mov     dx, 0x5B3                   ; the drive's own thermistor
     in      al, dx
     xor     ah, ah
     call    hwNum
     mov     si, msg_hw_drvdeg
     mov     bl, SU_PAPER
-    call    suPrint
+    call    gxFit
     call    hwHddRpm                    ; ax = the spindle
     call    hwNum
     mov     dx, 0x5B7                   ; SMART attribute 4 is the temperature
@@ -1262,7 +1262,7 @@ gxMonitor:
     push    ax                          ; ... and the worst ever
     mov     si, msg_hw_smart
     mov     bl, SU_PAPER
-    call    suPrint
+    call    gxFit
     ; The two numbers go on the stack, not in BX: setting the print colour
     ; writes BL, BL is half of BX, and 0x1F -- SU_PAPER -- printed a drive's
     ; worst-ever value as "31". A register that has to survive a call whose
@@ -1281,7 +1281,7 @@ gxMonitor:
     call    suGoto
     mov     byte [es:CON_ATTR], SU_PAPER
     mov     si, msg_hw_all
-    call    suPrint
+    call    gxFit
     ; the nominal, which is what the setup utility says, beside the measured
     ; figure above -- the two are not the same number, and that is the point
     mov     al, 0x36
@@ -1296,7 +1296,7 @@ gxMonitor:
     xor     ah, ah
     call    putn
     mov     si, msg_hw_nom
-    call    suPrint
+    call    gxFit
     mov     dx, 0x5A9
     in      al, dx
     mov     si, msg_hw_off
@@ -1304,7 +1304,7 @@ gxMonitor:
     jz      .say
     mov     si, msg_hw_on
 .say:
-    call    suPrint
+    call    gxFit
     pop     si
     pop     dx
     pop     cx
@@ -1349,7 +1349,7 @@ gxDrive:
     call    suGoto
     mov     si, msg_gx_drive0
     mov     bl, SU_HEAD
-    call    suPrint
+    call    gxFit
     mov     dh, GX_FIRST + 1
     mov     dl, GX_TX
     mov     cl, [es:GX_M_TW]
@@ -1433,7 +1433,7 @@ gxDrive:
     call    suGoto
     mov     si, msg_drv_none
     mov     bl, SU_PAPER
-    call    suPrint
+    call    gxFit
     jmp     .out
 
 .show:
@@ -1449,7 +1449,7 @@ gxDrive:
     call    suGoto
     mov     si, msg_drv_model
     mov     bl, SU_PAPER
-    call    suPrint
+    call    gxFit
     mov     si, DRV_MODEL
     call    drvStr
     mov     dl, GX_TX
@@ -1457,7 +1457,7 @@ gxDrive:
     call    suGoto
     mov     si, msg_drv_serial
     mov     bl, SU_PAPER
-    call    suPrint
+    call    gxFit
     mov     si, DRV_SERIAL
     call    drvStr
     mov     dl, GX_TX
@@ -1465,7 +1465,7 @@ gxDrive:
     call    suGoto
     mov     si, msg_drv_fw
     mov     bl, SU_PAPER
-    call    suPrint
+    call    gxFit
     mov     si, DRV_FW
     call    drvStr
     mov     dl, GX_TX
@@ -1473,31 +1473,31 @@ gxDrive:
     call    suGoto
     mov     si, msg_drv_cap
     mov     bl, SU_PAPER
-    call    suPrint
+    call    gxFit
     mov     ax, [es:DRV_CAP]
     call    hwNum
     mov     si, msg_drv_sectors
     mov     bl, SU_PAPER
-    call    suPrint
+    call    gxFit
     ; ---- and what the sensors say about it -------------------------
     mov     dl, GX_TX
     mov     dh, GX_FIRST + 7
     call    suGoto
     mov     si, msg_drv_therm
     mov     bl, SU_PAPER
-    call    suPrint
+    call    gxFit
     mov     dx, 0x5B3
     in      al, dx
     xor     ah, ah
     call    hwNum
     mov     si, msg_hw_drvdeg
     mov     bl, SU_PAPER
-    call    suPrint
+    call    gxFit
     call    hwHddRpm
     call    hwNum
     mov     si, msg_hw_rpm
     mov     bl, SU_PAPER
-    call    suPrint
+    call    gxFit
 .out:
     pop     di
     pop     si
@@ -1519,7 +1519,7 @@ drvStr:
     push    ax
     mov     ax, es
     mov     ds, ax
-    call    suPrint
+    call    gxFit
     pop     ax
     pop     ds
     ret
@@ -1625,7 +1625,7 @@ gxDrawRight:
     mov     dh, GX_FIRST
     call    suGoto
     mov     bl, SU_HEAD
-    call    suPrint
+    call    gxFit
     ; the rule under it
     call    gxNodeOf
     mov     si, [di + 4]
@@ -1636,7 +1636,10 @@ gxDrawRight:
     mov     al, G_HBAR
     mov     bl, SU_SEL
     call    suBar
-    ; the lines
+    ; the lines, each wrapped inside the pane and taking as many rows as it
+    ; needs: a table written for a forty-eight column pane does not fit a
+    ; twenty-eight column one, and the console used to wrap it at the *card's*
+    ; width, which put the tail at column zero of the next row -- over the tree.
     add     si, 2
     mov     byte [es:GX_LINE], GX_FIRST + 2
 .line:
@@ -1646,22 +1649,12 @@ gxDrawRight:
     mov     al, [es:GX_LINE]
     cmp     al, [es:GX_M_LAST]
     ja      .out
-    mov     dl, GX_TX
-    mov     dh, al
-    call    suGoto
+    push    si
     mov     si, bx
-    mov     bl, SU_PAPER
-    call    suPrint
-    call    gxNodeOf
-    mov     si, [di + 4]
-    mov     al, [es:GX_LINE]
-    sub     al, GX_FIRST + 2
-    inc     al
-    xor     ah, ah
-    add     ax, ax
-    add     si, ax
-    add     si, 2
-    inc     byte [es:GX_LINE]
+    mov     bh, SU_PAPER
+    call    gxWrap
+    pop     si
+    add     si, 2                   ; the next line of the table
     jmp     .line
 .out:
     pop     di
@@ -1702,6 +1695,166 @@ gxHint:
     call    suGoto
     mov     si, msg_gx_hint3
     call    suPrint
+.out:
+    pop     si
+    pop     dx
+    pop     bx
+    pop     ax
+    ret
+
+; ---------------------------------------------------------------------------
+; gxWrap -- si = a line of prose, printed into the right pane and wrapped at
+; word breaks inside it. Advances GX_LINE by however many rows it took.
+;   bh = the ink
+;
+; The pane is GX_M_TW columns wide on a card of any size, and the tables are
+; written for the forty-eight columns an eighty-column card gives them. On
+; Scratch's sixty-column stage the pane is twenty-eight, so a line has to be
+; re-broken rather than written over the tree beside it.
+; ---------------------------------------------------------------------------
+gxWrap:
+    push    ax
+    push    bx
+    push    cx
+    push    dx
+    push    si
+    push    di
+    mov     bl, bh                  ; gxEmit wants the ink in bl
+    xor     bh, bh                  ; the column inside the pane
+.more:
+    xor     dh, dh                  ; how much padding this chunk carries
+.spaces:
+    mov     al, [si]
+    cmp     al, ' '
+    jne     .word
+    inc     si
+    inc     dh
+    jmp     .spaces
+.word:
+    test    al, al
+    jz      .done
+    mov     di, si
+.span:
+    mov     al, [di]
+    test    al, al
+    jz      .spanned
+    cmp     al, ' '
+    je      .spanned
+    inc     di
+    jmp     .span
+.spanned:
+    mov     cx, di
+    sub     cx, si                  ; cx = the word's length
+    test    bh, bh                  ; a word at the start of a row has the whole
+    jz      .emitword               ; width and no padding to think about
+    mov     al, bh
+    add     al, dh                  ; what is on the row, the padding, the word
+    add     al, cl
+    cmp     al, [es:GX_M_TW]
+    jbe     .pad
+    call    gxNewRow
+    jc      .done
+    jmp     .emitword               ; the padding was only alignment for the
+.pad:                              ; row that did not fit; it is not carried
+    test    dh, dh
+    jz      .emitword
+    mov     al, ' '
+    call    gxEmit
+    jc      .done
+    dec     dh
+    jmp     .pad
+.emitword:
+    test    cx, cx
+    jz      .more
+    mov     al, bh
+    cmp     al, [es:GX_M_TW]        ; a word longer than a row is broken
+    jb      .room
+    call    gxNewRow
+    jc      .done
+.room:
+    mov     al, [si]
+    inc     si
+    push    cx
+    call    gxEmit
+    pop     cx
+    jc      .done
+    dec     cx
+    jmp     .emitword
+.done:
+    ; the line break at the end of a table entry: the next entry starts on the
+    ; row below the one this one finished on, not on it
+    mov     al, [es:GX_LINE]
+    cmp     al, [es:GX_M_LAST]
+    ja      .back
+    inc     al
+    mov     [es:GX_LINE], al
+.back:
+    pop     di
+    pop     si
+    pop     dx
+    pop     cx
+    pop     bx
+    pop     ax
+    ret
+
+; gxNewRow -- the next row of the pane. Carry set when there is none left.
+gxNewRow:
+    push    ax
+    mov     al, [es:GX_LINE]
+    inc     al
+    cmp     al, [es:GX_M_LAST]
+    ja      .full
+    mov     [es:GX_LINE], al
+    xor     bh, bh
+    clc
+    jmp     .out
+.full:
+    stc
+.out:
+    pop     ax
+    ret
+
+; gxEmit -- al = one character at the pane's next cell. Carry set when the row
+; it is on had nowhere left to put it.
+gxEmit:
+    push    ax
+    push    bx
+    push    dx
+    mov     dl, bh
+    add     dl, GX_TX
+    mov     dh, [es:GX_LINE]
+    call    suGoto
+    mov     ah, 0x0E
+    int     0x10
+    pop     dx
+    pop     bx
+    pop     ax
+    inc     bh
+    clc
+    ret
+
+; ---------------------------------------------------------------------------
+; gxFit -- si = a string, printed at the cursor but cut off at the pane's right
+; edge. A value is data, not prose: wrapping "Serial JSW2024A00001" into the
+; next row would put the rest of it where the next fact goes.
+; ---------------------------------------------------------------------------
+gxFit:
+    push    ax
+    push    bx
+    push    dx
+    push    si
+.loop:
+    mov     al, [si]
+    test    al, al
+    jz      .out
+    mov     dl, [es:GX_M_RR]
+    dec     dl                      ; the pane's border, not past it
+    cmp     [es:BDA_CURSOR_COL], dl
+    jae     .out
+    mov     ah, 0x0E
+    int     0x10
+    inc     si
+    jmp     .loop
 .out:
     pop     si
     pop     dx

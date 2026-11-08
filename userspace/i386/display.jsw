@@ -68,22 +68,33 @@ class Display {
      * of it, a smaller one gets it in the corner with the firmware printing
      * less. */
     private void dispMeasure() { // warp
-#ifdef SCRATCH
-        /* Scratch's stage is 480 x 360 and a shared project cannot be resized,
-         * so there is nothing to measure: skip the scan and say so. */
-        _w = 480;
-        _h = 360;
-#else
+        /* Both builds measure. The Scratch build has no custom extensions, but
+         * nothing here needs one: the costume, the fence and `touching edge`
+         * are built-in, and a Scratch project loaded into TurboWarp is a
+         * project whose stage can be resized like any other. Assuming
+         * 480 x 360 there painted a 480 x 360 screen into a much bigger stage
+         * and left the rest of it black. */
         Looks.switchCostume("Frame");
         Looks.size = 100;
-        Motion.setXY(1 / 0, 1 / 0);
-        _w = Motion.x;
-        _h = Motion.y;
-        if (_w > 10000 || _h > 10000) {
-            /* TurboWarp kept the infinity, so the fence never ran: walk the
-             * sprite out to the edge instead. It has to be on stage for the
-             * edge to be something to touch, and the walk is bounded, because
-             * a loop that never ends in warp mode is a frozen project. */
+        /* A finite out-of-range probe, not infinity: every VM fences a sprite
+         * to the stage, so setting a position it is not allowed to keep and
+         * reading it back is the stage's half-width less half the costume.
+         * Infinity was the old probe, and infinity is the one value some VMs
+         * store verbatim -- which is how the Scratch build ended up assuming
+         * 480 x 360 in the first place, and how a fenced read could come back
+         * as a number that meant nothing. */
+        Motion.setXY(2000, 2000);
+        _w = Motion.x * 2 + 2;
+        _h = Motion.y * 2 + 2;
+        /* A stage that reports itself smaller than a costume or larger than a
+         * 2400-pixel panel is a stage that did not fence -- TurboWarp can be
+         * told to stop fencing, and then the probe keeps the 2000 it was
+         * given. Walk instead when that happens. */
+        if (_w < 200 || _h < 200 || _w > 2400 || _h > 2400) {
+            /* Nothing fenced it: walk the sprite out to the edge instead. It
+             * has to be on stage for the edge to be something to touch, and
+             * the walk is bounded, because a loop that never ends in warp mode
+             * is a frozen project. */
             _w = 0;
             _h = 0;
             Looks.show();
@@ -93,14 +104,9 @@ class Display {
                 Motion.x += 1;
                 _n += 1;
             }
-            /* The walk stops with the costume's *edge* on the stage's edge,
-             * so the centre is one pixel inside it -- and the two-pixel
-             * costume hangs one more pixel past the centre. A 960-pixel stage
-             * therefore reads 479, not 480, and 479 x 2 is 958: two short, and
-             * the cell count that comes out of it is a whole column short of
-             * the stage as well, because 958 / 8 rounds up to 120 and then
-             * shrinks back to 119 to fit. Add the two pixels back, exactly the
-             * way the fenced branch below does. */
+            /* The walk stops with the costume's *edge* on the stage's edge, so
+             * the centre is one pixel inside it and the two-pixel costume
+             * hangs one more pixel past that: add the two pixels back. */
             if (Sensing.touching("_edge_")) {
                 _w = Motion.x * 2 + 2;
             }
@@ -114,21 +120,9 @@ class Display {
                 _h = Motion.y * 2 + 2;
             }
             Looks.hide();
-        } else {
-            _w = _w * 2 + 2;                    // the fence held half of it back
-            _h = _h * 2 + 2;
         }
-        /* A walk that stopped early reports half a stage -- the sprite was
-         * already on the edge when the axis it is walking began, so the loop
-         * exits at once and the number is the distance it did not travel. A
-         * stage does not shrink to half its size between two frames, so a
-         * measurement smaller than half of what the card last saw is not a
-         * resize: it is the walk failing. */
-        if (_w < 320 || _w * 2 <= X.stageW) { _w = X.stageW; }
-        if (_h < 240 || _h * 2 <= X.stageH) { _h = X.stageH; }
         if (_w > 4096) { _w = 4096; }
         if (_h > 4096) { _h = 4096; }
-#endif
         Motion.setXY(0, 0);
         /* The fence gives up half a costume on some VMs and not on others, so
          * the answer is worth a pixel either way: snap it to the cell grid
