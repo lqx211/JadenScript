@@ -31,7 +31,7 @@ class player { // Sprite: player (0,0) size=100 direction=90 show=1
 ## Quick start
 
 ```bash
-make test                       # 213 unit tests
+make test                       # 908 unit tests, about fourteen minutes
 make hello                      # examples/hello.jsw → build/hello.sb3 (the smallest project)
 make demo                       # examples/demo.jsw → build/demo.sb3
 make assets                     # examples/assets_demo.jsw (imports a costume) → build/assets_demo.sb3
@@ -176,6 +176,11 @@ tools/           opcode_report.py, gen_tm_grammar.py
 vscode-jsw/      VS Code extension: TextMate grammar + completion
 nvim/            Neovim/Vim plugin: syntax, ftdetect, ftplugin
 anim3d/          pen-only 3D renderer: shots, keyframes, five scenes (docs/ANIM3D.md)
+userspace/i386/  an 80386 PC that runs inside TurboWarp: BIOS, setup utility,
+                 boots a disk, a PXE client, an RTL8139 and a wire to the host
+                 (docs/I386.md)
+userspace/rv64/  the same idea for RISC-V: bios.S, a console, a disk, a shell
+                 (docs/RV64.md)
 docs/            format notes, roadmap, generated opcode reference
 examples/        hello.jsw, demo.jsw, assets_demo.jsw, rules_demo.jsw + assets/, hello/, rules_data/
 ```
@@ -208,6 +213,11 @@ python3 -m unittest tests.test_i386
   60 Hz redraw budget inside a 180 FPS VM, how the renderer shares the single
   project-wide pen layer with a host's own overlay, and how to verify a frame
   without trusting a screenshot.
+* [`docs/I386.md`](./docs/I386.md) — the 80386 machine: the CPU, the chipset,
+  POST, the setup utility, the boot menu, the network card and its host wire,
+  and the long list of bugs each of those found.
+* [`docs/RV64.md`](./docs/RV64.md) — the RISC-V machine, and the parts of the
+  language it had to grow first (bit fields, unsigned compares, packed memory).
 * [`docs/ROADMAP.md`](./docs/ROADMAP.md) — the work cut into small,
   independently shippable pieces.
 
@@ -388,5 +398,16 @@ what comes next.
 
 ## Licence
 
-The compiler is MIT. `sample.jsw` and `sample_np4.26_sb3/` are third-party
-material (NotePlayer 4, GPL-3.0) included only as a compatibility fixture.
+The compiler, the tools, the two machines and the documentation are MIT; see
+[`LICENSE`](./LICENSE).
+
+Two things in the tree are somebody else's and are **not** MIT:
+
+| Path | What it is |
+|---|---|
+| `sample.jsw` | a decompilation of **NotePlayer 4** (GPL-3.0), kept as the compatibility fixture every block shape was verified against |
+| `wem_example/` | **FrostNova's `world.execute (me)` music video** (AGPL-3.0), kept as the example `anim3d`'s shot list is generated from — it carries its own [`NOTICE.md`](./wem_example/NOTICE.md), including material that is not licensed at all (the song, its lyrics, the trademarks it shows) |
+
+Neither is linked into `jswc`; they are aggregated in the same repository, and
+each keeps its own licence. `sample_np4.26_sb3/` — the 167 MB reference archive
+those fixtures come from — is not in the repository.

@@ -20,6 +20,11 @@ userspace/*/*.bin.nam
 userspace/*/*.bin.til
 userspace/*/*.lst
 userspace/*/*.elf
+userspace/*/*.elf.id0
+userspace/*/*.elf.id1
+userspace/*/*.elf.id2
+userspace/*/*.elf.nam
+userspace/*/*.elf.til
 userspace/*/*.img
 
 # vendored third-party trees and multi-hundred-MB project assets
