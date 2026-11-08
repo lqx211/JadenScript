@@ -733,8 +733,10 @@ class I386SetupTests(unittest.TestCase):
                      "32 MB", "64 MB", "128 MB"):
             self.assertIn(size, screen)
         # nine names fill the first column five deep, so 128 MB -- the ninth --
-        # is the fourth row of the second column
-        self.assertEqual(self._attrs(mach, 9, 31, 49), {0x0F},
+        # is the fourth row of the second column. The panel is centred on the
+        # card, so where that column starts is read, not assumed.
+        left = mach.ram[0x4F6]          # SU_DLG_L
+        self.assertEqual(self._attrs(mach, 9, left + 21, left + 39), {0x0F},
                          "128 MB is the lit cell")
 
     def test_a_blank_battery_comes_up_as_the_board_this_machine_is(self):

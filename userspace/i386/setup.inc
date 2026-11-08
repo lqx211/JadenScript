@@ -1440,7 +1440,18 @@ suChooseBox:
     mov     bl, al
     add     bl, 6                   ; the rules and the two button rows
     mov     bh, SU_SEL
-    mov     dl, 10
+    mov     al, [es:BDA_VIDCOLS]
+    xor     ah, ah
+    sub     al, 42
+    jae     .fits
+    xor     al, al
+.fits:
+    shr     al, 1
+    cmp     al, 1
+    jae     .placed
+    mov     al, 1
+.placed:
+    mov     dl, al
     mov     dh, 3
     mov     cx, 42
     call    suDialogN
@@ -1463,7 +1474,8 @@ suChooseBtns:
     xor     ah, ah
     add     al, 7
     mov     dh, al
-    mov     dl, 12
+    mov     dl, [es:SU_DLG_L]
+    add     dl, 2
     call    suButtonsAt
     pop     dx
     pop     ax
@@ -1491,7 +1503,8 @@ suChooseOpts:
     mov     ax, di
     mov     dh, al
     add     dh, 6
-    mov     dl, 11
+    mov     dl, [es:SU_DLG_L]
+    inc     dl
     mov     cx, 40                  ; both columns at once, band and gap
     mov     al, ' '
     mov     bl, SU_SEL
@@ -1518,7 +1531,10 @@ suChooseOpts:
     mov     ax, cx
     mov     cl, 20
     mul     cl                      ; a cell is twenty columns wide
-    add     al, 11
+    xor     ah, ah
+    mov     cl, [es:SU_DLG_L]
+    add     al, cl
+    inc     al
     mov     dl, al
     ; the band, in the lit ink when this is the highlighted name
     push    di
@@ -1854,13 +1870,15 @@ suEditValue:
     push    cx
     push    dx
     push    si
-    mov     dl, 33                  ; the field, cleared so a shorter value
+    mov     dl, [es:SU_DLG_L]       ; the field, cleared so a shorter value
+    add     dl, 9
     mov     dh, 13                  ; cannot leave the last one's tail behind
     mov     cx, 20                  ; wide enough for "128 MB, DDR4 SODIMM"
     mov     al, ' '
     mov     bl, SU_SEL
     call    suBar
-    mov     dl, 34
+    mov     dl, [es:SU_DLG_L]
+    add     dl, 10
     mov     dh, 13
     call    suGoto
     mov     al, [es:SU_ITEM]
@@ -1886,19 +1904,36 @@ suEditBox:
     add     ax, ax
     mov     si, ax
     mov     si, [si + su_labels]
-    mov     dl, 24
+    ; the panel is thirty-seven columns wide and it sits in the middle of the
+    ; card: at column 24 on an eighty-column screen it ends at column 60, which
+    ; is one past the last column of Scratch's sixty-column stage, so the right
+    ; border and half the value were off the screen there.
+    mov     al, [es:BDA_VIDCOLS]
+    xor     ah, ah
+    sub     al, 37
+    jae     .fits
+    xor     al, al
+.fits:
+    shr     al, 1
+    cmp     al, 1
+    jae     .placed
+    mov     al, 1
+.placed:
+    mov     dl, al
     mov     dh, 10
     mov     cx, 37                  ; wide enough for an arrow either side of
     call    suDialog                ; twenty columns of value
     ; the value, an arrow either side of it
-    mov     dl, 30
+    mov     dl, [es:SU_DLG_L]
+    add     dl, 6
     mov     dh, 13
     call    suGoto
     mov     si, msg_su_lt
     mov     bl, SU_SEL
     call    suPrint
     call    suEditValue
-    mov     dl, 54
+    mov     dl, [es:SU_DLG_L]
+    add     dl, 30
     mov     dh, 13
     call    suGoto
     mov     si, msg_su_gt
@@ -1914,7 +1949,8 @@ suEditBox:
 
 ; suButtons -- the editor's pair, on the row the hint used to occupy.
 suButtons:
-    mov     dl, 26
+    mov     dl, [es:SU_DLG_L]
+    add     dl, 2
     mov     dh, 15
     jmp     suButtonsAt
 
