@@ -224,6 +224,14 @@ public X.nicWords = [];                  // scratch: one frame, as 32-bit words
 public X.nicSent = 0;
 public X.nicGot = 0;
 public X.netLink = 0;                    // 1 when the wire's socket is open
+/* COM1. A 16550 has eight registers and a divisor latch that shares the first
+ * two; the guest's writes are collected in `serial` so a Linux boot can be
+ * read instead of guessed at. `serialIn` is the other direction: bytes a
+ * monitor wants to type at the guest. */
+public X.serial = [];
+public X.serialIn = [];
+public X.serialN = 0;
+public X.uart = [0, 0, 0, 3, 0, 96, 0, 0];   // THR IER IIR/FCR LCR MCR LSR MSR SCR
 public X.netSent = 0;                    // frames the sprite has sent
 public X.netDrop = 0;                    // and frames it had to drop
 public X.nicLost = 0;                    // arrived with nowhere to put them
@@ -2941,6 +2949,73 @@ class Cpu {
         if (X.nicRx.length() > 0) { nicReceive(); }
     }
 
+    /* ---- COM1, at the address a PC BIOS has always put it --------------- *
+     * Eight registers, and the first two mean something else while DLAB (LCR
+     * bit 7) is set: that is the divisor latch, which is how a guest sets the
+     * baud rate. Nobody here is timing anything, so the divisor is stored and
+     * ignored, but a driver that cannot write it will not start.
+     *
+     * The line status register is the load-bearing one: every 8250 driver
+     * polls bit 5 before each byte, so this card has to say "transmitter
+     * empty" or the console prints nothing at all. */
+    private void uartRead(i) { // warp
+        _ur = X.uart.get(1);
+        if (i == 0) {
+            if (X.uart.get(4) >= 128) { v = X.uart.get(1); return; }   // divisor
+            if (X.serialIn.length() > 0) {
+                v = X.serialIn.get(1);
+                X.serialIn.delete(1);
+                return;
+            }
+            v = 0;
+            return;
+        }
+        if (i == 1) { v = X.uart.get(2); return; }                     // IER/DLM
+        if (i == 2) { v = 1; return; }                                // no interrupt
+        if (i == 5) {
+            v = 96;                                                   // THRE, TEMT
+            if (X.serialIn.length() > 0) { v = 97; }
+            return;
+        }
+        v = X.uart.get(i + 1);
+    }
+
+    private void uartWrite(i, val) { // warp
+        _uv = val % 256;
+        if (i == 0) {
+            if (X.uart.get(4) >= 128) { X.uart.set(1, _uv); return; }  // divisor
+            if (X.uart.get(5) >= 16) { return; }                      // loopback
+            X.serial.add(_uv);
+            X.out.add(_uv);                    // the debug log this port has
+            X.serialN += 1;                    // always been for our own code
+            return;
+        }
+        if (i == 2) {                                                 // FCR
+            X.uart.set(3, _uv);
+            return;
+        }
+        X.uart.set(i + 1, _uv);
+    }
+
+    /* What the guest has written, as text. Called by whoever wants to show it;
+     * the list is drained so a machine that runs for an hour does not keep an
+     * hour of console. */
+    public void serialTake(n) { // warp
+        _st = "";
+        _sn = 0;
+        while (X.serial.length() > 0 && _sn < n) {
+            _c = X.serial.get(1);
+            X.serial.delete(1);
+            if (_c >= 32 && _c < 127) {
+                _st = _st + Operators.join(Operators.letterOf(_c + 0));
+            } elif (_c == 13 || _c == 10) {
+                _st = _st + "\n";
+            }
+            _sn += 1;
+        }
+        v = _st;
+    }
+
     private void portIn(p) { // warp
         v = 255;
         if (p == X.pciAddrPort) { v = X.pciAddr; return; }
@@ -2949,6 +3024,7 @@ class Cpu {
             return;
         }
         if (p >= X.nicBase && p <= X.nicBase + 255) { nicRead(p - X.nicBase, 1); return; }
+        if (p >= 1016 && p <= 1023) { uartRead(p - 1016); return; }
         if (p == 96) { v = X.port60; X.port64 = 0; return; }
         if (p == 100) { v = X.port64; return; }
         if (p == 112) { v = X.cmosIndex; return; }
@@ -2958,7 +3034,6 @@ class Cpu {
         if (p == 33) { v = X.picImr; return; }
         if (p == 160) { v = X.pic2Irr; if (X.pic2Select == 1) { v = X.pic2Isr; } return; }
         if (p == 161) { v = X.pic2Imr; return; }
-        if (p == 1016) { v = 96; return; }
         if (p == 1021) { v = 96; return; }
         if (p == X.coreUsagePort) { v = X.coreUsage.get(X.coreSel) + 0; return; }
         if (p == X.coreMHzPort) { v = X.coreMHz.get(X.coreSel) + 0; return; }
@@ -3014,6 +3089,10 @@ class Cpu {
             nicWrite(p - X.nicBase, 1, val);
             return;
         }
+        if (p >= 1016 && p <= 1023) {
+            uartWrite(p - 1016, val);
+            return;
+        }
         _oV = val % 256;
         if (p == 43) { pitControl(_oV); return; }
         if (p >= 64 && p <= 66) { pitWrite(p - 64, _oV); return; }
@@ -3027,7 +3106,6 @@ class Cpu {
             X.cmosWrites += 1;
             return;
         }
-        if (p == 1016) { X.out.add(_oV); return; }
         if (p == X.coreSelPort) {
             if (_oV >= 1 && _oV <= X.cores) { X.coreSel = _oV; }
             return;

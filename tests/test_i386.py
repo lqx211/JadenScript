@@ -1897,6 +1897,70 @@ class I386DriveTests(unittest.TestCase):
         self.assertIn("drvStr", source, "and the buffer needs its own data segment")
 
 
+class I386SerialTests(unittest.TestCase):
+    """COM1: the console Linux and this firmware both talk through.
+
+    A 16550 is eight registers and one of them is load-bearing -- the line
+    status, which every 8250 driver polls before each byte. A card that never
+    says "transmitter empty" is a console that prints nothing, and every step
+    after this one is debugged through it.
+    """
+
+    BIN = ROOT / "userspace/i386/sertest.bin"
+
+    def _run(self):
+        if not self.BIN.exists():
+            self.skipTest("run make i386-extras")
+        blob = self.BIN.read_bytes()
+        mach = rv.Machine()
+        mach.ram[:] = i386_image.build()
+        mach.sreg[rv.SEG_CS] = rv.RESET_CS
+        mach.eip = rv.RESET_IP
+        mach.run(limit=1_500_000)             # POST, which brings COM1 up
+        mach.ram[0x7C00:0x7C00 + len(blob)] = blob
+        mach.sreg[rv.SEG_CS] = 0
+        mach.eip = 0x7C00
+        mach.run(limit=mach.steps + 200_000)
+        return mach
+
+    def test_the_card_says_it_can_transmit(self) -> None:
+        mach = self._run()
+        self.assertEqual(mach.port_in(0x3FD, 1), 0x60,
+                         "THRE and TEMT: the transmitter is empty")
+
+    def test_a_byte_written_to_the_port_is_a_byte_on_the_wire(self) -> None:
+        mach = self._run()
+        self.assertEqual(mach.serial_text(), "A1B2\r\nCD\r\n",
+                         "int 14h, then the registers, then the divisor latch")
+
+    def test_the_divisor_latch_is_not_a_byte_on_the_wire(self) -> None:
+        """LCR bit 7 makes 0x3F8 the divisor's low byte. A card that ignored
+        DLAB would print the divisor and lose the baud rate."""
+        mach = rv.Machine()
+        mach.port_out(0x3FB, 0x80, 1)          # DLAB on
+        mach.port_out(0x3F8, 1, 1)             # divisor low
+        self.assertEqual(mach.serial_text(), "", "nothing was transmitted")
+        mach.port_out(0x3FB, 0x03, 1)          # DLAB off, 8N1
+        mach.port_out(0x3F8, ord("x"), 1)
+        self.assertEqual(mach.serial_text(), "x")
+
+    def test_loopback_keeps_the_byte_off_the_wire(self) -> None:
+        """MCR bit 4 is the loopback the card's own self-test uses; a serial
+        port that prints during a loopback is a port with a bug."""
+        mach = rv.Machine()
+        mach.port_out(0x3FC, 0x10, 1)          # MCR: loopback
+        mach.port_out(0x3F8, ord("z"), 1)
+        self.assertEqual(mach.serial_text(), "")
+
+    def test_a_byte_that_arrives_is_ready(self) -> None:
+        mach = rv.Machine()
+        mach.serial_in.extend(b"Q")
+        lsr = mach.port_in(0x3FD, 1)
+        self.assertEqual(lsr & 1, 1, "data ready")
+        self.assertEqual(mach.port_in(0x3F8, 1), ord("Q"))
+        self.assertEqual(mach.port_in(0x3FD, 1) & 1, 0, "and only once")
+
+
 class I386KernelTests(unittest.TestCase):
     """The smallest thing that deserves the name "kernel": it turns the machine
     into a 386 with paging on, and then says so on the screen.

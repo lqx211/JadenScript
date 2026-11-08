@@ -564,6 +564,13 @@ class Machine:
         self.pic2 = Pic(0x70)
         self.pic2.imr = 0xFF
         self.pit_acc = 0
+        # COM1: a 16550 with a loopback that goes to this process instead of to
+        # a wire. `serial` is what a guest wrote, which is how a Linux boot is
+        # watched rather than guessed at.
+        self.serial = bytearray()
+        self.serial_in = bytearray()
+        self.uart = bytearray(8)          # THR/IER/IIR-FCR/LCR/MCR/LSR/MSR/SCR
+        self.uart[3] = 0x03               # LCR: 8 bits, no parity, one stop
         for reg, value in CMOS_DEFAULTS.items():
             self.cmos[reg] = value
 
@@ -997,9 +1004,62 @@ class Machine:
             self.scsi_pos += 1
         return value
 
+    # ---- COM1 ---------------------------------------------------------
+    UART_IO = 0x3F8
+
+    def _uart_dlab(self) -> bool:
+        return bool(self.uart[3] & 0x80)
+
+    def uart_read(self, index: int) -> int:
+        """A 16550's registers. The line status is the one that matters: a
+        driver polls bit 5 (the transmitter is empty) before every byte, so a
+        card that never says "ready" is a console that prints nothing."""
+        if index == 0:
+            if self._uart_dlab():
+                return self.uart[0]              # divisor, low
+            if self.serial_in:
+                return self.serial_in.pop(0)     # a received byte
+            return 0
+        if index == 1:
+            if self._uart_dlab():
+                return self.uart[1]              # divisor, high
+            return self.uart[1]                  # interrupt enable
+        if index == 2:
+            # nothing here raises an interrupt, so "no interrupt pending" is
+            # the truth; an FIFO is enabled if the guest asked for one
+            return 0x01 if not (self.uart[2] & 1) else 0xC1
+        if index == 5:
+            lsr = 0x60                           # THRE and TEMT: both empty
+            if self.serial_in:
+                lsr |= 0x01                      # data ready
+            return lsr
+        return self.uart[index]
+
+    def uart_write(self, index: int, value: int) -> None:
+        if index == 0:
+            if self._uart_dlab():
+                self.uart[0] = value             # divisor, low
+                return
+            if self.uart[4] & 0x10:              # MCR loopback: nobody hears it
+                return
+            self.serial.append(value & 0xFF)
+            self.out.append(value & 0xFF)          # and the old debug log
+            if len(self.serial) > 1 << 20:
+                del self.serial[:len(self.serial) - (1 << 20)]
+            return
+        if index == 2:
+            self.uart[2] = value & 0xFF          # FCR is write-only in effect
+            return
+        self.uart[index] = value & 0xFF
+
+    def serial_text(self) -> str:
+        return bytes(self.serial).decode("latin-1")
+
     def port_in(self, port, size):
         if NIC_IO <= port < NIC_IO + 256:
             return self.nic_register(port - NIC_IO, size)
+        if self.UART_IO <= port < self.UART_IO + 8:
+            return self.uart_read(port - self.UART_IO)
         if 0x40 <= port <= 0x42:
             return self.pit.read(port - 0x40)
         if port == 0x43:
@@ -1108,10 +1168,6 @@ class Machine:
             return 0x00
         if 0x170 <= port <= 0x176:
             return 0xFF
-        if port == 0x3FD:
-            return 0x60
-        if port == 0x3F8:
-            return 0x60
         if port == 0x60:
             return self.keys.pop(0) if self.keys else 0
         if port == 0x64:
@@ -1133,6 +1189,9 @@ class Machine:
     def port_out(self, port, value, size):
         if NIC_IO <= port < NIC_IO + 256:
             self.nic_register_write(port - NIC_IO, value, size)
+            return
+        if self.UART_IO <= port < self.UART_IO + 8:
+            self.uart_write(port - self.UART_IO, value)
             return
         if port == 0xCF8:
             self.pci_addr = value & 0xFFFFFFFF
@@ -1258,9 +1317,8 @@ class Machine:
         if port == 0x71:
             self.cmos[self.cmos_index & 0x7F] = value & 0xFF
             return
-        if port in (0x3F8, 0x402):
-            # 0x3F8 is the first serial port; 0x402 is the port QEMU and
-            # SeaBIOS agree to use for debug output. Both end up in `out`.
+        if port == 0x402:
+            # the port QEMU and SeaBIOS agree to use for debug output
             self.out.append(value & 0xFF)
         self.ports[port] = value & 0xFF
 

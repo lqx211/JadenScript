@@ -71,6 +71,8 @@ BDA_BOOTDEV     equ 0x4FE          ; the device int 19h hands over to
 CON_T           equ 0x52E          ; the first row of the console's window
 CON_B           equ 0x52F          ; ... and the last
 CON_W           equ 0x530          ; how wide it is, from column 0
+COM1            equ 0x3F8          ; the first serial port
+SSAVE           equ 0x4EF          ; int 14h's one byte of scratch
 BDA_VIDCOLS     equ 0x531          ; how many of those columns the card can show
 BDA_VIDROWS     equ 0x532          ; ... and how many rows
 BDA_SPLASH      equ 0x533          ; 1 while the power-on picture is on screen
@@ -191,6 +193,9 @@ start:
     call    set_vector
     mov     bx, 0x13 * 4
     mov     dx, int13
+    call    set_vector
+    mov     bx, 0x14 * 4
+    mov     dx, int14
     call    set_vector
     mov     bx, 0x16 * 4
     mov     dx, int16
@@ -352,6 +357,8 @@ start:
     mov     si, msg_pci_tail
     call    puts
 
+    mov     ah, 0x00                ; COM1 up, 115200 8N1: anything that wants
+    int     0x14                    ; to report on the way in can just write
     mov     si, msg_step_boot
     call    splashStep
     call    suWindow                ; five seconds to press DEL or M
@@ -960,6 +967,97 @@ int13:
     pop     bx
     pop     bp
     iret
+
+; ---------------------------------------------------------------------------
+; int 14h: the first serial port.
+;
+; COM1 is at 0x3F8 and the card is a 16550, so the port itself is what a driver
+; wants; this is the BIOS's own way in, for the firmware and for a loader that
+; has no driver of its own. Linux does not use it -- its 8250 driver talks to
+; the registers directly -- but everything that has to *report* on the way to
+; Linux does.
+;
+;   AH = 0x00  initialize: AL has the parameters, which are ignored here
+;   AH = 0x01  send AL, wait for the transmitter, return AH = the status
+;   AH = 0x02  receive into AL, AH bit 7 set on a timeout
+;   AH = 0x03  status, in AH
+; ---------------------------------------------------------------------------
+int14:
+    push    dx
+    push    si
+    mov     dx, COM1
+    cmp     ah, 0x00
+    je      .init
+    cmp     ah, 0x01
+    je      .send
+    cmp     ah, 0x02
+    je      .recv
+    cmp     ah, 0x03
+    jne     .bad
+    call    serStatus
+    jmp     .out
+.init:
+    add     dx, 3                   ; LCR
+    mov     al, 0x80                ; DLAB: the next two are the divisor
+    out     dx, al
+    mov     dx, COM1
+    mov     al, 1                   ; 115200
+    out     dx, al
+    inc     dx
+    xor     al, al
+    out     dx, al
+    mov     dx, COM1
+    add     dx, 3
+    mov     al, 0x03                ; 8 bits, no parity, one stop
+    out     dx, al
+    mov     dx, COM1
+    inc     dx
+    xor     al, al                  ; interrupt enable: nobody to interrupt
+    out     dx, al
+    mov     dx, COM1
+    add     dx, 4
+    mov     al, 0x03                ; DTR and RTS, so a peer sees us
+    out     dx, al
+    mov     ah, 0x60
+    jmp     .out
+.send:
+    mov     [es:SSAVE], al
+.wait:
+    call    serStatus
+    test    ah, 0x20                ; the transmitter has room
+    jz      .wait
+    mov     dx, COM1
+    mov     al, [es:SSAVE]
+    out     dx, al
+    call    serStatus
+    jmp     .out
+.recv:
+    call    serStatus
+    test    ah, 0x01                ; a byte is waiting
+    jz      .none
+    mov     dx, COM1
+    in      al, dx
+    and     ah, 0x7F
+    jmp     .out
+.none:
+    or      ah, 0x80                ; timeout, the way this service says so
+    jmp     .out
+.bad:
+    mov     ah, 0x80
+.out:
+    pop     si
+    pop     dx
+    iret
+
+; serStatus -- AH = the line status, which is what a 16550 hands back
+serStatus:
+    push    dx
+    mov     dx, COM1
+    add     dx, 5
+    in      al, dx
+    mov     ah, al
+    pop     dx
+    ret
 
 ; ---------------------------------------------------------------------------
 ; int 15h: the memory map
