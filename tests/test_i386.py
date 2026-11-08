@@ -2031,16 +2031,12 @@ class I386LinuxDiskTests(unittest.TestCase):
         self.assertEqual(bytes(mach.ram[0x0010_0000:0x0010_0000 + 16]), want,
                          "the kernel is at the address its header names")
 
-    @unittest.expectedFailure
     def test_the_kernel_is_running_and_says_so(self) -> None:
         """K: entered. H: 'HdrS'. C: code32_start. E3: three E820 entries.
 
-        Expected to fail today, and deliberately so rather than quietly
-        skipped: the loader reads the kernel and places every segment, but the
-        last step before the handover is not right yet, so the stub never runs.
-        What is left to find is in `load_sectors` -- the drive stops asserting
-        DRQ partway through the second segment -- and the test above this one
-        is what will keep saying that the data itself is correct.
+        The whole chain, and the one assertion that says it is a chain: the
+        stub's own checks pass, which means it was entered in protected mode
+        with `HdrS`, a `code32_start` and three E820 entries.
         """
         mach = self._boot()
         self.assertIn("KHCE3", mach.serial_text())

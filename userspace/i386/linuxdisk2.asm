@@ -243,7 +243,7 @@ load_sectors:
         mov     [ATADST], edi          ; destination
 .sector:
         test    ebp, ebp
-        jz      .out
+        jle     .out                   ; the last sector makes the count negative
         mov     eax, [ATALBA]
         mov     edi, [ATADST]
         ; the sector number, high byte first: 0x1F6 carries 0xE0 | lba[27:24]
