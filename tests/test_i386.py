@@ -2242,6 +2242,31 @@ class I386PagingTests(unittest.TestCase):
         self.assertEqual(mach.sreg[rv.SEG_CS], 0x0008, "in the code segment")
         self.assertFalse(mach.halted)
 
+    def test_a_bulk_move_fills_a_page_without_a_loop(self) -> None:
+        """`rep stosl` over a cleared BSS is millions of elements, and one
+        Python iteration each is a minute of wall time for one instruction. A
+        page at a time is what the hardware has done since the 486."""
+        mach = self.ref()
+        self.enable(mach)
+        mach.reg[7] = 0x1000                       # virtual 0x1000 -> 0x5000
+        mach.reg[0] = 0x5A5A_5A5A
+        moved = rv.bulk_string(mach, 2, 4, rv.SEG_DS, 0xFFFF_FFFF, 0x1000)
+        self.assertGreater(moved, 1, "more than one element at a time")
+        self.assertEqual(mach.read(self.PHYS_B, 4), 0x5A5A_5A5A)
+        self.assertEqual(mach.reg[7], 0x1000 + moved * 4, "DI advanced with it")
+
+    def test_a_bulk_move_never_writes_through_a_missing_page(self) -> None:
+        """The walker reports a missing page by delivering a fault, so a slice
+        written afterwards would land wherever it happened to leave the
+        machine -- physical zero, say. The bulk path asks first."""
+        mach = self.ref()
+        self.enable(mach)
+        mach.reg[7] = 0x2000                       # the unmapped page
+        mach.reg[0] = 0x41
+        moved = rv.bulk_string(mach, 2, 4, rv.SEG_DS, 0xFFFF_FFFF, 0x1000)
+        self.assertEqual(moved, 0, "an unmapped page is not a page to fill")
+        self.assertEqual(bytes(mach.ram[0:16]), bytes(16), "physical zero is untouched")
+
     def test_a_fault_with_no_idt_stops_rather_than_looping(self) -> None:
         mach = self.ref()
         self.enable(mach)

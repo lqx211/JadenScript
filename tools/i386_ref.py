@@ -627,6 +627,20 @@ class Machine:
             return 0xFFFF_FFFF
         return int.from_bytes(self.ram[at:at + 4], "little")
 
+    def page_present(self, lin: int) -> bool:
+        """Whether a linear address would translate, without delivering a
+        fault. Anything that moves memory in bulk has to ask first: `phys`
+        reports a fault by setting the machine's state, not by returning
+        nothing, and a slice written after one lands wherever it likes."""
+        if not (self.pe and self.cr[0] & 0x8000_0000):
+            return True
+        pde_at = (self.cr[3] & ~0xFFF) + ((lin >> 22) & 0x3FF) * 4
+        pde = self.fetch_physical(pde_at)
+        if not pde & 1:
+            return False
+        pte_at = (pde & ~0xFFF) + ((lin >> 12) & 0x3FF) * 4
+        return bool(self.fetch_physical(pte_at) & 1)
+
     def page_fault(self, lin: int) -> None:
         if getattr(self, "_in_fault", False):
             self.error = f"page fault in a page fault at {lin:#x}"
@@ -2463,6 +2477,54 @@ def branch_condition(m, cond):
     }[cond]
 
 
+def bulk_string(m, kind, osize, seg, amask, count):
+    """As many elements of a REP move as one page holds, as a slice.
+
+    A `rep stosl` that clears sixty-four megabytes is sixteen million elements,
+    and sixteen million Python iterations inside one instruction is a minute of
+    wall time for one step. Real hardware does not do it one element per clock
+    either -- everything since the 486 erases the per-element cost -- so the
+    model takes a page at a time while the translation stays trivial.
+
+    Returns what it did, having advanced SI/DI and the counters. Zero means
+    "not this time": counting down, a comparing form that can stop early, or a
+    run that would leave RAM all fall back to the element-wise path, which is
+    also what raises a page fault at the right element instead of at the end.
+    """
+    if kind not in (0, 2, 3) or count <= 1:
+        return 0                       # cmps/scas can stop inside the run
+    if m.flag(FLAG_DF):
+        return 0                       # downwards is rare; keep one path
+    src = m.reg[6] & amask
+    dst = m.reg[7] & amask
+    room = 0x1000 - (dst & 0xFFF)      # how much of this page is left
+    if kind == 0:
+        room = min(room, 0x1000 - (src & 0xFFF))
+    done = min(count, room // osize)
+    if done <= 1:
+        return 0
+    if not m.page_present(dst) or (kind != 2 and not m.page_present(src)):
+        return 0                       # let the element path raise the fault
+    at = m.phys(SEG_ES, dst)
+    if at + done * osize > m.ram_size:
+        return 0                       # past the end of RAM: m.write hides it
+    if kind == 0:
+        source = m.phys(seg, src)
+        if source + done * osize > m.ram_size:
+            return 0
+        m.ram[at:at + done * osize] = m.ram[source:source + done * osize]
+        m.reg[6] = (src + done * osize) & amask
+    elif kind == 2:
+        m.ram[at:at + done * osize] = (m.getreg(0, osize) & MASK[osize]).to_bytes(
+            osize, "little") * done
+    else:                              # lods: one address, into the accumulator
+        m.setreg(0, m.read(m.phys(seg, src + (done - 1) * osize), osize), osize)
+        m.reg[6] = (src + done * osize) & amask
+    if kind != 3:
+        m.reg[7] = (dst + done * osize) & amask
+    return done
+
+
 def string_op(m, op, size, seg, rep, addr_size=2):
     """movs / cmps / stos / lods / scas: one element per pass, REP repeats.
 
@@ -2476,6 +2538,14 @@ def string_op(m, op, size, seg, rep, addr_size=2):
             0xAC: 3, 0xAD: 3, 0xAE: 4, 0xAF: 4}[op]
     osize = 1 if op in (0xA4, 0xA6, 0xAA, 0xAC, 0xAE) else size
     while True:
+        if rep:
+            count = m.reg[1] & amask
+            moved = bulk_string(m, kind, osize, seg, amask, count)
+            if moved:
+                m.reg[1] = (count - moved) & amask
+                if m.reg[1]:
+                    continue           # the next page is the next slice
+                return
         si = m.phys(seg, m.reg[6] & amask)
         if kind == 0:
             m.write(m.phys(SEG_ES, m.reg[7] & amask), m.read(si, osize), osize)
