@@ -136,6 +136,7 @@ i386-extras:
 	cd userspace/i386 && nasm -f bin pm16.asm -o pm16.bin -l pm16.lst
 	cd userspace/i386 && nasm -f bin kernel.asm -o kernel.bin -l kernel.lst
 	cd userspace/i386 && nasm -f bin sertest.asm -o sertest.bin -l sertest.lst
+	cd userspace/i386 && nasm -f bin hw686.asm -o hw686.bin -l hw686.lst
 
 # The network, in two processes: the wire the machine dials, and (for a real
 # LAN address) the same wire attached to a physical interface as root.

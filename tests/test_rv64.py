@@ -33,6 +33,13 @@ MODULES = [RVDIR / "rv64.jsw", RVDIR / "core.jsw", RVDIR / "display.jsw", RVDIR 
            RVDIR / "input.jsw"]
 ELF = RVDIR / "payload.elf"
 BIOS = RVDIR / "bios.elf"
+
+#: bios.elf is a build product -- `make rv64` assembles it with a RISC-V
+#: toolchain this repository does not ship -- so a clone runs the parts of this
+#: module that do not need it, and says so about the parts that do.
+HAVE_BIOS = BIOS.exists()
+needs_bios = unittest.skipUnless(
+    HAVE_BIOS, "userspace/rv64/bios.elf is not built (make rv64)")
 IMAGE = RVDIR / "assets" / "lists" / "X.image.jsa"
 DATA = ROOT / "tests" / "data"
 QEMU_OUT = DATA / "rv64_qemu.txt"
@@ -47,6 +54,7 @@ ROWS_PER_GLYPH = 15
 sys.path.insert(0, str(ROOT / "tools"))
 
 
+@needs_bios
 class Rv64ReferenceTests(unittest.TestCase):
     """The Python reference has to reproduce the physical machine."""
 
@@ -97,6 +105,7 @@ class Rv64ReferenceTests(unittest.TestCase):
                 self.assertLess(value, 1 << 64)
 
 
+@needs_bios
 class Rv64ImageTests(unittest.TestCase):
     """`X.image` is generated, so it has to match the ELF it came from."""
 
@@ -132,6 +141,7 @@ class Rv64ImageTests(unittest.TestCase):
         self.assertLess(items, size - 8192, "leave room for a stack")
 
 
+@needs_bios
 class Rv64SourceTests(unittest.TestCase):
     """Guards for the two mistakes this port actually made."""
 
@@ -281,6 +291,7 @@ class Rv64SourceTests(unittest.TestCase):
 
 
 
+@needs_bios
 class Rv64KeymapTests(unittest.TestCase):
     """The BIOS key tables, read straight out of the assembly."""
 
@@ -325,6 +336,7 @@ class Rv64KeymapTests(unittest.TestCase):
         self.assertEqual(spaces, [0x29])
 
 
+@needs_bios
 class Rv64TimerTests(unittest.TestCase):
     """Machine-mode traps, the CLINT and the clock.
 
@@ -441,6 +453,7 @@ class Rv64TimerTests(unittest.TestCase):
                       "a wall clock has to be clamped, or time goes backwards")
 
 
+@needs_bios
 class Rv64ConsoleTests(unittest.TestCase):
     """The BIOS console, driven by scan codes into a real PS/2 controller.
 
@@ -633,6 +646,7 @@ class Rv64ConsoleTests(unittest.TestCase):
                       "`wait 0` only yields a tick: a parked guest would spin")
 
 
+@needs_bios
 class Rv64StorageTests(unittest.TestCase):
     """The two storage regions: a ROM window and a battery-backed NVRAM.
 
@@ -897,6 +911,7 @@ class Rv64StorageTests(unittest.TestCase):
         self.assertIn("\x18/\x19 item", self._row(29), "and the key legend")
 
 
+@needs_bios
 class Rv64MemExtensionTests(unittest.TestCase):
     """The board's own JavaScript extension: a typed-array memory.
 
@@ -1062,6 +1077,7 @@ console.log(JSON.stringify(out));
         self.assertEqual(data["zero"], 0)
 
 
+@needs_bios
 class Rv64MemoryPathTests(unittest.TestCase):
     """Which memory the core actually reads, and what happens without it.
 
@@ -1146,6 +1162,7 @@ class Rv64MemoryPathTests(unittest.TestCase):
         self.assertIn("public X.memExt", self.source)
 
 
+@needs_bios
 class Rv64NetTests(unittest.TestCase):
     """The host end of the NIC: a relay, not a bridge.
 
@@ -1226,6 +1243,7 @@ class Rv64NetTests(unittest.TestCase):
         self.assertEqual(self.bridge.arp_count, 1)
 
 
+@needs_bios
 class Rv64AtomicTests(unittest.TestCase):
     """`lr`/`sc` are what a kernel's spinlocks are built from, and RV64A is in
     the machine's name, so the reservation has to be here."""
@@ -1274,6 +1292,7 @@ class Rv64AtomicTests(unittest.TestCase):
         self.assertEqual(self.mach.get_reg(5), 10, "and returns the old value")
 
 
+@needs_bios
 class Rv64OpenSbiTests(unittest.TestCase):
     """The firmware on the machine, not only in the model.
 
@@ -1368,6 +1387,7 @@ class Rv64OpenSbiTests(unittest.TestCase):
         self.assertGreater(gen.INFO_AT, gen.DTB_AT + 5_028)
 
 
+@needs_bios
 class Rv64Sv39Tests(unittest.TestCase):
     """Sv39: three levels, 4 KiB and superpages, and a fault that reaches the
     handler the kernel installed. The walker is the gate between "S-mode runs"
@@ -1497,6 +1517,7 @@ class Rv64Sv39Tests(unittest.TestCase):
         self.assertEqual(self.mach.translate(0x1234, rv.FAULT_LOAD), 0x1234)
 
 
+@needs_bios
 class Rv64SupervisorTests(unittest.TestCase):
     """The privilege boundary: `mret` into S-mode, an SBI `ecall` back into
     M-mode, and a trap the firmware delegates to `stvec`."""
@@ -1561,6 +1582,7 @@ class Rv64SupervisorTests(unittest.TestCase):
             self.assertIn(f"public {name}", war, f"{name} is not declared")
 
 
+@needs_bios
 class Rv64BootChainTests(unittest.TestCase):
     """POST, then hand off — the way a board boots what is staged above it.
 
@@ -1629,6 +1651,7 @@ class Rv64BootChainTests(unittest.TestCase):
         self.assertEqual((bare_a1, bare_a2), (0, 0))
 
 
+@needs_bios
 class Rv64CompressedTests(unittest.TestCase):
     """RV64C: the core executes 16-bit instructions by expanding them first, so
     the expander is the whole extension and it has to be exactly right.
@@ -1701,6 +1724,7 @@ class Rv64CompressedTests(unittest.TestCase):
         self.assertIn("% 4", fetch, "and only for quadrant 0-2 halfwords")
 
 
+@needs_bios
 class Rv64ShellTests(unittest.TestCase):
     """The prompt is a shell: the line is kept in memory and parsed on Enter.
 
@@ -1829,6 +1853,7 @@ class Rv64ShellTests(unittest.TestCase):
         self.assertEqual(len(self.mach.gfx), 640 * 480)
 
 
+@needs_bios
 class Rv64MemoryTests(unittest.TestCase):
     """The board's RAM: how big it is, who decides, and how a change happens.
 
@@ -1957,6 +1982,7 @@ class Rv64MemoryTests(unittest.TestCase):
         self.assertIsNone(self.mach.error, self.mach.error)
 
 
+@needs_bios
 class Rv64MemorySetupTests(unittest.TestCase):
     """The memory item on the setup screen: a window with a number you type.
 
@@ -2066,6 +2092,7 @@ class Rv64MemorySetupTests(unittest.TestCase):
         self._key(self.ESCAPE)
 
 
+@needs_bios
 class Rv64FontTests(unittest.TestCase):
     """The glyph table is CP437-shaped: one glyph per byte, 0..255.
 
@@ -2153,6 +2180,7 @@ class Rv64FontTests(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
 
 
+@needs_bios
 class Rv64ControlKeyTests(unittest.TestCase):
     """Control keys: the 8042 sends the code, the firmware translates it."""
 
@@ -2231,6 +2259,7 @@ class Rv64ControlKeyTests(unittest.TestCase):
         self.assertIn("if (K.down.get(_at) > 0)", body, "a key the poll saw must not be doubled")
 
 
+@needs_bios
 class Rv64DiskTests(unittest.TestCase):
     """The block device: one file, hex over a localhost WebSocket, 8 slots.
 

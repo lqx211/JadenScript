@@ -229,6 +229,7 @@ public X.netLink = 0;                    // 1 when the wire's socket is open
  * read instead of guessed at. `serialIn` is the other direction: bytes a
  * monitor wants to type at the guest. */
 public X.serial = [];
+
 public X.serialIn = [];
 public X.serialN = 0;
 /* 0x20 to 0x7E, in order: a byte becomes a character by its position here. */
@@ -1750,6 +1751,16 @@ class Cpu {
     private void getPortReg(p) { // warp
         if (oz == 4) { getReg32(0); return; }
         getReg16(0);
+    }
+
+    /* One byte out of a dword, by index: bswap is four of these and three
+     * multiplies, because there is no bit-reversal primitive in a Scratch
+     * expression. */
+    private void bsB(value, which) { // warp
+        if (which == 0) { v = value % 256; return; }
+        if (which == 1) { v = Operators.math("floor", value / 256) % 256; return; }
+        if (which == 2) { v = Operators.math("floor", value / 65536) % 256; return; }
+        v = Operators.math("floor", value / 16777216) % 256;
     }
 
     private void getReg16(i) { // warp
@@ -5133,6 +5144,77 @@ class Cpu {
             cpuId();
             return;
         }
+        if (_tOp >= 64 && _tOp <= 79) {        // cmovcc: a move that may not move
+            modrm();
+            _tSz = 2;
+            if (dsz == 4) { _tSz = 4; }
+            cond(_tOp % 16);
+            if (v == 1) {
+                getOp(_tSz);
+                putReg32(mreg, v);
+            }
+            return;
+        }
+        if (_tOp >= 200 && _tOp <= 207) {      // bswap r32: four bytes reversed
+            _bsR = _tOp % 8;
+            getReg32(_bsR);
+            _bsV = v;
+            bsB(_bsV, 0);
+            _bsO = v * 16777216;
+            bsB(_bsV, 1);
+            _bsO = _bsO + v * 65536;
+            bsB(_bsV, 2);
+            _bsO = _bsO + v * 256;
+            bsB(_bsV, 3);
+            putReg32(_bsR, (_bsO + v) % 4294967296);
+            return;
+        }
+        if (_tOp == 199) {                     // cmpxchg8b m64, in this group
+            modrm();
+            if (mreg == 1 && mmod < 3) {
+                phys(eseg, ea);
+                _cxA = v;
+                rdw(_cxA);
+                _cxLo = v;
+                rdw(_cxA + 2);
+                _cxLo = _cxLo + v * 65536;
+                rdw(_cxA + 4);
+                _cxHi = v;
+                rdw(_cxA + 6);
+                _cxHi = _cxHi + v * 65536;
+                getReg32(0);
+                _cxWLo = v;
+                getReg32(2);
+                _cxWHi = v;
+                if (_cxLo == _cxWLo && _cxHi == _cxWHi) {
+                    getReg32(1);
+                    _cxNLo = v;
+                    getReg32(3);
+                    _cxNHi = v;
+                    wrw(_cxA, _cxNLo % 65536);
+                    wrw(_cxA + 2, Operators.math("floor", _cxNLo / 65536) % 65536);
+                    wrw(_cxA + 4, _cxNHi % 65536);
+                    wrw(_cxA + 6, Operators.math("floor", _cxNHi / 65536) % 65536);
+                    setFlagTo(6, 1);           // ZF: the swap happened
+                } else {
+                    putReg32(0, _cxLo);
+                    putReg32(2, _cxHi);
+                    setFlagTo(6, 0);
+                }
+            }
+            return;
+        }
+        if (_tOp == 8 || _tOp == 9) {          // invd / wbinvd: nothing to write back
+            return;
+        }
+        if (_tOp == 48) {                      // wrmsr: there is no state to set
+            return;
+        }
+        if (_tOp == 50) {                      // rdmsr: and none to read back
+            putReg32(0, 0);
+            putReg32(2, 0);
+            return;
+        }
         err = join("2-byte opcode ", _tOp, " at ", sr.get(2), ":", ip - 2);
         halted = 1;
     }
@@ -5147,16 +5229,24 @@ class Cpu {
         _leaf = v;
         if (_leaf == 0) {
             putReg16(0, 1);                    // the highest leaf
-            putReg16(3, 0x756E6547);           // 'Genu'
-            putReg16(1, 0x49656E69);           // 'ineI'
-            putReg16(2, 0x6C65746E);           // 'ntel'
+            putReg16(3, 0x756E6547);           // EBX 'Genu'
+            putReg16(2, 0x49656E69);           // EDX 'ineI'
+            putReg16(1, 0x6C65746E);           // ECX 'ntel'
             return;
         }
         if (_leaf == 1) {
-            putReg16(0, 0x0403);               // family 4, model 0, stepping 3
-            putReg16(3, 0x0000);
-            putReg16(1, 0x0000);
-            putReg16(2, 0x0000);
+            /* family 6, model 8, stepping 3: a Pentium III shaped answer. A
+             * 32-bit Linux will not run on less than a 486, and a distro build
+             * asks about cmov and cx8 before it uses them, so the answer is the
+             * machine this one is pretending to be, not the 386 in the name.
+             *
+             * EDX advertises tsc, msr, cx8 and cmov -- what this CPU really
+             * implements. It does *not* advertise fpu: there is no x87 here,
+             * and a kernel told there is one raises #UD at the first fninit. */
+            putReg16(0, 0x0683);               // EAX: family 6, model 8, step 3
+            putReg16(2, 0x8130);               // EDX: tsc, msr, cx8, cmov
+            putReg16(1, 0x0000);               // ECX
+            putReg16(3, 0x0000);               // EBX
             return;
         }
         putReg16(0, 0);

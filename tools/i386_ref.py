@@ -567,6 +567,7 @@ class Machine:
         # COM1: a 16550 with a loopback that goes to this process instead of to
         # a wire. `serial` is what a guest wrote, which is how a Linux boot is
         # watched rather than guessed at.
+        self.msr = {}
         self.serial = bytearray()
         self.serial_in = bytearray()
         self.uart = bytearray(8)          # THR/IER/IIR-FCR/LCR/MCR/LSR/MSR/SCR
@@ -2505,6 +2506,8 @@ def two_byte(m, size, seg, addr_size=2):
             m.rm_write(mod, rm, addr, m.cr[0], 2)
         elif reg == 6:                           # lmsw
             m.write_cr0((m.cr[0] & ~0x0F) | (m.rm_read(mod, rm, addr, 2) & 0x0F))
+        elif reg == 7:                           # invlpg: nothing is cached
+            pass
         return
     if op == 0x00:                               # sldt / str / lldt / ltr / verr / verw
         mod, reg, rm, addr = m.modrm(seg, addr_size)
@@ -2675,12 +2678,57 @@ def two_byte(m, size, seg, addr_size=2):
         leaf = m.reg[0]
         if leaf == 0:
             m.reg[0] = 1
-            m.reg[3], m.reg[2], m.reg[1] = 0x756E6547, 0x6C65746E, 0x49656E69
+            m.reg[3], m.reg[2], m.reg[1] = 0x756E6547, 0x49656E69, 0x6C65746E
         elif leaf == 1:
-            m.reg[0] = 0x0403                 # family 4, model 0, stepping 3
-            m.reg[1] = m.reg[2] = m.reg[3] = 0
+            # family 6, model 8, stepping 3 -- a Pentium III-shaped answer,
+            # because a 32-bit Linux kernel will not run on less than a 486 and
+            # the distro builds want to see cmov and cx8 before they use them
+            m.reg[0] = 0x0683
+            m.reg[1] = 0x0000                     # EBX: no brand, no cache info
+            m.reg[2] = 0x0000                     # ECX: no SSE, no PAE
+            # EDX: tsc, msr, cx8, cmov -- and *not* fpu, because there is no
+            # x87 here yet: advertising it would have the kernel run fninit on
+            # a chip that raises #UD for it, at the first context switch.
+            m.reg[2] = (1 << 4) | (1 << 5) | (1 << 8) | (1 << 15)
         else:
             m.reg[0] = m.reg[1] = m.reg[2] = m.reg[3] = 0
+        return
+    if 0x40 <= op <= 0x4F:                   # cmovcc: a move that may not move
+        mod, reg, rm, addr = m.modrm(seg, addr_size)
+        if branch_condition(m, op & 0x0F):
+            m.setreg(reg, m.rm_read(mod, rm, addr, size), size)
+        return
+    if 0xC8 <= op <= 0xCF:                   # bswap r32: reverse four bytes
+        reg = op & 7
+        value = m.getreg(reg, 4)
+        m.setreg(reg, int.from_bytes(value.to_bytes(4, "little"), "big"), 4)
+        return
+    if op == 0xC7:                           # cmpxchg8b m64 / rdrand, by /reg
+        mod, reg, rm, addr = m.modrm(seg, addr_size)
+        if reg == 1 and mod != 3:            # cmpxchg8b
+            mem = m.read(addr, 4) | (m.read(addr + 4, 4) << 32)
+            want = m.reg[0] | (m.reg[2] << 32)
+            if mem == want:
+                m.set_flag(FLAG_ZF, True)
+                new = m.reg[1] | (m.reg[3] << 32)
+                m.write(addr, new & 0xFFFF_FFFF, 4)
+                m.write(addr + 4, (new >> 32) & 0xFFFF_FFFF, 4)
+            else:
+                m.set_flag(FLAG_ZF, False)
+                m.setreg(0, mem & 0xFFFF_FFFF, 4)
+                m.setreg(2, (mem >> 32) & 0xFFFF_FFFF, 4)
+        return
+    if op == 0x01 and False:
+        return
+    if op in (0x08, 0x09):                   # invd / wbinvd: no cache to write back
+        return
+    if op in (0x30, 0x32):                   # wrmsr / rdmsr: one dummy register
+        if op == 0x30:
+            m.msr[m.reg[1] & 0xFF] = (m.reg[0] & 0xFFFF_FFFF) | (m.reg[2] << 32)
+        else:
+            value = m.msr.get(m.reg[1] & 0xFF, 0)
+            m.setreg(0, value & 0xFFFF_FFFF, 4)
+            m.setreg(2, (value >> 32) & 0xFFFF_FFFF, 4)
         return
     if op == 0x31:                               # rdtsc: a Pentium instruction,
         m.ticks += 1                             # kept because a kernel times

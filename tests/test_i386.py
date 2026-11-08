@@ -1094,12 +1094,15 @@ class I386OpcodeTests(unittest.TestCase):
         self.assertEqual(mach.sreg[rv.SEG_CS], 0x1200, "outside them: #BR")
 
     def test_cpuid_names_the_processor(self) -> None:
+        """EBX, EDX, ECX in that order: the vendor string is spelled out across
+        three registers and this machine used to put it in the wrong two."""
         mach = self._run(bytes([0x0F, 0xA2]), r0=0)
-        self.assertEqual(mach.reg[3], 0x756E6547, "'Genu'")
-        self.assertEqual(mach.reg[2], 0x6C65746E, "'ntel'")
-        self.assertEqual(mach.reg[1], 0x49656E69, "'ineI'")
+        self.assertEqual(mach.reg[3], 0x756E6547, "EBX 'Genu'")
+        self.assertEqual(mach.reg[2], 0x49656E69, "EDX 'ineI'")
+        self.assertEqual(mach.reg[1], 0x6C65746E, "ECX 'ntel'")
         mach = self._run(bytes([0x0F, 0xA2]), r0=1)
-        self.assertEqual(mach.reg[0] >> 8, 4, "family 4")
+        self.assertEqual(mach.reg[0] >> 8, 6, "family 6: a 32-bit Linux will not "
+                                              "boot on the 386 this used to claim")
 
 
 class I386BoardTests(unittest.TestCase):
@@ -1895,6 +1898,74 @@ class I386DriveTests(unittest.TestCase):
         self.assertIn("0xEC", source, "IDENTIFY DEVICE is what it sends")
         self.assertIn("GX_LIVEDRV", source, "the page is live, not a ROM table")
         self.assertIn("drvStr", source, "and the buffer needs its own data segment")
+
+
+class I386ExtendedCpuTests(unittest.TestCase):
+    """The instructions a 486 and a 686 added.
+
+    A 32-bit Linux will not boot on a 386: `X86_MINIMUM_CPU_FAMILY` is 4, and a
+    distro build asks CPUID about `cmov` and `cx8` before it uses them. So the
+    machine answers as a Pentium III and means it -- every instruction below is
+    one a kernel executes on the way in.
+    """
+
+    BIN = ROOT / "userspace/i386/hw686.bin"
+
+    def _run(self) -> rv.Machine:
+        if not self.BIN.exists():
+            self.skipTest("run make i386-extras")
+        blob = self.BIN.read_bytes()
+        mach = rv.Machine()
+        mach.ram[0x1000:0x1000 + len(blob)] = blob
+        mach.sreg[rv.SEG_CS] = 0x0100
+        mach.eip = 0
+        for _ in range(400):
+            mach.step()
+            if mach.halted:
+                break
+        return mach
+
+    def test_bswap_reverses_four_bytes(self) -> None:
+        mach = self._run()
+        self.assertEqual(mach.read(0x0500, 4), 0xE4D3C2B1)
+
+    def test_cpuid_answers_as_a_686_with_the_features_it_has(self) -> None:
+        mach = self._run()
+        self.assertEqual(mach.read(0x0510, 4), 0x0683,
+                         "family 6, model 8, stepping 3")
+        edx = mach.read(0x0520, 4)
+        for bit, name in ((4, "tsc"), (5, "msr"), (8, "cx8"), (15, "cmov")):
+            self.assertTrue(edx >> bit & 1, name)
+        self.assertFalse(edx & 1,
+                         "not fpu: there is no x87, and a kernel told there is "
+                         "one raises #UD at the first fninit")
+
+    def test_cmpxchg8b_swaps_when_the_pair_matches(self) -> None:
+        mach = self._run()
+        self.assertEqual(mach.read(0x0530, 4), 0xCAFEBABE, "the new low half")
+        self.assertEqual(mach.read(0x0534, 4), 0xDEADBEEF, "and the high half")
+
+    def test_cmpxchg8b_loads_the_pair_when_it_does_not(self) -> None:
+        mach = self._run()
+        self.assertEqual(mach.read(0x0550, 4), 1, "memory was left alone")
+        self.assertEqual(mach.read(0x0560, 4), 1, "and edx:eax was loaded")
+        self.assertEqual(mach.read(0x0564, 4), 2)
+
+    def test_cmov_moves_only_when_the_condition_holds(self) -> None:
+        mach = self._run()
+        self.assertEqual(mach.read(0x0570, 4), 7, "ZF set: the move happened")
+        self.assertEqual(mach.read(0x0574, 4), 9, "ZF clear: it did not")
+
+    def test_invd_and_wbinvd_do_not_fault(self) -> None:
+        self.assertEqual(self._run().ram[0x578], 1)
+
+    def test_the_two_machines_agree_on_all_of_it(self) -> None:
+        if not self.BIN.exists():
+            self.skipTest("run make i386-extras")
+        r = subprocess.run([sys.executable, str(ROOT / "tools" / "i386_jsw_check.py"),
+                            "--code", str(self.BIN), "--steps", "60"],
+                           cwd=ROOT, capture_output=True, text=True)
+        self.assertIn("protected mode agrees", r.stdout, r.stdout + r.stderr[-600:])
 
 
 class I386SerialTests(unittest.TestCase):
