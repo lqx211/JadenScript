@@ -7,7 +7,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from tests.helpers import REFERENCE_PROJECT, blocks_of, compile_source, opcodes
+from tests.helpers import (REFERENCE_PROJECT, blocks_of, compile_source,
+                           needs_reference, opcodes)
 from tests.test_roundtrip import write_side_files
 
 from jswc.codegen import Codegen
@@ -237,6 +238,7 @@ class SubstackCallTests(unittest.TestCase):
         self.assertIn("SUBSTACK", loop["inputs"])
 
 
+@needs_reference
 class ThreadLoopTests(unittest.TestCase):
     def test_loop_variable_matches_the_body_reads(self):
         """The loop names a thread variable; the body must read the same one."""

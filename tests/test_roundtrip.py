@@ -12,7 +12,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from tests.helpers import REFERENCE_PROJECT, ROOT, SAMPLE_SOURCE
+from tests.helpers import (REFERENCE_PROJECT, ROOT, SAMPLE_SOURCE,
+                           needs_reference)
 from tests.roundtrip import (
     canonical_from_loaded,
     canonical_from_project,
@@ -63,6 +64,7 @@ def roundtrip(source_path: Path, workdir: Path) -> tuple[dict, dict, list[str]]:
     return canonical_from_project(first), canonical_from_project(second), decompiler.diagnostics
 
 
+@needs_reference
 class RoundTripTests(unittest.TestCase):
     def assert_source_roundtrips(self, source_path: Path):
         with tempfile.TemporaryDirectory() as tmp:

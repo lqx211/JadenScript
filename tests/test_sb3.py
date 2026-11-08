@@ -6,7 +6,8 @@ import unittest
 import zipfile
 from pathlib import Path
 
-from tests.helpers import SAMPLE_SOURCE, compile_source, reference_json
+from tests.helpers import (SAMPLE_SOURCE, compile_source, needs_reference,
+                           reference_json)
 
 from jswc.sb3 import build_project_dict, write_project_json, write_sb3
 from jswc.validator import validate
@@ -23,6 +24,7 @@ class player { // Sprite: player (0,0) size=100 direction=90 show=1
 
 
 class Sb3Tests(unittest.TestCase):
+    @needs_reference
     def test_target_keys_match_the_reference_project(self):
         reference = reference_json()
         ref_stage = next(t for t in reference["targets"] if t["isStage"])
@@ -85,6 +87,7 @@ class Sb3Tests(unittest.TestCase):
         _, second = compile_source(SMALL)
         self.assertEqual(build_project_dict(first), build_project_dict(second))
 
+    @needs_reference
     def test_reference_file_compiles_to_a_valid_project(self):
         _, project = compile_source(SAMPLE_SOURCE.read_text(encoding="utf-8"))
         self.assertEqual(validate(project), [])

@@ -15,6 +15,16 @@ ROOT = Path(__file__).resolve().parent.parent
 REFERENCE_PROJECT = ROOT / "sample_np4.26_sb3" / "project.json"
 SAMPLE_SOURCE = ROOT / "sample.jsw"
 
+#: The 167 MB reference archive is third-party material and is not in the
+#: repository: a clone has every test that does not need it, and the ones that
+#: do say so instead of failing. Fetch it (NotePlayer 4, GPL-3.0) and unpack it
+#: as `sample_np4.26_sb3/` to run them.
+HAVE_REFERENCE = REFERENCE_PROJECT.exists()
+needs_reference = unittest.skipUnless(
+    HAVE_REFERENCE,
+    "sample_np4.26_sb3/ is not in the repository (third-party fixture)",
+)
+
 
 def parse_source(source: str) -> tuple[Parser, object]:
     parser = Parser(tokenize(source))
