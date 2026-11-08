@@ -44,7 +44,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y nasm
       - name: build the images
         run: |
-          make i386
+          make i386 i386-extras
       - name: i386
         run: |
           python -m unittest tests.test_i386 tests.test_i386_disk \

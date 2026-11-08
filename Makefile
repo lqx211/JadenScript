@@ -128,6 +128,14 @@ i386:
 	cp userspace/i386/meow.bin build/i386/tftp/boot.nbp
 	$(PY) -m jswc build userspace/i386/i386.jsw -o build/i386/i386.sb3 --target turbowarp
 
+# Every demo program the test-suite steps through. `i386` builds the firmware and
+# the boot sectors; these are the small programs the CPU tests run in both
+# machines, and a clone that only ran `i386` had sixty tests saying "assemble me
+# first".
+i386-extras:
+	cd userspace/i386 && nasm -f bin pm16.asm -o pm16.bin -l pm16.lst
+	cd userspace/i386 && nasm -f bin kernel.asm -o kernel.bin -l kernel.lst
+
 # The network, in two processes: the wire the machine dials, and (for a real
 # LAN address) the same wire attached to a physical interface as root.
 i386-net:
