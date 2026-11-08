@@ -231,6 +231,8 @@ public X.netLink = 0;                    // 1 when the wire's socket is open
 public X.serial = [];
 public X.serialIn = [];
 public X.serialN = 0;
+/* 0x20 to 0x7E, in order: a byte becomes a character by its position here. */
+public X.ascii = " !\x22#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~";
 public X.uart = [0, 0, 0, 3, 0, 96, 0, 0];   // THR IER IIR/FCR LCR MCR LSR MSR SCR
 public X.netSent = 0;                    // frames the sprite has sent
 public X.netDrop = 0;                    // and frames it had to drop
@@ -2999,7 +3001,11 @@ class Cpu {
 
     /* What the guest has written, as text. Called by whoever wants to show it;
      * the list is drained so a machine that runs for an hour does not keep an
-     * hour of console. */
+     * hour of console.
+     *
+     * A Scratch string has no character arithmetic, so a byte becomes a letter
+     * by its position in the printable run: `letterOf` counts from one, and
+     * 0x20 is the first of the ninety-five. */
     public void serialTake(n) { // warp
         _st = "";
         _sn = 0;
@@ -3007,7 +3013,7 @@ class Cpu {
             _c = X.serial.get(1);
             X.serial.delete(1);
             if (_c >= 32 && _c < 127) {
-                _st = _st + Operators.join(Operators.letterOf(_c + 0));
+                _st = _st + Operators.letterOf(_c - 31, X.ascii);
             } elif (_c == 13 || _c == 10) {
                 _st = _st + "\n";
             }
