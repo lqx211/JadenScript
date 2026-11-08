@@ -22,10 +22,15 @@ ZEROPAGE equ 0x10000              ; ... and the same three as linear addresses,
 CMDLINE  equ 0x12000              ;     because that is what the kernel and
 GDTBASE  equ 0x13000              ;     the protocol are given
 ELFSEC   equ 0x8000               ; the kernel's first sector, read by the BIOS
-DAP      equ 0x04F0               ; the disk address packet int 13h wants
-KLBA     equ 0x0520               ; the kernel's first LBA, in sectors
-KSEC     equ 0x0524               ; how long it is
-ENTRY    equ 0x0528               ; where the kernel said to jump
+; The scratch lives inside this image, not in the free-looking bytes below
+; 0x7C00: the BIOS uses some of those itself, and an int 13h that zeroes the
+; packet it was just handed is a boot that reads the wrong sector for ever.
+DAP      equ dap
+KLBA     equ klba
+KSEC     equ ksec
+ENTRY    equ entry
+ATALBA   equ atalba
+ATADST   equ atadst
 COM1     equ 0x3F8
 ATA_CMD  equ 0x1F0
 
@@ -217,13 +222,13 @@ kernel_ready:
 ; many, and 0x1F7 takes the command and then reports whether the drive is ready.
 load_sectors:
         mov     ebp, ecx               ; bytes still to move
-        mov     [0x540], eax           ; lba
-        mov     [0x544], edi           ; destination
+        mov     [ATALBA], eax          ; lba
+        mov     [ATADST], edi          ; destination
 .sector:
         test    ebp, ebp
         jz      .out
-        mov     eax, [0x540]
-        mov     edi, [0x544]
+        mov     eax, [ATALBA]
+        mov     edi, [ATADST]
         ; the sector number, high byte first: 0x1F6 carries 0xE0 | lba[27:24]
         mov     ecx, eax
         shr     ecx, 24
@@ -231,14 +236,14 @@ load_sectors:
         mov     dx, 0x1F6
         mov     al, cl
         out     dx, al
-        mov     eax, [0x540]
+        mov     eax, [ATALBA]
         mov     dx, 0x1F3
         out     dx, al
-        mov     eax, [0x540]
+        mov     eax, [ATALBA]
         shr     eax, 8
         mov     dx, 0x1F4
         out     dx, al
-        mov     eax, [0x540]
+        mov     eax, [ATALBA]
         shr     eax, 16
         mov     dx, 0x1F5
         out     dx, al
@@ -265,8 +270,8 @@ load_sectors:
         in      ax, dx
         stosw
         loop    .copy
-        add     dword [0x544], 512
-        inc     dword [0x540]
+        add     dword [ATADST], 512
+        inc     dword [ATALBA]
         sub     ebp, 512
         jmp     .sector
 .out:
@@ -340,6 +345,13 @@ gdtr:   dw      0
 
         ; the image builder looks for this marker and writes the next two
         ; dwords: nothing loads a kernel from a fixed address any more
+klba:   dd      9                      ; patched by the image builder
+ksec:   dd      0
+entry:  dd      0
+atalba: dd      0
+atadst: dd      0
+dap:    times   16 db 0
+
 patch:  dd      'KSDL'
         dd      9                      ; the kernel's first lba
         dd      0                      ; how many sectors it is
