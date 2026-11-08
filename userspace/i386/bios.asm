@@ -910,8 +910,8 @@ int13:
     mov     dx, [si + 6]
     push    es
     mov     es, dx
-    mov     ebp, [si + 8]           ; the lba
-    call    disk_read_lba           ; through the drive, not through a copy
+    mov     esi, [si + 8]           ; the lba -- not EBP, which is this
+    call    disk_read_lba           ; handler's own frame pointer
     pop     es
     jc      .fail
     jmp     .ok
@@ -931,7 +931,7 @@ int13:
     and     dx, 0x3F
     dec     dx
     add     ax, dx
-    movzx   ebp, ax                 ; the lba, which is already a sector number
+    movzx   esi, ax                 ; the lba, which is already a sector number
     mov     di, bx
     pop     cx                      ; cl = the sector count
     xor     ch, ch
@@ -968,7 +968,7 @@ int13:
 ; and a boot from a cold disk is exactly the case that has to work. So a read
 ; is the same five port writes and 256 `insw` an operating system would do.
 ;
-;   ebp = first lba        cx = how many sectors        es:di = where
+;   esi = first lba        cx = how many sectors        es:di = where
 ;   carry set on a drive error, and AH is left as 0x04 so the caller's int 13h
 ;   can report "sector not found" the way its callers expect
 ; ---------------------------------------------------------------------------
@@ -979,22 +979,23 @@ disk_read_lba:
     push    di
     push    es
     push    si
+    push    esi
 .sector:
     jcxz    .done
     ; the sector number, high byte first: 0x1F6 carries 0xE0 | lba[27:24]
-    mov     eax, ebp
+    mov     eax, esi
     shr     eax, 24
     or      al, 0xE0
     mov     dx, 0x1F6
     out     dx, al
-    mov     eax, ebp
+    mov     eax, esi
     mov     dx, 0x1F3
     out     dx, al
-    mov     eax, ebp
+    mov     eax, esi
     shr     eax, 8
     mov     dx, 0x1F4
     out     dx, al
-    mov     eax, ebp
+    mov     eax, esi
     shr     eax, 16
     mov     dx, 0x1F5
     out     dx, al
@@ -1017,7 +1018,7 @@ disk_read_lba:
     mov     cx, 256                 ; words in a sector
     rep     insw
     pop     cx
-    inc     ebp
+    inc     esi
     dec     cx
     jmp     .sector
 .done:
@@ -1026,6 +1027,7 @@ disk_read_lba:
 .failed:
     stc
 .out:
+    pop     esi
     pop     si
     pop     es
     pop     di
