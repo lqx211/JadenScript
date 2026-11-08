@@ -164,25 +164,52 @@ def boot(mach, image: bytes, cmdline: bytes = DEFAULT_CMDLINE) -> dict:
     return facts
 
 
-def main(argv: list[str]) -> int:
+def post(ram: int = 64 << 20, disk: bytes | None = None):
+    """A machine that has just finished POST, with the RAM and disk we mean."""
     import i386_image
 
+    mach = rv.Machine(ram_size=ram, disk=disk)
+    rom = i386_image.build()
+    mach.ram[0:len(rom)] = rom
+    mach.sreg[rv.SEG_CS] = rv.RESET_CS
+    mach.eip = rv.RESET_IP
+    mach.run(limit=2_000_000)                   # POST, which brings COM1 up
+    mach.cmos[0x17] = ((ram >> 20) - 1) & 0xFF   # the RAM this board really has
+    mach.cmos[0x18] = (((ram >> 20) - 1) >> 8) & 0xFF
+    return mach
+
+
+def boot_disk(mach, blob: bytes) -> None:
+    """Boot sector 0 the way the firmware would: loaded at 0x7C00, jumped to.
+
+    The disk itself is the image the host server serves, so the loader's sector
+    reads go through the same ATA device a browser would drive."""
+    if len(blob) < 512 or blob[510:512] != b"\x55\xaa":
+        raise ValueError("that disk has no boot sector")
+    mach.ram[0x7C00:0x7E00] = blob[0:512]
+    for seg in (rv.SEG_CS, rv.SEG_SS, rv.SEG_DS, rv.SEG_ES):
+        mach.loadseg(seg, 0)          # a selector is not a descriptor
+        mach.cache_segment(seg, 0)
+    mach.eip = 0x7C00
+    mach.reg[7] = 0
+    mach.reg[3] = 0
+    mach.reg[2] = 0x80                          # dl: the first hard disk
+
+
+def main(argv: list[str]) -> int:
     if len(argv) < 2:
         print(__doc__.split("\n\n")[1], file=sys.stderr)
         return 2
     image = Path(argv[1]).read_bytes()
     steps = int(argv[2]) if len(argv) > 2 else 200_000
+    disk = "--disk" in argv
 
-    mach = rv.Machine(ram_size=64 << 20)
-    rom = i386_image.build()
-    mach.ram[0:len(rom)] = rom
-    mach.sreg[rv.SEG_CS] = rv.RESET_CS
-    mach.eip = rv.RESET_IP
-    mach.run(limit=2_000_000)                   # POST
-    mach.cmos[0x17] = 63                         # the RAM this board really has
-    mach.cmos[0x18] = 0
-
-    facts = boot(mach, image)
+    mach = post(disk=image if disk else None)
+    if disk:
+        boot_disk(mach, image)
+        facts = {"entry": 0, "segments": []}
+    else:
+        facts = boot(mach, image)
     print(f"entry {facts['entry']:#x}, "
           + ", ".join(f"{s['paddr']:#x}+{s['memsz']:#x}" for s in facts["segments"]))
 

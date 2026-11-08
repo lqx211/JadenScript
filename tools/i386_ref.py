@@ -443,7 +443,7 @@ class Segments(list):
 class Machine:
     """A 386 with 1 MiB of RAM, a text plane and an interrupt table."""
 
-    def __init__(self, ram_size: int = RAM_SIZE) -> None:
+    def __init__(self, ram_size: int = RAM_SIZE, disk: bytes | None = None) -> None:
         self.ram = bytearray(ram_size)
         self.ram_size = ram_size
         self.reg = [0] * 8
@@ -504,6 +504,11 @@ class Machine:
         self.ata_drv = 0
         self.ata_smart_on = 0
         self.ata_sectors = 128
+        # A disk that is a file rather than a corner of RAM: the host server has
+        # always had one, and now the model can be handed the same image.
+        self.disk_image = disk
+        if disk:
+            self.ata_sectors = max(1, len(disk) // 512)
         # ---- AHCI ------------------------------------------------------
         # A register file the guest reaches with ordinary stores, and a
         # command list it builds in RAM: the SATA controller is memory, not
@@ -871,9 +876,26 @@ class Machine:
                 self.ata_status = 0x50
         return value & 0xFFFF
 
+    def sector(self, lba: int) -> bytes:
+        """One sector, from the file-backed image if there is one, otherwise
+        from the staged image in RAM. Everything that reads a disk goes through
+        here so the two never disagree."""
+        if self.disk_image is not None:
+            at = lba * 512
+            return bytes(self.disk_image[at:at + 512])
+        at = DISK_AT + lba * 512
+        return bytes(self.ram[at:at + 512])
+
+    def ident(self) -> list[int]:
+        """IDENTIFY DEVICE, with the capacity the drive really has: words 60
+        and 61 are the LBA28 sector count, and a driver believes them."""
+        out = list(ATA_IDENT)
+        out[59] = self.ata_sectors & 0xFFFF      # word 60: capacity, low half
+        out[60] = (self.ata_sectors >> 16) & 0xFFFF   # word 61: the high half
+        return out
+
     def _ata_load(self) -> None:
-        start = DISK_AT + self.ata_lba * 512
-        blob = self.ram[start:start + 512]
+        blob = self.sector(self.ata_lba)
         self.ata_buf = [blob[i] | (blob[i + 1] << 8) for i in range(0, len(blob), 2)]
         self.ata_pos = 0
         self.ata_status = 0x58
@@ -887,7 +909,7 @@ class Machine:
             self.ata_status = 0x41
             return
         if cmd == 0xEC:
-            self.ata_buf = list(ATA_IDENT)
+            self.ata_buf = self.ident()
             self.ata_pos = 0
             self.ata_status = 0x58
             return
@@ -992,12 +1014,13 @@ class Machine:
         dba = self.read(ctba + 128, 4) if prdtl else 0
         if cmd == 0xEC:
             for i in range(256):
-                self.write(dba + i * 2, ATA_IDENT[i], 2)
+                ident = self.ident()
+                self.write(dba + i * 2, ident[i], 2)
         else:
             n = count or 1
             for s in range(n):
-                start = DISK_AT + (lba + s) * 512
-                self.ram[dba + s * 512:dba + s * 512 + 512] = self.ram[start:start + 512]
+                at = dba + s * 512
+                self.ram[at:at + 512] = self.sector(lba + s)
         self.ahci[b + 8] = 0x00000050
 
     # ---- SCSI --------------------------------------------------------
@@ -1092,6 +1115,14 @@ class Machine:
 
     def serial_text(self) -> str:
         return bytes(self.serial).decode("latin-1")
+
+    def port_in16(self, port: int) -> int:
+        """One word off a port. The ATA data register is a word device -- that
+        is the whole point of `in ax, dx` -- so `insw` from it takes one word
+        per pass, not two bytes added together."""
+        if port == 0x1F0:
+            return self.ata_in()
+        return self.port_in(port, 1) | (self.port_in(port, 1) << 8)
 
     def port_in(self, port, size):
         if NIC_IO <= port < NIC_IO + 256:
@@ -2351,9 +2382,7 @@ def execute(m):
             if op in (0x6C, 0x6D):           # ins: port -> es:di
                 # the port model is byte-granular, so a 16-bit read is two of
                 # them -- the same thing `in ax, dx` does
-                value = m.port_in(m.reg[2] & 0xFFFF, 1)
-                if osize == 2:
-                    value |= m.port_in(m.reg[2] & 0xFFFF, 1) << 8
+                value = m.port_in16(m.reg[2] & 0xFFFF)
                 m.write(m.phys(SEG_ES, m.reg[7] & amask), value, osize)
                 m.reg[7] = (m.reg[7] + delta) & amask
             else:                            # outs: ds:si -> port

@@ -906,20 +906,14 @@ int13:
 .edd_read:
     ; the disk address packet: count, offset, segment, then a 64-bit lba
     mov     cx, [si + 2]            ; how many sectors
-    shl     cx, 8                   ; ... in words
     mov     di, [si + 4]            ; where the caller wants them
     mov     dx, [si + 6]
-    mov     eax, [si + 8]           ; the lba, low half, sectors to bytes
-    shl     eax, 9
-    push    ds
     push    es
-    mov     si, ax
-    mov     ax, DISK_SEG
-    mov     ds, ax
     mov     es, dx
-    rep     movsw
+    mov     ebp, [si + 8]           ; the lba
+    call    disk_read_lba           ; through the drive, not through a copy
     pop     es
-    pop     ds
+    jc      .fail
     jmp     .ok
 .read:
     ; the sector count rides on the stack: ax is about to become the lba
@@ -937,15 +931,12 @@ int13:
     and     dx, 0x3F
     dec     dx
     add     ax, dx
-    shl     ax, 9                   ; 512 bytes a sector
-    mov     si, ax
-    mov     ax, DISK_SEG
-    mov     ds, ax
+    movzx   ebp, ax                 ; the lba, which is already a sector number
     mov     di, bx
     pop     cx                      ; cl = the sector count
-    and     cx, 0xFF
-    shl     cx, 8                   ; sectors * 256 words
-    rep     movsw
+    xor     ch, ch
+    call    disk_read_lba           ; through the drive, not through a copy
+    jc      .fail
 .ok:
     and     word [ss:bp + 6], 0xFFFE ; clear carry: it worked
     xor     ah, ah
@@ -967,6 +958,81 @@ int13:
     pop     bx
     pop     bp
     iret
+
+; ---------------------------------------------------------------------------
+; disk_read_lba: the drive, one sector at a time.
+;
+; The firmware used to answer int 13h out of a copy of the disk that lived in
+; RAM, which was honest while the disk *was* 128 sectors of a build-time list.
+; It is not honest now: the drive is a device, the image is a file on the host,
+; and a boot from a cold disk is exactly the case that has to work. So a read
+; is the same five port writes and 256 `insw` an operating system would do.
+;
+;   ebp = first lba        cx = how many sectors        es:di = where
+;   carry set on a drive error, and AH is left as 0x04 so the caller's int 13h
+;   can report "sector not found" the way its callers expect
+; ---------------------------------------------------------------------------
+disk_read_lba:
+    push    eax
+    push    ecx
+    push    edx
+    push    di
+    push    es
+    push    si
+.sector:
+    jcxz    .done
+    ; the sector number, high byte first: 0x1F6 carries 0xE0 | lba[27:24]
+    mov     eax, ebp
+    shr     eax, 24
+    or      al, 0xE0
+    mov     dx, 0x1F6
+    out     dx, al
+    mov     eax, ebp
+    mov     dx, 0x1F3
+    out     dx, al
+    mov     eax, ebp
+    shr     eax, 8
+    mov     dx, 0x1F4
+    out     dx, al
+    mov     eax, ebp
+    shr     eax, 16
+    mov     dx, 0x1F5
+    out     dx, al
+    mov     dx, 0x1F2
+    mov     al, 1                   ; one sector a command
+    out     dx, al
+    mov     dx, 0x1F7
+    mov     al, 0x20                ; READ SECTORS
+    out     dx, al
+.wait:
+    in      al, dx
+    test    al, 0x08                ; DRQ: the drive has the sector
+    jnz     .ready
+    test    al, 0x01                ; ERR: it never will
+    jnz     .failed
+    jmp     .wait
+.ready:
+    mov     dx, 0x1F0
+    push    cx
+    mov     cx, 256                 ; words in a sector
+    rep     insw
+    pop     cx
+    inc     ebp
+    dec     cx
+    jmp     .sector
+.done:
+    clc
+    jmp     .out
+.failed:
+    stc
+.out:
+    pop     si
+    pop     es
+    pop     di
+    pop     edx
+    pop     ecx
+    pop     eax
+    ret
 
 ; ---------------------------------------------------------------------------
 ; int 14h: the first serial port.
