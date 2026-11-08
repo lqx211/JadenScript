@@ -258,7 +258,13 @@ load_sectors:
 .ready:
         mov     dx, ATA_CMD
         mov     ecx, 256               ; words in a sector
-        rep     insw                   ; es:edi, and ES is flat
+        ; `rep insw` is not usable here: in a 32-bit code segment the operand
+        ; prefix that makes it 16-bit also makes the *address* 16-bit, and DI
+        ; cannot reach 16 MB. `in ax, dx` plus `stosw` keeps EDI 32-bit.
+.copy:
+        in      ax, dx
+        stosw
+        loop    .copy
         add     dword [0x544], 512
         inc     dword [0x540]
         sub     ebp, 512
