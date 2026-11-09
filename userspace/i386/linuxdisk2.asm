@@ -280,13 +280,12 @@ load_sectors:
 .ready:
         mov     dx, ATA_CMD
         mov     ecx, 256               ; words in a sector
-        ; `rep insw` is not usable here: in a 32-bit code segment the operand
-        ; prefix that makes it 16-bit also makes the *address* 16-bit, and DI
-        ; cannot reach 16 MB. `in ax, dx` plus `stosw` keeps EDI 32-bit.
-.copy:
-        in      ax, dx
-        stosw
-        loop    .copy
+        ; `rep insw`: the element is a word (the 66 prefix) and the address is
+        ; still EDI, because a string instruction's address size comes from the
+        ; 67 prefix and not from the operand size. It is also the difference
+        ; between a step per sector and a step per word -- thirty thousand
+        ; sectors is thirty thousand instructions, not thirty million.
+        rep     insw
         add     dword [ATADST], 512
         inc     dword [ATALBA]
         sub     ebp, 512
