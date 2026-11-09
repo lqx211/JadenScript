@@ -2474,11 +2474,10 @@ class Cpu {
          * image is there it *is* the drive, and the staged list is only what
          * fits in a project. */
         if (X.netDisk == 1) {
-            while (_i < 256) {
-                _a = X.ataLba * 512 + _i * 2;
-                X.ataBuf.set(_i + 1, Ram.diskread8(_a) + Ram.diskread8(_a + 1) * 256);
-                _i += 1;
-            }
+            /* One call, not 768 blocks: the drive's data register wants 256
+             * words, and building them a byte at a time in Scratch is how a
+             * thirty-thousand-sector boot becomes a frozen tab. */
+            Ram.diskwords(256, X.ataLba * 512, X.ataBuf);
             X.ataPos = 0;
             X.ataStatus = 88;             // ready, and data wanted (DRDY|DRQ|DSC)
             X.ataSectors = X.netDiskSectors;

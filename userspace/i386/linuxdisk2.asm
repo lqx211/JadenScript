@@ -31,6 +31,8 @@ KSEC     equ ksec
 ENTRY    equ entry
 ATALBA   equ atalba
 ATADST   equ atadst
+ATABAT   equ atabat
+BAT      equ 32                 ; sectors one ATA command covers
 COM1     equ 0x3F8
 ATA_CMD  equ 0x1F0
 
@@ -264,8 +266,20 @@ load_sectors:
         shr     eax, 16
         mov     dx, 0x1F5
         out     dx, al
+        ; How many sectors this command covers: up to BAT sectors, and never
+        ; more than are left. The drive steps the LBA itself between them, so
+        ; the five port writes and the poll are paid once a batch instead of
+        ; once a sector -- which is most of what a Scratch ATA read costs.
+        mov     ebx, ebp
+        add     ebx, 511
+        shr     ebx, 9                 ; sectors still to read
+        cmp     ebx, BAT
+        jbe     .batch
+        mov     ebx, BAT
+.batch:
+        mov     [ATABAT], ebx
         mov     dx, 0x1F2
-        mov     al, 1                  ; one sector a command
+        mov     al, bl
         out     dx, al
         mov     dx, 0x1F7
         mov     al, 0x20               ; READ SECTORS
@@ -279,16 +293,20 @@ load_sectors:
         jmp     .wait
 .ready:
         mov     dx, ATA_CMD
-        mov     ecx, 256               ; words in a sector
+        mov     ebx, [ATABAT]
+        shl     ebx, 8                 ; words in a batch: 256 a sector
+        mov     ecx, ebx
         ; `rep insw`: the element is a word (the 66 prefix) and the address is
         ; still EDI, because a string instruction's address size comes from the
         ; 67 prefix and not from the operand size. It is also the difference
         ; between a step per sector and a step per word -- thirty thousand
         ; sectors is thirty thousand instructions, not thirty million.
         rep     insw
-        add     dword [ATADST], 512
-        inc     dword [ATALBA]
-        sub     ebp, 512
+        mov     ebx, [ATABAT]
+        add     [ATALBA], ebx          ; the lba counts sectors
+        shl     ebx, 9                 ; the destination counts bytes
+        add     [ATADST], ebx
+        sub     ebp, ebx
         jmp     .sector
 .out:
         ret
@@ -366,6 +384,7 @@ ksec:   dd      0
 entry:  dd      0
 atalba: dd      0
 atadst: dd      0
+atabat: dd      0
 dap:    times   16 db 0
 
 patch:  dd      'KSDL'

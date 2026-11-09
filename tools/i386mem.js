@@ -112,6 +112,12 @@ class I386Mem {
                     text: 'load hex [TEXT] into the disk at [ADDR]'
                 },
                 {
+                    opcode: 'diskwords',
+                    blockType: Scratch.BlockType.COMMAND,
+                    text: 'fill [LIST] with [COUNT] disk words at [ADDR]',
+                    arguments: { COUNT: number(256), ADDR: number(0) }
+                },
+                {
                     opcode: 'diskread8',
                     blockType: Scratch.BlockType.REPORTER,
                     text: 'disk byte at [ADDR]',
@@ -279,6 +285,29 @@ class I386Mem {
             this.disk[at + i] = parseInt(text.substr(i * 2, 2), 16) || 0;
         }
         this.writes += count;
+    }
+
+    /* One sector into the ATA data register, in one call. The data register
+     * hands the guest a word at a time, so the drive has to hold 256 of them;
+     * filling them with `diskread8` twice each is 768 blocks a sector, and
+     * thirty thousand sectors of that is a frozen tab, not a boot.
+     */
+    diskwords(args) {
+        const list = args.LIST;
+        if (!this.disk || !list || typeof list.replace !== "function") {
+            return;
+        }
+        const at = Number(args.ADDR) >>> 0;
+        const count = Math.max(0, Math.min(Number(args.COUNT) | 0, 0x10000));
+        const words = new Array(count);
+        for (let i = 0; i < count; i++) {
+            const p = at + i * 2;
+            words[i] = (p + 1 < this.disk.length)
+                ? (this.disk[p] | (this.disk[p + 1] << 8))
+                : 0;
+        }
+        list.replace(1, words);
+        this.reads += count;
     }
 
     diskread8(args) {

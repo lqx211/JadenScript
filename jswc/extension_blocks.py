@@ -43,6 +43,7 @@ EXTENSION_BLOCKS: dict[str, dict] = {
             "save": {"type": "COMMAND", "args": [["ADDR", "NUMBER", ""], ["LEN", "NUMBER", ""], ["LIST", "LIST", ""]]},
             "allocdisk": {"type": "COMMAND", "args": [["BYTES", "NUMBER", ""]]},
             "hexload": {"type": "COMMAND", "args": [["TEXT", "STRING", ""], ["ADDR", "NUMBER", ""]]},
+            "diskwords": {"type": "COMMAND", "args": [["COUNT", "NUMBER", ""], ["ADDR", "NUMBER", ""], ["LIST", "LIST", ""]]},
             "diskread8": {"type": "REPORTER", "args": [["ADDR", "NUMBER", ""]]},
             "stats": {"type": "REPORTER", "args": []},
         },
