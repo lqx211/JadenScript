@@ -2850,11 +2850,22 @@ def two_byte(m, size, seg, addr_size=2):
         return
     if op in (0x08, 0x09):                   # invd / wbinvd: no cache to write back
         return
-    if op in (0x30, 0x32):                   # wrmsr / rdmsr: one dummy register
+    if op in (0x30, 0x32):                   # wrmsr / rdmsr
         if op == 0x30:
-            m.msr[m.reg[1] & 0xFF] = (m.reg[0] & 0xFFFF_FFFF) | (m.reg[2] << 32)
+            # The two MSRs that are not decoration: a kernel sets the FS and GS
+            # bases from here, and then addresses per-cpu data as `%fs:0x...`.
+            # Ignoring them made every such read a read of linear zero, which
+            # is how a loop count comes back as a number with no meaning.
+            value = (m.reg[0] & 0xFFFF_FFFF) | ((m.reg[2] & 0xFFFF_FFFF) << 32)
+            m.msr[m.reg[1] & 0xFFFF] = value
+            if (m.reg[1] & 0xFFFF) == 0xC000_0100:
+                m.base[SEG_FS] = value & 0xFFFF_FFFF
+                m.sreg[SEG_FS] = 0            # a base with no selector
+            elif (m.reg[1] & 0xFFFF) == 0xC000_0101:
+                m.base[SEG_GS] = value & 0xFFFF_FFFF
+                m.sreg[SEG_GS] = 0
         else:
-            value = m.msr.get(m.reg[1] & 0xFF, 0)
+            value = m.msr.get(m.reg[1] & 0xFFFF, 0)
             m.setreg(0, value & 0xFFFF_FFFF, 4)
             m.setreg(2, (value >> 32) & 0xFFFF_FFFF, 4)
         return

@@ -630,6 +630,9 @@ class Cpu {
     private idtrBase = 0;
     private idtrLimit = 0;
     private sbase = [0, 0, 0, 0, 0, 0, 0];
+    private _msrNo = 0;
+    private _msrLo = 0;
+    private _msrHi = 0;
     private slimit = [65535, 65535, 65535, 65535, 65535, 65535, 65535];
     private dsz = 2;                    // what an unprefixed instruction means
     private _pgFault = 0;               // already delivering a page fault
@@ -5208,12 +5211,34 @@ class Cpu {
         if (_tOp == 8 || _tOp == 9) {          // invd / wbinvd: nothing to write back
             return;
         }
-        if (_tOp == 48) {                      // wrmsr: there is no state to set
-            return;
-        }
-        if (_tOp == 50) {                      // rdmsr: and none to read back
-            putReg32(0, 0);
-            putReg32(2, 0);
+        if (_tOp == 48 || _tOp == 50) {        // wrmsr / rdmsr
+            /* Two of these are not decoration: a kernel sets the FS and GS
+             * bases here and then addresses its per-cpu data as `%fs:0x...`.
+             * With nothing behind the instruction every such read is a read of
+             * linear zero, and a loop bound comes back as a number that means
+             * nothing. The rest are kept so a read answers what was written. */
+            getReg32(1);
+            _msrNo = v % 65536;
+            if (_tOp == 48) {
+                getReg32(0);
+                _msrLo = v;
+                getReg32(2);
+                _msrHi = v;
+                if (_msrNo == 3221225728) {
+                    sbase.set(4, _msrLo);
+                    sr.set(4, 0);
+                } elif (_msrNo == 3221225729) {
+                    sbase.set(5, _msrLo);
+                    sr.set(5, 0);
+                }
+                return;
+            }
+            _msrLo = 0;
+            _msrHi = 0;
+            if (_msrNo == 3221225728) { _msrLo = sbase.get(4) + 0; }
+            if (_msrNo == 3221225729) { _msrLo = sbase.get(5) + 0; }
+            putReg32(0, _msrLo % 4294967296);
+            putReg32(2, _msrHi % 4294967296);
             return;
         }
         err = join("2-byte opcode ", _tOp, " at ", sr.get(2), ":", ip - 2);
