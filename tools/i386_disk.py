@@ -241,9 +241,14 @@ class Volume:
             if not self.mounted or self.faults.offline:
                 self._fail("drive is offline")
                 return False, "offline"
-            if lba < 0 or lba + count > self.sectors:
-                self._fail(f"sector {lba}+{count} past the end ({self.sectors})")
+            if lba < 0 or lba >= self.sectors:
+                self._fail(f"sector {lba} past the end ({self.sectors})")
                 return False, "past the end"
+            # A read that runs off the end answers with what is left. A client
+            # pulling a whole image asks for a round number of sectors and the
+            # image is not a round number of sectors; refusing the last short
+            # request would truncate the kernel by up to sixty-three sectors.
+            count = min(count, self.sectors - lba)
             self._wait()
             if self.faults.read_error_rate and random.random() < self.faults.read_error_rate:
                 self.smart.crc_errors += 1

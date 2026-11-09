@@ -136,6 +136,8 @@ public X.netAcks = 0;                    // sectors the host took
 public X.netFails = 0;                   // sectors it refused
 public X.netLast = "";                   // what it said when it refused the last one
 public X.netIdent = "";                  // IDENTIFY DEVICE, as the host sent it
+public X.netDisk = 0;                    // 1 when the host handed over an image
+public X.netDiskSectors = 0;             // ... and how long it is
 public X.netDeferred = 0;                // a lost write the bus was too busy to report
 public X.ataWrote = [0];                 // sectors the guest has written this session
 public X.text = [];                      // the text plane
@@ -2465,6 +2467,30 @@ class Cpu {
          * turns into something else entirely. */
         _base = X.ataLba * 128;
         _i = 0;
+#ifdef TURBOWARP
+        /* A disk image the host handed over lives in the extension's own
+         * buffer: sixteen megabytes of sectors is not a Stage list, and the
+         * guest's RAM has already taken the memory the board has. When that
+         * image is there it *is* the drive, and the staged list is only what
+         * fits in a project. */
+        if (X.netDisk == 1) {
+            while (_i < 256) {
+                _a = X.ataLba * 512 + _i * 2;
+                X.ataBuf.set(_i + 1, Ram.diskread8(_a) + Ram.diskread8(_a + 1) * 256);
+                _i += 1;
+            }
+            X.ataPos = 0;
+            X.ataStatus = 88;             // ready, and data wanted (DRDY|DRQ|DSC)
+            X.ataSectors = X.netDiskSectors;
+            if (X.netOn > 0) {
+                X.netOut.add(join("H ", X.ataLba));
+                if (X.netOut.length() > 64) {
+                    X.netOut.delete(1);
+                }
+            }
+            return;
+        }
+#endif
         while (_i < 256) {
             _d = 0;
             if (_base + Operators.math("floor", _i / 2) < X.disk.length()) {
@@ -2618,9 +2644,11 @@ class Cpu {
             return;
         }
         X.ataLba = X.ataLbaLo + X.ataLbaMid * 256 + X.ataLbaHi * 65536;
-        if (X.ataLba >= X.ataSectors) {
+        if (X.ataLba >= X.ataSectors && (X.netDisk == 0 || X.ataLba >= X.netDiskSectors)) {
             /* A sector that does not exist is an error, not a read of zeros:
-             * a driver that gets spare bytes back writes them somewhere. */
+             * a driver that gets spare bytes back writes them somewhere. A
+             * drive the host handed over is as long as the image it sent, not
+             * as long as the staged list. */
             X.ataErr = 0x10;              // ID not found
             X.ataStatus = 65;             // ready, and an error
             return;

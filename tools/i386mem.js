@@ -101,6 +101,23 @@ class I386Mem {
                     text: 'load [LEN] bytes at [ADDR] from list [LIST]'
                 },
                 {
+                    opcode: 'allocdisk',
+                    blockType: Scratch.BlockType.COMMAND,
+                    text: 'allocate [BYTES] bytes of disk',
+                    arguments: { BYTES: number(16777216) }
+                },
+                {
+                    opcode: 'hexload',
+                    blockType: Scratch.BlockType.COMMAND,
+                    text: 'load hex [TEXT] into the disk at [ADDR]'
+                },
+                {
+                    opcode: 'diskread8',
+                    blockType: Scratch.BlockType.REPORTER,
+                    text: 'disk byte at [ADDR]',
+                    arguments: { ADDR: number(0) }
+                },
+                {
                     opcode: 'save',
                     blockType: Scratch.BlockType.COMMAND,
                     text: 'save [LEN] bytes at [ADDR] into list [LIST]'
@@ -230,6 +247,43 @@ class I386Mem {
             out[i] = this.buf[at + i];
         }
         list.replace(1, out);
+    }
+
+    /* The disk, in a buffer of its own. Guest RAM and the drive are different
+     * things on a real board and the guest's RAM is already the whole of the
+     * buffer above; sixteen megabytes of sectors in the same array would be
+     * sixteen megabytes the guest could not use.
+     */
+    allocdisk(args) {
+        const bytes = Math.max(0, Number(args.BYTES) | 0);
+        this.disk = new Uint8Array(bytes);
+        return bytes;
+    }
+
+    /* A reply from tools/i386_disk.py is `D <hex>`: one sector, or sixty-four
+     * of them if the request asked for that many. Decoding it here is the
+     * difference between a boot and an afternoon -- the same text parsed with
+     * `letterOf` in Scratch is a hundred thousand blocks a message.
+     */
+    hexload(args) {
+        if (!this.disk) {
+            return;
+        }
+        let text = String(args.TEXT || "");
+        if (text.charCodeAt(0) === 68 && text.charCodeAt(1) === 32) {
+            text = text.slice(2);           // "D "
+        }
+        const at = Number(args.ADDR) >>> 0;
+        const count = Math.min(text.length >> 1, this.disk.length - at);
+        for (let i = 0; i < count; i++) {
+            this.disk[at + i] = parseInt(text.substr(i * 2, 2), 16) || 0;
+        }
+        this.writes += count;
+    }
+
+    diskread8(args) {
+        const at = Number(args.ADDR) >>> 0;
+        return this.disk && at < this.disk.length ? this.disk[at] : 0;
     }
 
     stats() {

@@ -38,6 +38,8 @@ class NetDisk {
     private sent = 0;
     private msg = "";
     private head = "";
+    private pulling = 0;               // 1 while the drive is being pulled over
+    private pullAt = 0;                // how many bytes of it have arrived
 
     public void netStart() { // hook: green flag
         Looks.hide();
@@ -60,6 +62,18 @@ class NetDisk {
         }
         X.netOn = 1;
         WebSocket.sendMessage("I");         // who the drive says it is
+        /* The drive on the host is a file, and a file is not a Stage list: a
+         * kernel is sixteen megabytes before it has done anything. So the whole
+         * image is pulled into the extension's own buffer, sixty-four sectors a
+         * message, and from then on a sector read is an index rather than a
+         * round trip. A read that had to wait for a round trip is the reason
+         * booting from a cold network disk used to hang. */
+        Ram.allocdisk(33554432);
+        pulling = 1;
+        pullAt = 0;
+        X.netDisk = 0;
+        X.netDiskSectors = 0;
+        X.netOut.add(join("R ", 0, " ", 64));
         while (1) {
             pump();
             Control.wait(0);
@@ -85,6 +99,26 @@ class NetDisk {
         head = "";
         if (Operators.length(msg) > 0) {
             head = Operators.letterOf(1, msg);
+        }
+        if (pulling == 1) {
+            if (head == "D") {
+                Ram.hexload(pullAt, msg);
+                /* however many sectors the host actually sent: the last
+                 * request of an image is short, and the drive is as long as
+                 * what arrived */
+                pullAt += (Operators.length(msg) - 2) / 2;
+                X.netOut.add(join("R ", Operators.math("floor", pullAt / 512), " ", 64));
+                return;
+            }
+            if (head == "E") {
+                /* The host answered "no such sector": that is the end of the
+                 * image, and the drive is now as long as what arrived. */
+                pulling = 0;
+                X.netDiskSectors = Operators.math("floor", pullAt / 512);
+                X.netDisk = 1;
+                X.reboot = 1;            // the firmware reads sector 0 again
+                return;
+            }
         }
         if (head == "W") {
             if (Operators.length(msg) < 5) {
