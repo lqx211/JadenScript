@@ -40,6 +40,12 @@ class LexResult:
 
 
 def tokenize(source: str) -> LexResult:
+    # A UTF-8 BOM is what Notepad and plenty of Windows editors write by
+    # default. It is not part of the program: strip it so the first `class`
+    # does not read as `unexpected character '\ufeff'`. Column numbers on line
+    # one then match what the editor shows, because the editor hides the BOM.
+    if source.startswith("\ufeff"):
+        source = source[1:]
     result = _Lexer(source).run()
     result.source = source
     return result

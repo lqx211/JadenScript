@@ -31,7 +31,7 @@ EXIT_INTERRUPTED = 130
 
 
 def _read(path: str | Path) -> str:
-    return Path(path).read_text(encoding="utf-8")
+    return Path(path).read_text(encoding="utf-8-sig")
 
 
 def _load(path: str | Path, defines: set[str] | None = None) -> Source:
@@ -104,7 +104,7 @@ def _file_text(path: str) -> str:
     text = _FILE_CACHE.get(path)
     if text is None:
         try:
-            text = Path(path).read_text(encoding="utf-8")
+            text = Path(path).read_text(encoding="utf-8-sig")
         except OSError:
             text = ""
         _FILE_CACHE[path] = text

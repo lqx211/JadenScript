@@ -554,7 +554,7 @@ class VarPlanner:
                 decl.col,
                 code="E0058",
             )
-        text = path.read_text(encoding="utf-8")
+        text = path.read_text(encoding="utf-8-sig")
         if suffix == ".jsv":
             self.plan.class_vars.setdefault(cls.name, {})[name] = VarDef(
                 name=name,
@@ -606,13 +606,13 @@ class VarPlanner:
                 code="E0058",
             )
         if suffix == ".jsv":
-            value = path.read_text(encoding="utf-8")
+            value = path.read_text(encoding="utf-8-sig")
             self.plan.globals[name] = VarDef(
                 name=name, initial=value.rstrip("\n"), public=True, node=decl, from_import=True
             )
             return
         if suffix in (".jsa", ".jsl"):
-            text = path.read_text(encoding="utf-8")
+            text = path.read_text(encoding="utf-8-sig")
             if suffix == ".jsa":
                 try:
                     items = json.loads(text)

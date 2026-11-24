@@ -27,6 +27,14 @@ class LexerTests(unittest.TestCase):
             ],
         )
 
+    def test_a_utf8_bom_is_not_part_of_the_program(self):
+        # Notepad and plenty of Windows editors write one by default.
+        self.assertEqual(
+            kinds("\ufeffclass a { }"),
+            [(Kind.KEYWORD, "class"), (Kind.IDENT, "a"),
+             (Kind.PUNCT, "{"), (Kind.PUNCT, "}")],
+        )
+
     def test_operators_are_longest_match_first(self):
         self.assertEqual(
             [value for kind, value in kinds("a**b>=c!=d&&e++") if kind is Kind.OP],

@@ -92,7 +92,9 @@ def expand(path: str | Path, *, defines: set[str] | None = None,
         chain = " -> ".join(p.name for p in (*_seen, resolved))
         raise IncludeError(f"include cycle: {chain}")
     try:
-        text = path.read_text(encoding="utf-8")
+        # ``utf-8-sig``: a BOM in an included file would otherwise land in the
+        # middle of the spliced source and read as ``unexpected character``.
+        text = path.read_text(encoding="utf-8-sig")
     except OSError as exc:
         raise IncludeError(f"cannot read {path}: {exc.strerror}") from exc
 

@@ -57,6 +57,21 @@ class AssetImportTests(unittest.TestCase):
         program = Parser(tokenize(source)).parse()
         return Codegen(program, base_dir=self.root).compile()
 
+    def test_a_bom_in_an_imported_state_file_is_dropped(self):
+        (self.root / "items.jsa").write_bytes(b'\xef\xbb\xbf["a", "b"]')
+        (self.root / "value.jsv").write_bytes(b"\xef\xbb\xbfhello")
+        project = self.compile(
+            "class a {\n"
+            '  import "items.jsa" as items;\n'
+            '  import "value.jsv" as val;\n'
+            "  void f(){}\n}"
+        )
+        target = next(t for t in project.targets if t.name == "a")
+        lists = {value[0]: value[1] for value in target.lists.values()}
+        variables = {value[0]: value[1] for value in target.variables.values()}
+        self.assertEqual(lists["items"], ["a", "b"])
+        self.assertEqual(variables["val"], "hello")
+
     def test_png_becomes_a_costume_with_real_dimensions(self):
         project = self.compile(
             "class a { // Sprite: a (0,0) size=100 direction=90 show=1\n"

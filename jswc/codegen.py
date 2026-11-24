@@ -1538,7 +1538,10 @@ class Codegen:
 
     def _import_state(self, target: Target, decl, payload: bytes, extension: str,
                       name: str) -> None:
-        text = payload.decode("utf-8")
+        # ``utf-8-sig`` is plain UTF-8 with a leading BOM dropped: a ``.jsa``
+        # written by a Windows editor would otherwise fail as invalid JSON, and
+        # a ``.jsv``/``.jsl`` would carry the BOM into the value.
+        text = payload.decode("utf-8-sig")
         if extension == "jsv":
             target.declare_variable(name, text.rstrip("\n"))
             return
