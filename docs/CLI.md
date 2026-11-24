@@ -55,8 +55,20 @@ Useful flags:
 | `--project-json` | write an unzipped `project.json` instead of a zip |
 | `--locals sprite\|thread` | where bare variables live (`thread` needs `lmsTempVars2`) |
 | `--warp` | every custom block runs without screen refresh |
-| `--enable FEATURE` | turn on a language feature (repeatable, see `jswc features`) |
+| `--enable FEATURE` | turn on a language feature (repeatable, see `jswc features`; `pishiSupport` adds the pishi.ai extensions) |
 | `--target scratch\|turbowarp` | which build of one source: defines `SCRATCH` or `TURBOWARP` for `#ifdef` |
+| `--enable FEATURE` | turn on a language feature (repeatable) |
+| `--obf-junk N` | with `doObfuscation`: junk strings to shuffle into each pool (default: one per real item, `0` adds no decoys) |
+| `--obf-flatten N` | with `doObfuscation`: turn hat bodies of up to `N` blocks into a state machine (default 16, `0` disables) |
+| `--obf-pools N` | with `doObfuscation`: spread the literals over `N` lists (default 3, `1` puts them all in one) |
+| `--obf-scrub` | with `doObfuscation`: drop workspace comments and randomise block positions |
+| `--obf-ints auto\|list\|none` | with `doObfuscation`: how integer literals are hidden (default `auto`: one variable per constant, ~1.4×; `list`: `item of list` like text, ~3.3×; `none`: inline, free) |
+| `--vm-budget N` | with `vmProtect`: interpreter steps per loop iteration (default 1, one per frame; `0` is treated as `1`) |
+| `--vm-style list\|h0` | with `vmProtect`: `h0` (default) gives every instruction an explicit `switch` case; `list` dispatches through a shared `__vm_step` |
+| `--vm-seed N` | with `vmProtect`: seed the randomized VM layout; omit it for a fresh layout on every build |
+| `--vm-crypt 0..3` | with `vmProtect`: `0` fixed layout, `1` randomized layout (default), `2` add checksum guards, `3` add decoy cases |
+| `--vm-split` / `--no-vm-split` | with `vmProtect`: put each h0 instruction body in its own helper method (default: split; `--no-vm-split` keeps it in `__vm_switch`) |
+| `--only-sprite NAME` | emit the Stage and that one sprite, for a quick single-sprite edit loop (a kept sprite that still calls a dropped one gets `W0029`) |
 | `-D/--define NAME` | define `NAME` for `#ifdef` (repeatable) |
 | `--allow-undefined` | undefined globals become warnings instead of errors |
 | `--strict` | exit 1 as soon as a diagnostic is produced |
@@ -67,7 +79,68 @@ Features are opt-in because they change the shape of the generated project:
 ```bash
 jswc build project.jsw --enable useTempVariables --enable commentMetadata
 jswc build project.jsw --enable namespacedNames --enable doObfuscation
+jswc build project.jsw --enable doObfuscation --enable corruptBlockPos
+jswc build project.jsw --enable vmProtect --vm-budget 4
+jswc build project.jsw --enable vmProtect --vm-style list
 ```
+
+`vmProtect` replaces supported hat bodies and custom-block bodies with calls to
+a per-sprite bytecode interpreter (`-l info` prints how many programs it took
+and how many scripts stayed native; a program is a hat or a custom block). It is
+deliberately slow: the interpreter runs one instruction per frame by default,
+and `--vm-budget N` trades that slowdown for speed. A script or custom block
+using a block outside the supported set stays native and reports `W0031`;
+`vanillaScratch` skips `vmProtect` entirely with `W0030`. The generated project
+uses the same built-in blocks and extensions the source did, but it is meant for
+TurboWarp-sized projects, where the slowdown can be tuned.
+
+The default `h0` backend uses the hand-written state-machine shape from
+`examples/h0.jsw`: `__vm_switch` contains one numbered `case` per instruction,
+and `__vm_run` keeps calling it. `--vm-style list` instead stores the
+instruction stream in Stage lists and dispatches it through a shared
+`__vm_step` if/elif chain. Both styles use the same bytecode lowering,
+native-call handling, frame allocator and warp rules; only the dispatch
+differs. The `h0` style produces many more Scratch blocks and its case chain is
+generally slower at runtime; use `--vm-style list` for smaller, faster builds.
+Either style changes the generated control flow, not the JSW source or its
+class names.
+
+The VM layout is randomized per build: opcode ids, h0 case labels and their
+order, and the generated helper names are not stable between builds. This keeps
+two builds of the same source from sharing a readable dispatch table. Pass
+`--vm-seed N` to reproduce a build exactly. `--vm-crypt N` selects the layout:
+`0` is a fixed layout for debugging, `1` is the default randomized layout,
+`2` also adds a checksum guard to every VM entry, and `3` adds unreachable
+decoy cases. In h0 style, each unique instruction body is emitted as a helper
+method by default (`--vm-split`), so no single function contains the whole
+dispatch; `--no-vm-split` puts the bodies back inside `__vm_switch`.
+
+A guarded green-flag reset clears the shared VM arena/free list when no frame
+is active; completed runs also reset the allocator by themselves. Generic
+community-extension commands and reporters are virtualized when their metadata
+and fixed menus are known; extension hats keep their native trigger and
+virtualize the body. A computed extension menu, some extension loops, or an unsupported extension
+conditional still falls back to native blocks with `W0031`.
+
+Custom-block parameters are part of the protected frame, and procedure calls
+from either the interpreter or an ordinary native script go through the
+generated stub. Nested calls allocate VM frames and return them to the free
+list when the callee halts, so recursion works. The frame arena starts at 320
+slots and grows by one frame when nested calls or concurrent clones need more,
+so live frames are never overwritten. `--warp` only speeds up the native stubs the
+interpreter calls: `__vm_run` itself stays a non-warp loop so it always yields.
+For the same reason, `// warp` custom blocks and every procedure they call stay
+native; a virtualised caller can still call them, but their bodies are not
+protected.
+
+`corruptBlockPos` is the anti-tamper build: every target gets a few blocks
+nothing can reach whose `next`/`parent`/input ids name blocks that do not
+exist, a prototype whose `%b` parameter holds a string reporter, and block
+positions scattered at random. The VM only follows references from a hat, so
+the project still runs; scratch-blocks resolves the whole blocks map, so the
+TurboWarp editor reports the missing ids and refuses to open the workspace.
+It is independent of `doObfuscation` (combine them for a release), and off by
+default because a corrupt project cannot be opened for editing.
 
 `--target` and `-D` are the preprocessor's, not a feature flag: they are
 resolved before lexing, so the lines they hide never reach the parser. One
@@ -80,14 +153,22 @@ jswc build machine.jsw -o build/machine-scratch.sb3 --target scratch
 jswc build machine.jsw -o build/debug.sb3 -D TRACE
 ```
 
+`check` accepts both flags too, so the editor's fast pass answers a question
+about the same text the build will compile — see §3.
+
 `jswc features` prints the current list:
 
 ```
 language features
   • commentMetadata
+  • corruptBlockPos
   • doObfuscation
+  • hideObjectNames
   • namespacedNames
+  • pishiSupport
   • useTempVariables
+  • vanillaScratch
+  • vmProtect
   enable with --enable FEATURE (repeatable)
 ```
 
@@ -113,7 +194,11 @@ jswc decompile sample_np4.26_sb3.zip -o build/final/zip.jsw
 - monitors, costume metadata and sprite properties are preserved as
   `// monitor`, `// costume` and `// Sprite:` comments; add
   `#enable_feature<commentMetadata>;` at the top of the decompiled file to make
-  the compiler read them back.
+  the compiler read them back,
+- `--strict-roundtrip` exits 1 when something would not survive the trip back:
+  a name that had to be renamed (`I0001`) or a block kept as text (`W0008`).
+  The differences are listed under the failure, which is what makes the flag
+  usable in CI.
 
 ---
 
@@ -136,6 +221,21 @@ checking project.jsw
 `check` never generates a project, so it is the fast feedback loop while
 editing. Parsing is lenient (an unclosed `(` is auto-closed and reported);
 `--strict` makes any diagnostic exit with code 1.
+
+It takes the same `-D` / `--target` as `build`, because a file full of `#ifdef`
+has more than one correct reading and the one that matters is the build you are
+about to make:
+
+```bash
+jswc check project.jsw --target turbowarp     # the branches that build defines
+jswc check project.jsw                        # neither: both branches dropped
+```
+
+Without the flags the preprocessor runs with nothing defined, so every guarded
+branch is invisible and `check` answers the "neither build" question. If a line
+only exists under `#ifdef TURBOWARP`, ask about it with `--target turbowarp` —
+the diagnostic keeps the line number the author wrote, dropped lines above it or
+not.
 
 ### Machine-readable output
 
@@ -427,11 +527,31 @@ The spinner writes to **stderr**, results to **stdout**, so
 jswc decompile project.sb3 -o roundtrip/project.jsw
 jswc build roundtrip/project.jsw -o roundtrip/project_rt.sb3
 
+# ... and fail when the trip cannot be exact
+jswc decompile project.sb3 -o roundtrip/project.jsw --strict-roundtrip
+
+# one sprite, while it is being edited
+jswc build machine.jsw -o build/one.sb3 --only-sprite Cpu
+
 # fail CI on any new warning
 jswc build src/main.jsw -o build/main.sb3 --strict
 
-# ship a build with names hidden
+# ship a build with names hidden, decoys in place and state machines on
 jswc build src/main.jsw -o build/hidden.sb3 --enable doObfuscation
+
+# the same, but small: no junk strings and straight scripts
+jswc build src/main.jsw -o build/hidden.sb3 --enable doObfuscation \
+    --obf-junk 0 --obf-flatten 0
+
+# the same, for a CPU that has to keep every last frame: numbers stay inline
+jswc build src/main.jsw -o build/hidden.sb3 --enable doObfuscation --obf-ints none
+
+# bytecode-protected scripts, slowed to one instruction per frame
+jswc build src/main.jsw -o build/protected.sb3 --enable vmProtect
+
+# a release build: one string list, no comments, no canvas positions
+jswc build src/main.jsw -o build/release.sb3 --enable doObfuscation \
+    --obf-pools 1 --obf-scrub
 
 # find where a reporter is used
 jswc tokens src/main.jsw | grep -i "setPenColorToColor"

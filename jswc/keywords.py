@@ -29,6 +29,7 @@ KEYWORDS: frozenset[str] = frozenset(
         "return",
         "call",
         "import",
+        "include",
         "as",
         "true",
         "false",
@@ -164,14 +165,16 @@ PUNCTUATION: tuple[str, ...] = ("(", ")", "{", "}", "[", "]", ",", ";", ".", ":"
 # read these sets, so a word can never be highlighted but not completed.
 # ---------------------------------------------------------------------------
 
-#: Monitor modes: the fourth word of a ``metadata`` line.
+#: Monitor modes: the fourth word of a ``metadata`` line, including the long
+#: spellings ``largeReadout`` and ``slider(min,max)``.
 MONITOR_MODES: frozenset[str] = frozenset(
-    {"normal", "large", "slider", "list", "default"}
+    {"normal", "large", "largeReadout", "slider", "list", "default"}
 )
 
 #: The structural words around a ``metadata`` line.
 METADATA_WORDS: frozenset[str] = frozenset(
-    {"pos", "at", "hidden", "shown", "range", "watchers", "min", "max"}
+    {"pos", "at", "hidden", "shown", "range", "watchers", "min", "max",
+     "discrete", "continuous"}
 )
 
 #: ``stage: costume=0, volume=100, …;`` and ``Sprite: name="x", x=0, …;``
@@ -198,6 +201,20 @@ FEATURES: frozenset[str] = frozenset(
         "commentMetadata",
         "namespacedNames",
         "doObfuscation",
+        # Write a project the VM runs but the editor cannot open: dangling
+        # block references, a string reporter in a ``%b`` slot, and block
+        # positions scattered at random. Anti-tamper, off by default.
+        "corruptBlockPos",
+        # Compile supported scripts to bytecode for a per-sprite interpreter.
+        # Slow by design; a vanillaScratch build keeps its native blocks.
+        "vmProtect",
+        # The pishi.ai player's extensions (Facemesh, Arduino, AIChatBot, ...).
+        # Off by default: they only exist in that player, so a build that turns
+        # them on cannot be a vanilla Scratch project.
+        "pishiSupport",
+        # compile to blocks scratch.mit.edu can run: no TurboWarp-only loop
+        # blocks, and the extensions a project cannot ship are reported
+        "vanillaScratch",
         # The old spelling: still accepted, reported as obsolete.
         "hideObjectNames",
     }

@@ -12,6 +12,15 @@ Two layers:
 
 Both directions use the same tables, so a project always decompiles to
 something that compiles back to the same opcode.
+
+The pishi.ai extensions (:data:`jswc.pishi_blocks.PISHI_BLOCKS`) are the one
+family that is **not** always available: they live in pishi's own player, so a
+project that uses them only loads there, and `#enable_feature<pishiSupport>;`
+is what says "this build is for that player". With the feature off their
+namespaces are unknown, exactly like any other extension nobody has written
+down; with it on they resolve like the rest, and their names are checked
+against the other extensions and the project's own names (see
+:func:`pishi_namespace_conflicts`).
 """
 
 from __future__ import annotations
@@ -20,6 +29,48 @@ from dataclasses import dataclass, field
 
 from .extension_blocks import EXTENSION_BLOCKS
 from .opcodes import BOOLEAN, COLOR, MATH_NUM, TEXT
+from .pishi_blocks import PISHI_BLOCKS
+
+#: The feature that turns the pishi.ai extensions on.
+PISHI_FEATURE = "pishiSupport"
+
+
+def catalogue(features=()) -> dict[str, dict]:
+    """The extension table this build resolves against.
+
+    Everything in :data:`EXTENSION_BLOCKS` is always there -- a TurboWarp
+    extension is fetched from a URL and works in any player. pishi's are only
+    there when the source asked for them, so a project that never mentions the
+    feature cannot silently depend on a player it does not name.
+    """
+    if PISHI_FEATURE not in features:
+        return EXTENSION_BLOCKS
+    return _MERGED
+
+
+_MERGED: dict[str, dict] = {**EXTENSION_BLOCKS, **PISHI_BLOCKS}
+
+
+def pishi_namespace_conflicts() -> list[tuple[str, str, str]]:
+    """``(namespace, extension id, other source)`` for names two features claim.
+
+    A namespace is how a project *spells* a block (``Arduino.high(13)``), so two
+    extensions with the same one is not a style problem: the compiler would pick
+    one and the player the other. The caller reports these as errors.
+    """
+    ours = {entry["namespace"]: extension for extension, entry in PISHI_BLOCKS.items()}
+    theirs = {entry["namespace"]: extension for extension, entry in EXTENSION_BLOCKS.items()}
+    clashes = []
+    for namespace, extension in sorted(ours.items()):
+        other = theirs.get(namespace)
+        if other is not None:
+            clashes.append((namespace, extension, other))
+    return clashes
+
+
+def pishi_namespaces() -> set[str]:
+    """The namespaces `pishiSupport` adds, whether or not it is on."""
+    return {entry["namespace"] for entry in PISHI_BLOCKS.values()}
 
 # ArgumentType -> sb3 input primitive.
 PRIMITIVES: dict[str, int] = {
@@ -220,8 +271,8 @@ class ExtensionCall:
         return BOOLEAN if self.kind == "BOOLEAN" else MATH_NUM
 
 
-def extension_for_namespace(namespace: str) -> str | None:
-    for extension_id, entry in EXTENSION_BLOCKS.items():
+def extension_for_namespace(namespace: str, features=()) -> str | None:
+    for extension_id, entry in catalogue(features).items():
         if entry["namespace"] == namespace:
             return extension_id
     return None
@@ -236,15 +287,21 @@ def _snake(name: str) -> str:
     return "".join(out)
 
 
-def resolve(namespace: str, method: str, arg_count: int | None = None) -> ExtensionCall | None:
-    """Resolve ``Namespace.method`` to an extension block, if one exists."""
+def resolve(namespace: str, method: str, arg_count: int | None = None,
+            features=()) -> ExtensionCall | None:
+    """Resolve ``Namespace.method`` to an extension block, if one exists.
+
+    ``features`` is the set the source asked for; it is what makes the pishi
+    extensions resolvable (see :data:`PISHI_FEATURE`).
+    """
+    table = catalogue(features)
     by_arity = ARITY_ALIASES.get((namespace, method))
     if by_arity is not None:
         chosen = by_arity.get(arg_count) if arg_count is not None else by_arity.get(0)
         if chosen is None:
             return None
         alias = chosen
-        entry = EXTENSION_BLOCKS.get(_extension_of(alias.opcode, namespace), {})
+        entry = table.get(_extension_of(alias.opcode, namespace), {})
         spec = entry.get("blocks", {}).get(alias.opcode)
         if spec is None:
             return None
@@ -258,7 +315,7 @@ def resolve(namespace: str, method: str, arg_count: int | None = None) -> Extens
         )
     alias = ALIASES.get((namespace, method))
     if alias is not None:
-        entry = EXTENSION_BLOCKS.get(_extension_of(alias.opcode, namespace), {})
+        entry = table.get(_extension_of(alias.opcode, namespace), {})
         spec = entry.get("blocks", {}).get(alias.opcode)
         if spec is None:
             return None
@@ -271,10 +328,10 @@ def resolve(namespace: str, method: str, arg_count: int | None = None) -> Extens
             method=method,
         )
 
-    extension_id = extension_for_namespace(namespace)
+    extension_id = extension_for_namespace(namespace, features)
     if extension_id is None:
         return None
-    blocks = EXTENSION_BLOCKS[extension_id]["blocks"]
+    blocks = table[extension_id]["blocks"]
     for candidate in (method, _snake(method)):
         if candidate in blocks:
             spec = blocks[candidate]
@@ -298,8 +355,8 @@ def _extension_of(opcode: str, namespace: str) -> str:
     return namespace
 
 
-def reverse(full_opcode: str,
-            values: dict[str, object] | None = None) -> tuple[str, str, ExtensionCall] | None:
+def reverse(full_opcode: str, values: dict[str, object] | None = None,
+            features=()) -> tuple[str, str, ExtensionCall] | None:
     """``skyhigh173JSON_json_is`` → (``JSON``, ``isArray``, call) when aliased.
 
     ``values`` are the argument values the block actually carries. Several
@@ -310,7 +367,7 @@ def reverse(full_opcode: str,
     if "_" not in full_opcode:
         return None
     extension_id, opcode = full_opcode.split("_", 1)
-    entry = EXTENSION_BLOCKS.get(extension_id)
+    entry = catalogue(features).get(extension_id)
     if entry is None:
         return None
     spec = entry["blocks"].get(opcode)
@@ -371,8 +428,8 @@ def reverse(full_opcode: str,
     )
 
 
-def known_namespaces() -> set[str]:
-    return {entry["namespace"] for entry in EXTENSION_BLOCKS.values()}
+def known_namespaces(features=()) -> set[str]:
+    return {entry["namespace"] for entry in catalogue(features).values()}
 
 
 def known_members(namespace: str | None = None) -> set[str]:

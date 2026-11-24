@@ -241,9 +241,9 @@ def format_diagnostic(text: str, source: str | None = None,
         index = line - 1
         cursor = lines[index] if 0 <= index < len(lines) else ""
         caret_at = col or 1
-        if not cursor.strip() and index > 0:
+        if not cursor.strip() and index > 0 and lines:
             # EOF errors point past the last real line; show it instead of a blank.
-            back = index - 1
+            back = min(index - 1, len(lines) - 1)
             while back >= 0 and not lines[back].strip():
                 back -= 1
             if back >= 0:

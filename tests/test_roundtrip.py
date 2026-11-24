@@ -28,7 +28,14 @@ from jswc.sb3 import write_sb3
 from jswc.sb3 import build_project_dict
 from jswc.sb3_read import load_sb3
 
-EXAMPLES = sorted((ROOT / "examples").glob("*.jsw"))
+#: Hand-written examples only. A decompiled import carries its ``.orig.sb3``
+#: beside it; it is a fixture, not an example, and it may use blocks the
+#: decompiler can only keep as text (``W0008``), so it cannot promise the
+#: "round trips exactly" contract this list exists to enforce.
+EXAMPLES = sorted(
+    path for path in (ROOT / "examples").glob("*.jsw")
+    if not path.with_suffix(".orig.sb3").exists()
+)
 
 
 def compile_source_file(source_path: Path, workdir: Path):

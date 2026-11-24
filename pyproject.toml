@@ -17,6 +17,12 @@ classifiers = [
 ]
 dependencies = []
 
+[project.optional-dependencies]
+# `tools/midi_to_fl2.py` reads MIDI with `mido`, and the tests use it as the
+# oracle for the runtime loader -- the same file parsed offline and in the VM.
+# pip install -e ".[midi]"
+midi = ["mido>=1.3"]
+
 [project.scripts]
 jswc = "jswc.cli:main"
 

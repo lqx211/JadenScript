@@ -16,6 +16,7 @@ Lowering rules worth knowing about (all verified against the reference
 
 from __future__ import annotations
 
+import collections
 import functools
 
 import dataclasses
@@ -31,8 +32,10 @@ from . import opcodes as O
 from . import keycodes
 from .ir import Block, IdGen, Inline, Lit, Project, Ref, ShadowRef, Target, Value
 from . import lints
-from .obfuscate import obfuscate_project
+from .obfuscate import corrupt_block_positions, obfuscate_project
+from .vmprotect import protect_project
 from .extension_blocks import MICROBIT_CONSTANTS
+from . import extensions
 from .extensions import ARITY_ALIASES, known_namespaces, resolve
 from .keywords import BUILTIN_NAMESPACES, FEATURES, STATE_ALIASES
 from .tokens import CompileError
@@ -47,8 +50,35 @@ _HOOK_RE = re.compile(
     r"hook:\s*when\s*\[\s*(?:\"((?:[^\"\\]|\\.)*)\"|([^\]]*))\s*\]\s*key",
     re.IGNORECASE,
 )
-#: Text that is really a number, so it needs no hiding.
-_POOL_SKIP = re.compile(r"-?\d+(?:\.\d+)?")
+#: Text that is really a *float*, so it needs no hiding. Integers are pooled
+#: like any other literal: the numbers a project runs on say what it does just
+#: as much as the sentences do.
+_POOL_SKIP = re.compile(r"-?(?:\d+\.\d*|\.\d+|\d+)[eE][-+]?\d+|-?\d+\.\d*|-?\.\d+")
+
+#: Longest hat body ``doObfuscation`` turns into a state machine. Every state
+#: adds a branch to a dispatch block, so a script with more blocks than this is
+#: left straight -- the noise is worth less than the blocks it costs.
+DEFAULT_OBF_FLATTEN = 16
+
+#: How many lists the text literals are spread over. One list holding every
+#: string in the project is the one thing in the workspace that reads as "this
+#: is the string table"; three of them look like three more pieces of state, and
+#: the decoy lists are grown to match. Costs nothing at run time.
+DEFAULT_OBF_POOLS = 3
+
+#: A literal that is a plain integer -- the case ``--obf-ints none`` keeps inline.
+_INTEGER = re.compile(r"-?\d+")
+
+
+@dataclass
+class _Pool:
+    """One list of collected literals, and every reporter that reads it."""
+
+    name: str
+    list_id: str
+    items: dict[str, int] = field(default_factory=dict)
+    lookups: list[tuple[Block, str]] = field(default_factory=list)
+
 
 _BROADCAST_HOOK_RE = re.compile(r"hook:\s*broadcast\s+(.+?)\s*(?://|$)", re.IGNORECASE)
 _FLAG_HOOK_RE = re.compile(r"hook:\s*(?:when\s*)?(?:green\s*flag|flag\s*clicked)", re.IGNORECASE)
@@ -81,6 +111,11 @@ _MICROBIT_PIN_RE = re.compile(
 _PROCCODE_RE = re.compile(r"proccode\s+([^/]+?)\s*(?=//|$)", re.IGNORECASE)
 _AT_RE = re.compile(r"\bat\s+(-?[\d.]+)\s*,\s*(-?[\d.]+)")
 _UNDEFINED_RE = re.compile(r"\bundefined\b", re.IGNORECASE)
+#: ``// warp`` runs the whole custom block without yielding; ``// no-warp``
+#: keeps its frames even under ``--warp``. The negative form has to be read
+#: first, or ``no-warp`` matches the word ``warp`` and means the opposite.
+_NO_WARP_RE = re.compile(r"\bno[-_ ]?warp\b")
+_WARP_RE = re.compile(r"(?<!no[-_ ])\bwarp\b")
 # TurboWarp's console tools, exposed as plain statements. They compile to the
 # "Consoles" extension (``sipcconsole``), which is what the debugger's Logs tab
 # shows - not the browser's ``console.log``.
@@ -206,6 +241,13 @@ def iter_nodes(node):
                             yield from iter_nodes(sub)
 
 
+def _mentions_ternary(node: A.Node | None) -> bool:
+    """True when ``node`` holds a ``a if c else b`` somewhere."""
+    if node is None:
+        return False
+    return any(isinstance(child, A.Ternary) for child in iter_nodes(node))
+
+
 class Codegen:
     def __init__(
         self,
@@ -218,9 +260,22 @@ class Codegen:
         base_dir: str | Path | None = None,
         allow_undefined: bool = False,
         features: set[str] | None = None,
+        obf_junk: int | None = None,
+        obf_flatten: int = DEFAULT_OBF_FLATTEN,
+        obf_ints: str | bool = "auto",
+        obf_pools: int = DEFAULT_OBF_POOLS,
+        obf_scrub: bool = False,
+        only_sprite: str | None = None,
+        vm_budget: int = 1,
+        vm_style: str = "h0",
+        vm_seed: int | None = None,
+        vm_split: bool = True,
+        vm_crypt: int = 1,
     ):
         if locals_mode not in ("sprite", "thread"):
             raise ValueError("locals_mode must be 'sprite' or 'thread'")
+        if vm_style not in ("list", "h0"):
+            raise ValueError("vm_style must be 'list' or 'h0'")
         self.program = program
         self.project = Project(seed)
         self.locals_mode = locals_mode
@@ -235,6 +290,20 @@ class Codegen:
         self.base_dir = Path(base_dir) if base_dir is not None else Path.cwd()
         self.allow_undefined = allow_undefined
         self.features: set[str] = set(program.features) | set(features or ())
+        # ``#enable_feature<vanillaScratch>`` compiles to blocks scratch.mit.edu
+        # can run. Two constructs this language emits have an exact vanilla
+        # spelling, and they are lowered here rather than in the source -- a
+        # source cannot say "the same loop, but the other block".
+        self.vanilla = "vanillaScratch" in self.features
+        # The two switches contradict each other: ``useTempVariables`` *is* the
+        # lmsTempVars2 extension, which scratch.mit.edu does not have. Vanilla
+        # is the promise that the project loads there, so it wins, and the
+        # author is told the thread-variable switch was ignored.
+        self.vanilla_thread_switch = False
+        if self.vanilla and (self.thread_locals or self.locals_mode == "thread"):
+            self.thread_locals = False
+            self.locals_mode = "sprite"
+            self.vanilla_thread_switch = True
         # ``--enable hideObjectNames`` still works; the source spelling is
         # normalised by the parser, this covers the command line.
         if "hideObjectNames" in self.features:
@@ -243,12 +312,68 @@ class Codegen:
         #: First broadcast whose name is an expression: obfuscation renames
         #: every message, so this one can never be found again.
         self._computed_broadcast: A.Expr | None = None
-        #: ``doObfuscation`` moves every text literal into one list, so the
-        #: scripts read as blocks instead of sentences. Text -> item number.
-        self._string_pool: dict[str, int] = {}
-        self._pool_list: tuple[str, str] | None = None
+        #: ``doObfuscation`` moves every text literal into a list, so the
+        #: scripts read as blocks instead of sentences. One entry per pool; see
+        #: ``obf_pools`` for why there is more than one.
+        self._pools: list[_Pool] = []
+        #: Text -> ``(pool, item number)``, so the same literal used twice is
+        #: one item and one lookup rather than two.
+        self._pool_at: dict[str, tuple[int, int]] = {}
+        #: Integer literals that are used as *text* somewhere: those keep their
+        #: exact spelling and stay in the pool (see `_integers_as_variables`).
+        self._text_integers: set[str] = set()
+        #: Literal text -> the Stage variable that now holds it. Diagnostics and
+        #: tests read this; nothing else does.
+        self.constant_variables: dict[str, str] = {}
+        #: How many junk items each pool gets (``None`` = one per real item),
+        #: how long a hat body may be to become a state machine, how many pools
+        #: the literals are split over, and whether to scrub the editor residue.
+        self.obf_junk = obf_junk
+        self.obf_flatten = obf_flatten
+        self.obf_pools = max(1, obf_pools)
+        self.obf_scrub = obf_scrub
+        #: ``corruptBlockPos`` writes a project the VM runs but the editor
+        #: cannot open: dangling block pointers and a ``%b`` parameter holding
+        #: a string reporter. Off by default; it is anti-tamper, not a name
+        #: obfuscator (see ``obfuscate.corrupt_block_positions``).
+        self.corrupt_block_pos = "corruptBlockPos" in self.features
+        #: ``vmProtect`` compiles supported hat bodies to bytecode for a
+        #: per-sprite interpreter. ``vm_budget`` instructions run per loop
+        #: iteration; 1 is the deliberately slow default, and 0 is treated as
+        #: 1 (the interpreter always has to run at least one step).
+        self.vm_protect = "vmProtect" in self.features
+        self.vm_budget = max(0, vm_budget)
+        self.vm_style = vm_style
+        #: A fixed seed makes the randomized VM layout reproducible.  None
+        #: means a fresh architecture for every build.
+        self.vm_seed = vm_seed
+        #: h0 style: put each instruction's body in its own helper method.
+        self.vm_split = vm_split
+        #: 0 = fixed layout, 1 = randomized layout, 2 = checksum, 3 = decoys.
+        self.vm_crypt = max(0, min(3, vm_crypt))
+        #: ``--only-sprite NAME``: emit the Stage and that one sprite. The
+        #: others are dropped after their scripts are built, so a quick edit of
+        #: one sprite does not have to re-serialise the whole project.
+        self.only_sprite = only_sprite
+        self._dropped_sprites: set[str] = set()
+        #: Variables ``Variables.showVariable(x)`` names, so the project can
+        #: carry a monitor entry for each one it did not already have.
+        self._shown_state: list[tuple[object, str]] = []
+        #: Integers are hidden like the text literals are, but as *variables*
+        #: rather than list items: a variable read compiles to a property load,
+        #: which is what keeps a literal-heavy machine fast (see syntax.md for
+        #: the measurement). ``list`` is the older form, ``none`` keeps them
+        #: inline for a build that has to keep every last frame.
+        self.obf_ints = (
+            "auto" if obf_ints is True else "none" if obf_ints is False else str(obf_ints)
+        )
         self.plan: VarPlan | None = None
         self.diagnostics: list[str] = []
+        if self.vanilla_thread_switch:
+            self.diagnostics.append(
+                "0:0: W0027 vanillaScratch beats useTempVariables: the local "
+                "variables of this build stay sprite-local"
+            )
 
         self.class_by_name: dict[str, A.ClassDecl] = {}
         self.class_funcs: dict[str, dict[str, A.FuncDecl]] = {}
@@ -272,6 +397,11 @@ class Codegen:
         self._positions: dict[str, list[tuple[float, float]]] = {}
         #: Class name -> Scratch target name (``obj_loader`` -> ``obj loader``).
         self.target_name: dict[str, str] = {}
+        #: Scratch target name -> the namespace style its own scripts used.
+        #: ``vmProtect`` emits its runtime into the same target later, after the
+        #: loop that normally sets these fields, so it has to restore the style
+        #: or an unqualified custom-block call becomes a missing ``Sprite.name``.
+        self.target_namespaces: dict[str, tuple[str, bool]] = {}
         #: The script currently being emitted, so ``_top_level`` can find it.
         self._script_key: str | None = None
         #: Temp (``_name``) loop variables whose loop is currently open: a
@@ -289,6 +419,51 @@ class Codegen:
         entry = f"{node.line}:{node.col}: {code} {message}"
         if entry not in self.diagnostics:
             self.diagnostics.append(entry)
+
+    # -- pishiSupport -------------------------------------------------------
+    def _check_pishi_names(self) -> None:
+        """Two name collisions `pishiSupport` has to talk about.
+
+        The feature hands the program eight new namespaces (`Facemesh`,
+        `Arduino`, …). A namespace is how a block is *spelled*, so:
+
+        * another extension claiming the same name is an **error** -- the
+          compiler would resolve `Arduino.high(13)` to one of them and the
+          player would run the other, and which one wins is an accident of
+          table order;
+        * a variable, list or sprite of the same name is a **warning** -- the
+          declaration does not fail, but the namespace wins every time the
+          name is used as a receiver, so `Arduino` the variable and `Arduino`
+          the extension cannot both be spelled that way.
+
+        Both are reported once, at the top of the file: there is no single
+        node to point at, and a per-use warning would bury the file in them.
+        """
+        if extensions.PISHI_FEATURE not in self.features:
+            return
+        for namespace, extension, other in extensions.pishi_namespace_conflicts():
+            self.diagnostics.append(
+                f"0:0: E0077 {namespace} is the {extension} extension's namespace, "
+                f"and {other!r} already provides it; one of the two has to be dropped"
+            )
+        for namespace in sorted(extensions.pishi_namespaces()):
+            for kind, names in (
+                ("variable", self.plan.globals),
+                ("list", self.plan.lists),
+            ):
+                if namespace in names:
+                    self.diagnostics.append(
+                        f"0:0: W0028 {kind} {namespace!r} has the same name as the "
+                        f"{namespace} extension namespace; a call to "
+                        f"{namespace}.something() reaches the extension"
+                    )
+        for cls in self.program.classes:
+            if cls.name in extensions.pishi_namespaces():
+                self.diagnostics.append(
+                    f"0:0: W0028 sprite {cls.name!r} has the same name as the "
+                    f"{cls.name} extension namespace; a call to "
+                    f"{cls.name}.something() reaches the extension"
+                )
 
     # -- pre-pass ----------------------------------------------------------
     def _collect(self) -> None:
@@ -414,6 +589,7 @@ class Codegen:
             self.program, self.base_dir, self.allow_undefined, self.features
         )
         self.diagnostics.extend(self.plan.warnings)
+        self._check_pishi_names()
         self.list_names |= set(self.plan.lists)
         # Declare planned state eagerly so variables/lists exist even when the
         # source only reads them (or never touches them at all).
@@ -422,7 +598,10 @@ class Codegen:
         for name, definition in self.plan.globals.items():
             if definition.from_import or definition.file_scope:
                 self.project.stage.declare_variable(name, definition.initial)
-        for name in self.plan.imported_lists | self.plan.file_scope_lists:
+        # Sorted: a set of names has no order, and the order they are declared
+        # in decides the order of the Stage's list ids, which is visible in the
+        # file. Two builds of one source should not differ on it.
+        for name in sorted(self.plan.imported_lists | self.plan.file_scope_lists):
             self.project.stage.declare_list(name, self.plan.lists[name])
         for note in lints.run(self.program):
             if note not in self.diagnostics:
@@ -431,15 +610,43 @@ class Codegen:
             self._emit_stage(self.program.stage)
         for cls in self.program.classes:
             self._emit_class(cls)
+        self._only_sprite_filter()
         self._emit_notes()
         self._emit_monitors()
+        self._emit_show_monitors()
         self._emit_runtime_var_reset()
-        if self._pool_list is not None:
-            # ``dict`` keeps insertion order, so the item number is the index.
-            name, list_id = self._pool_list
-            self.project.stage.lists[list_id] = [name, list(self._string_pool)]
+        if self.vm_protect:
+            protect_project(
+                self.project,
+                self,
+                budget=self.vm_budget,
+                style=self.vm_style,
+                split=self.vm_split,
+                crypt=self.vm_crypt,
+            )
         if self.obfuscating:
-            obfuscate_project(self.project)
+            if self.obf_ints == "auto":
+                self._integers_as_variables()
+            pools: list[tuple[str, list[tuple[Block, str]]]] = []
+            for pool in self._pools:
+                if not pool.items:
+                    # Nothing landed in this pool: drop it rather than publish a
+                    # list that exists only because a hash did not match it.
+                    self.project.stage.lists.pop(pool.list_id, None)
+                    continue
+                # ``dict`` keeps insertion order, so the item number is the
+                # index -- right up until obfuscation shuffles the list and
+                # rewrites every index that reads it.
+                self.project.stage.lists[pool.list_id] = [pool.name, list(pool.items)]
+                pools.append((pool.list_id, pool.lookups))
+            obfuscate_project(
+                self.project,
+                pool=pools,
+                junk=self.obf_junk,
+                flatten=self.obf_flatten,
+                scrub=self.obf_scrub,
+                corrupt=self.corrupt_block_pos,
+            )
             if self._computed_broadcast is not None:
                 self.diag(
                     self._computed_broadcast,
@@ -447,7 +654,76 @@ class Codegen:
                     "a broadcast name built at runtime cannot survive obfuscation",
                 )
         self.project.normalize()
+        if self.corrupt_block_pos:
+            # After ``normalize``: it recomputes every parent link, which is
+            # exactly the pointer the corrupt form needs to leave dangling.
+            corrupt_block_positions(self.project)
         return self.project
+
+    def _only_sprite_filter(self) -> None:
+        """``--only-sprite NAME``: keep the Stage and the named sprite."""
+        wanted = self.only_sprite
+        if not wanted:
+            return
+        keep = self._resolve_owner(wanted)
+        if keep is None or keep is self.project.stage:
+            self.diagnostics.append(
+                f"0:0: E0071 no such sprite or class: --only-sprite {wanted!r}"
+            )
+            return
+        for target in list(self.project.targets):
+            if target is self.project.stage or target is keep:
+                continue
+            self._dropped_sprites.add(target.name)
+            self.project.targets.remove(target)
+        for cls in self.program.classes:
+            if self.target_name.get(cls.name, cls.name) != keep.name:
+                self._dropped_sprites.add(cls.name)
+        self._warn_dropped_calls()
+
+    def _warn_dropped_calls(self) -> None:
+        """Report a kept sprite that calls a block on a sprite left out.
+
+        The call resolves at compile time, so the block would reference a
+        custom block nobody defines any more; the VM then does nothing when it
+        is reached, which is a quiet wrong answer rather than a loud failure.
+        """
+        if not self._dropped_sprites:
+            return
+        prefixes = tuple(f"{name}." for name in self._dropped_sprites)
+        reported: set[str] = set()
+
+        def reached(target, name: str) -> None:
+            owner = name.split(".")[0]
+            if owner in reported:
+                return
+            reported.add(owner)
+            self.diagnostics.append(
+                f"0:0: W0029 --only-sprite left out {owner!r}, which "
+                f"{target.name!r} still reaches"
+            )
+
+        for target in self.project.targets:
+            for block in target.blocks.values():
+                # A call inside the sprite is a ``procedures_call``; one into
+                # another sprite is a broadcast, because that is what the VM
+                # needs to leave a target.
+                if block.opcode == "procedures_call" and block.mutation:
+                    proccode = str(block.mutation.get("proccode", ""))
+                    if proccode.startswith(prefixes):
+                        reached(target, proccode)
+                elif block.opcode in ("event_broadcast", "event_broadcastandwait"):
+                    # The name lives in the input as a broadcast primitive
+                    # (``[11, name, id]``) or, in older files, in a menu shadow.
+                    stack = [block.inputs.get("BROADCAST_INPUT"),
+                             block.fields.get("BROADCAST_OPTION")]
+                    while stack:
+                        value = stack.pop()
+                        if isinstance(value, str):
+                            if value.startswith(prefixes):
+                                reached(target, value)
+                        elif isinstance(value, list):
+                            stack.extend(value)
 
     def _resolve_owner(self, owner: str):
         """The target a comment / monitor names, tolerating the class spelling."""
@@ -527,6 +803,8 @@ class Codegen:
                 self.diagnostics.append(f"E0070 unreadable monitor comment: // {text}")
                 continue
             owner = match.group("qowner") or match.group("owner")
+            if owner in self._dropped_sprites:
+                continue
             name = match.group("name")
             rest = match.group("rest")
             mode = match.group("mode").lower()
@@ -602,6 +880,8 @@ class Codegen:
             self.diagnostics.append(f"E0070 unreadable monitor comment: // {text}")
             return
         owner = match.group("qowner") or match.group("owner")
+        if owner in self._dropped_sprites:
+            return
         opcode = match.group("opcode")
         rest = match.group("rest")
         mode = _WATCH_MODE_RE.search(rest)
@@ -642,6 +922,43 @@ class Codegen:
             }
         )
 
+    def _emit_show_monitors(self) -> None:
+        """Store a monitor for every variable ``Variables.showVariable`` names.
+
+        Hidden on purpose: the block decides when the variable appears, so a
+        visible entry would put it on screen at load. What the entry buys is the
+        place and size the editor remembers for that variable.
+        """
+        for target, name in self._shown_state:
+            sprite_name = None if target is self.project.stage else target.name
+            if any(
+                entry["params"].get("VARIABLE") == name
+                and entry.get("spriteName") == sprite_name
+                for entry in self.project.monitors
+            ):
+                continue
+            state_id = target.var_id(name)
+            if state_id is None:
+                continue
+            self.project.monitors.append(
+                {
+                    "id": state_id,
+                    "mode": "default",
+                    "opcode": "data_variable",
+                    "params": {"VARIABLE": name},
+                    "spriteName": sprite_name,
+                    "value": 0,
+                    "width": 100,
+                    "height": 24,
+                    "x": 0,
+                    "y": 0,
+                    "visible": False,
+                    "sliderMin": 0,
+                    "sliderMax": 100,
+                    "isDiscrete": True,
+                }
+            )
+
     def _is_reporter_expr(self, expr: A.Expr | None) -> bool:
         """True for expressions that produce a block but run no command."""
         if expr is None or isinstance(
@@ -664,7 +981,7 @@ class Codegen:
             return True
         if full in self.list_names and expr.name in O.LIST_REPORTERS:
             return True
-        extension = resolve(full, expr.name, len(expr.args))
+        extension = resolve(full, expr.name, len(expr.args), self.features)
         return bool(extension is not None and extension.is_reporter)
 
     def _emit_class(self, cls: A.ClassDecl) -> None:
@@ -677,6 +994,7 @@ class Codegen:
         # Only classes that declare ``ns=X`` use the prefix style, so hand
         # written sources are never rewritten implicitly.
         self.namespaced = "namespacedNames" in self.features and bool(namespace)
+        self.target_namespaces[target.name] = (self.namespace, self.namespaced)
         self._script_y = 0
         # Keep the numeric type: float positions must not be truncated.
         target.x = _whole_if_integral(metadata.get("x", 0))
@@ -724,7 +1042,11 @@ class Codegen:
                 self.diag(member, "W0010", "class-level statements are not supported yet")
 
     def _declare_list_literal(
-        self, parts: tuple[str, ...], literal: A.ListLit, public: bool = False
+        self,
+        parts: tuple[str, ...],
+        literal: A.ListLit,
+        public: bool = False,
+        declare: bool = False,
     ) -> None:
         items = [_list_item(item) for item in literal.items]
         if any(item is None for item in items):
@@ -732,10 +1054,37 @@ class Codegen:
             items = [item for item in items if item is not None]
         name = ".".join(parts)
         assert self.target is not None
+        full = self._qualify(name) if len(parts) == 1 else name
+        if not declare and (
+            full in self.list_names or (self.plan is not None and full in self.plan.lists)
+        ):
+            # The list already exists, so this is an *assignment*, not a
+            # declaration: ``list = []`` has to mean "empty it". Dropping the
+            # statement instead is how a buffer-clearing line became a no-op and
+            # a loader that read a second file kept the first one's bytes -- the
+            # list grew, nothing failed, and the only symptom was a wrong parse.
+            return self._list_assign(full, items)
         if len(parts) == 1 and not public:
             self.target.declare_list(name, items)
         else:
-            self.project.stage.declare_list(self._qualify(name) if len(parts) == 1 else name, items)
+            self.project.stage.declare_list(full, items)
+        return []
+
+    def _list_assign(self, name: str, items: list[str]) -> list[Block]:
+        """``list = [...]`` on a list that exists: clear it, then fill it."""
+        list_id = self._declare_list(name)
+        clear = self._new("data_deletealloflist")
+        clear.set_field("LIST", name, list_id)
+        head = clear
+        tail = clear
+        for item in items:
+            add = self._new("data_addtolist")
+            add.set_field("LIST", name, list_id)
+            add.set_input("ITEM", Lit(O.TEXT, item))
+            add.parent = tail.id
+            tail.next = add.id
+            tail = add
+        return [head]
 
     def _declare_class_initial(self, stmt: A.Assign) -> None:
         """``public c = 1145;`` at class level only seeds the initial state.
@@ -747,9 +1096,29 @@ class Codegen:
             return
         name = ".".join(stmt.target.parts)
         if isinstance(stmt.value, A.ListLit):
-            self._declare_list_literal(
-                stmt.target.parts, stmt.value, public=stmt.visibility == "public"
+            blocks = self._declare_list_literal(
+                stmt.target.parts,
+                stmt.value,
+                public=stmt.visibility == "public",
+                # At class level this line *is* the declaration: its items are
+                # the initial state, not a reset to run at the green flag. Going
+                # through the assignment path emitted a second top-level script
+                # holding only `delete all of list`, which then came back from
+                # the decompiler as a green flag block nobody wrote.
+                declare=True,
             )
+            if blocks:
+                # The list already existed, so this line is an *assignment*
+                # (`list = []` empties it) and the statement produced blocks
+                # rather than an initial value. Dropping them left the
+                # `delete all of list` with no parent, which the structural
+                # check rejects -- and, worse, would have made a class-level
+                # reset silently not happen. It runs at the green flag, like
+                # every other class-level initial that is not a literal.
+                hat = self._new("event_whenflagclicked")
+                self._top_level(hat)
+                blocks[0].parent = hat.id
+                hat.next = blocks[0].id
             return
         is_global = self.plan is not None and name in self.plan.globals
         qualified = self._qualify(name) if is_global else name
@@ -795,6 +1164,47 @@ class Codegen:
         if queued:
             self._next_position = queued.pop(0)
 
+    def _check_meta(self, node: A.Node, key: str, value, allowed: dict[str, str]) -> bool:
+        """Reject a target metadata key the file format does not have.
+
+        Unknown keys used to land in the dict and be dropped by every consumer,
+        so ``shwo=0`` compiled into a visible sprite with no complaint.
+        """
+        kind = allowed.get(key)
+        if kind is None:
+            self.diag(
+                node,
+                "E0078",
+                f"unknown metadata key {key!r}; known: {', '.join(sorted(allowed))}",
+            )
+            return False
+        text = str(value)
+        if kind == "number":
+            try:
+                float(text)
+            except (TypeError, ValueError):
+                self.diag(node, "E0079", f"metadata {key!r} takes a number, not {text!r}")
+                return False
+        elif kind == "integer":
+            try:
+                int(float(text))
+            except (TypeError, ValueError):
+                self.diag(node, "E0079", f"metadata {key!r} takes a whole number, not {text!r}")
+                return False
+        elif kind == "flag":
+            if text.strip().lower() not in ("0", "1", "true", "false"):
+                self.diag(node, "E0079", f"metadata {key!r} takes 0 or 1, not {text!r}")
+                return False
+        elif kind == "rotation":
+            if text.strip().lower() not in _ROTATION_STYLES:
+                self.diag(
+                    node,
+                    "E0079",
+                    f"metadata {key!r} takes all, leftright or none, not {text!r}",
+                )
+                return False
+        return True
+
     def _sprite_metadata(self, cls: A.ClassDecl) -> dict:
         """Merge default ← ``// Sprite:`` ← class parameters ← standalone lines."""
         values: dict = {
@@ -828,6 +1238,8 @@ class Codegen:
             if value is None:
                 self.diag(expr, "E0073", f"metadata {key!r} needs a literal value")
                 continue
+            if not self._check_meta(expr, key, value, _SPRITE_META_KEYS):
+                continue
             values[key] = value
         declarations = [d for d in self.program.sprite_meta if d.sprite == cls.name]
         if len(declarations) > 1:
@@ -841,6 +1253,8 @@ class Codegen:
                 value = _metadata_value(expr)
                 if value is None:
                     self.diag(expr, "E0073", f"metadata {key!r} needs a literal value")
+                    continue
+                if not self._check_meta(expr, key, value, _SPRITE_META_KEYS):
                     continue
                 values[key] = value
         return values
@@ -888,6 +1302,8 @@ class Codegen:
                 if value is None:
                     self.diag(expr, "E0073", f"metadata {key!r} needs a literal value")
                     continue
+                if not self._check_meta(expr, key, value, _STAGE_META_KEYS):
+                    continue
                 self._set_stage_property(stage, key, value)
 
     @staticmethod
@@ -924,6 +1340,12 @@ class Codegen:
 
     def _emit_loose(self, decl: A.LooseDecl) -> None:
         """``loose { … }`` — a stack of blocks that is not attached to a hat."""
+        if self.vanilla:
+            # A loose stack is on the canvas, not in the program: nothing can
+            # run it. It is also where the leftovers from a TurboWarp round
+            # trip end up, so a Scratch build drops them rather than shipping
+            # blocks whose only effect is to make the upload fail.
+            return
         assert self.target is not None
         placed = _AT_RE.search(decl.annotation or "")
         self._next_position = (
@@ -1042,7 +1464,11 @@ class Codegen:
         match = _PROCCODE_RE.search(fn.annotation or "")
         if match is not None:
             text = match.group(1).strip()
-            if text.count("%s") == len(fn.params):
+            # ``%b`` and ``%n`` are parameters too. The decompiler writes the
+            # original label back, and a Scratch project may declare a boolean
+            # parameter; the language has one untyped parameter, so the
+            # placeholder count is what has to line up.
+            if len(re.findall(r"%[sbn]", text)) == len(fn.params):
                 return text
             self.diag(
                 fn,
@@ -1055,7 +1481,11 @@ class Codegen:
 
     def _warp_flag(self, fn: A.FuncDecl) -> str:
         annotation = (fn.annotation or "").lower()
-        warp = self.warp or "warp" in annotation or "main thread" in annotation
+        if _NO_WARP_RE.search(annotation):
+            # ``// no-warp`` beats ``--warp``: the command line cannot know
+            # which function has to keep its frames.
+            return "false"
+        warp = self.warp or _WARP_RE.search(annotation) or "main thread" in annotation
         return "true" if warp else "false"
 
     def _emit_func(self, target: Target, cls: A.ClassDecl, fn: A.FuncDecl) -> None:
@@ -1089,6 +1519,10 @@ class Codegen:
 
         save_hook = _SAVE_HOOK_RE.search(annotation)
         if save_hook is not None:
+            if self.vanilla:
+                # Scratch has no save event: the hat never fires, so neither
+                # the hat nor the body it would have run can exist.
+                return
             self.project.use_extension("lmsMoreEvents")
             opcode = (
                 "lmsMoreEvents_beforeSave"
@@ -1227,17 +1661,27 @@ class Codegen:
         proto.shadow = True
         proto.parent = definition.id
         arg_ids = self._arg_ids(self.class_name, fn)
+        label = self._proccode(fn)
+        kinds = re.findall(r"%[sbn]", label)
         proto.mutation = {
             "tagName": "mutation",
             "children": [],
-            "proccode": self._proccode(fn),
+            "proccode": label,
             "argumentids": json.dumps(arg_ids),
             "argumentnames": json.dumps(list(fn.params)),
-            "argumentdefaults": json.dumps([""] * len(fn.params)),
+            # A boolean parameter's default is the word ``false``; a text one
+            # is empty. scratch-blocks checks the slot against the placeholder.
+            "argumentdefaults": json.dumps(
+                ["false" if kind == "%b" else "" for kind in kinds]
+            ),
             "warp": self._warp_flag(fn),
         }
-        for arg_id, name in zip(arg_ids, fn.params):
-            reporter = self._new("argument_reporter_string_number")
+        for index, (arg_id, name) in enumerate(zip(arg_ids, fn.params)):
+            boolean = index < len(kinds) and kinds[index] == "%b"
+            reporter = self._new(
+                "argument_reporter_boolean" if boolean
+                else "argument_reporter_string_number"
+            )
             reporter.shadow = True
             reporter.parent = proto.id
             reporter.set_field("VALUE", name)
@@ -1278,12 +1722,159 @@ class Codegen:
     # -- statements --------------------------------------------------------
     def _emit_stmts(self, stmts: list[A.Stmt]) -> Block | None:
         blocks: list[Block] = []
-        for stmt in stmts:
-            blocks.extend(self._emit_stmt(stmt))
+        index = 0
+        while index < len(stmts):
+            fused = self._fuse_setxy(stmts[index:index + 2])
+            if fused is not None:
+                blocks.extend(fused)
+                index += 2
+                continue
+            blocks.extend(self._emit_stmt(stmts[index]))
+            index += 1
         self._link(blocks)
         return blocks[0] if blocks else None
 
+    def _fuse_setxy(self, pair: list[A.Stmt]) -> list[Block] | None:
+        """``Motion.x = a; Motion.y = b;`` → one ``motion_gotoxy``.
+
+        The VM's ``setX``/``setY`` both go through ``setXY``, so the pair clamps
+        to the stage exactly like the combined block, and the reference project
+        writes the pair as ``gotoxy``.
+        """
+        if len(pair) != 2:
+            return None
+        first, second = pair
+        if not (isinstance(first, A.Assign) and isinstance(second, A.Assign)):
+            return None
+        if first.op != "=" or second.op != "=":
+            return None
+        if not (isinstance(first.target, A.Name) and isinstance(second.target, A.Name)):
+            return None
+        if first.target.parts != ("Motion", "x") or second.target.parts != ("Motion", "y"):
+            return None
+        if self.vanilla and (
+            _mentions_ternary(first.value) or _mentions_ternary(second.value)
+        ):
+            # A ternary needs statements hoisted before it in vanilla mode, and
+            # this pair becomes a single block that has no room for them.
+            return None
+        block = self._new("motion_gotoxy")
+        block.set_input("X", self._as_input(self._eval(first.value), O.MATH_NUM))
+        block.set_input("Y", self._as_input(self._eval(second.value), O.MATH_NUM))
+        return [block]
+
+    _ternary_serial = 0
+
+    def _prescan_ternaries(self, stmt: A.Stmt) -> list[Block]:
+        """Compute every ``a if c else b`` in this statement into a variable.
+
+        Scratch's conditional is a statement, so a conditional in an argument
+        cannot stay where it is. Each one is turned into
+        ``set _t = b; if c { set _t = a }`` *before* the statement runs, and the
+        expression itself becomes a read of ``_t``.
+
+        Both branches are therefore evaluated, which is exactly what the
+        `utilities` reporter did -- it was handed three already-evaluated
+        arguments -- so a port from that build behaves the same way.
+        """
+        self._ternary_vars = {}
+        # Two passes: every name first, then the blocks. A ternary nested in
+        # another one's branch is evaluated while that branch is being emitted,
+        # so it has to already have a variable or it reads as unhoistable.
+        for node in iter_nodes(stmt):
+            if isinstance(node, A.Ternary):
+                type(self)._ternary_serial += 1
+                self._ternary_vars[id(node)] = f"_t{type(self)._ternary_serial}"
+
+        pre: list[Block] = []
+        for node in iter_nodes(stmt):
+            if not isinstance(node, A.Ternary):
+                continue
+            name = self._ternary_vars[id(node)]
+            target = A.Name(line=node.line, col=node.col, parts=(name,))
+            pre.extend(self._emit_assign(A.Assign(
+                line=node.line, col=node.col, target=target, op="=",
+                value=node.otherwise)))
+            branch = self._new("control_if")
+            branch.set_input("CONDITION", self._as_bool(self._eval(node.cond)))
+            body = self._emit_assign(A.Assign(
+                line=node.line, col=node.col, target=target, op="=",
+                value=node.then))
+            self._link(body)
+            if body:
+                body[0].parent = branch.id
+                branch.set_input("SUBSTACK", Ref(body[0]))
+            pre.append(branch)
+        return pre
+
+    def _prescan_asks(self, stmt: A.Stmt) -> list[Block]:
+        """Hoist an `ask and wait` that is being used as a value.
+
+        ``Sensing.ask(question)`` is a *statement* in Scratch -- it yields until
+        the answer arrives -- and the answer is a separate reporter. Written as
+        a value, the two are one thing: ``name = Sensing.ask("Who?")`` asks
+        first and the value is the answer, which is what every other language
+        with an input block does.
+
+        The answer is copied into a temporary immediately, so a statement with
+        two questions in it does not have the first read back the second's
+        answer. A bare ``Sensing.ask("...");`` line is left to the statement
+        path, which emits the same block with no temporary at all.
+        """
+        self._ask_vars = {}
+        pre: list[Block] = []
+        for node in iter_nodes(stmt):
+            if not isinstance(node, A.Call):
+                continue
+            if isinstance(stmt, A.ExprStmt) and stmt.expr is node:
+                continue                      # it is a statement: nothing to hoist
+            receiver = node.receiver
+            if not isinstance(receiver, A.Name) or node.name != "ask":
+                continue
+            if ".".join(self._stage_stripped(receiver.parts)) != "Sensing":
+                continue
+            type(self)._ask_serial += 1
+            name = f"_ask{type(self)._ask_serial}"
+            self._ask_vars[id(node)] = name
+            block = self._new("sensing_askandwait")
+            block.set_input(
+                "QUESTION",
+                self._as_input(self._eval(node.args[0] if node.args else None), O.TEXT),
+            )
+            pre.append(block)
+            target = A.Name(line=node.line, col=node.col, parts=(name,))
+            pre.extend(self._emit_assign(A.Assign(
+                line=node.line, col=node.col, target=target, op="=",
+                value=A.Name(line=node.line, col=node.col,
+                             parts=("Sensing", "answer")))))
+        return pre
+
+    def _flush_pending(self, blocks: list[Block]) -> list[Block]:
+        return blocks
+
     def _emit_stmt(self, stmt: A.Stmt) -> list[Block]:
+        # An ask used as a value is hoisted on both targets: the block exists
+        # in Scratch itself, so nothing here is TurboWarp-only.
+        asks = self._prescan_asks(stmt)
+        if not self.vanilla:
+            if not asks:
+                return self._emit_stmt_inner(stmt)
+            try:
+                body = self._emit_stmt_inner(stmt)
+            finally:
+                self._ask_vars = {}
+            return self._link(asks + body)
+        pre = asks + self._prescan_ternaries(stmt)
+        try:
+            body = self._emit_stmt_inner(stmt)
+        finally:
+            self._ternary_vars = {}
+            self._ask_vars = {}
+        if not pre:
+            return body
+        return self._link(pre + body)
+
+    def _emit_stmt_inner(self, stmt: A.Stmt) -> list[Block]:
         if isinstance(stmt, A.Assign):
             return self._emit_assign(stmt)
         if isinstance(stmt, A.ExprStmt):
@@ -1331,6 +1922,10 @@ class Codegen:
         return block
 
     def _emit_expr_stmt(self, stmt: A.ExprStmt) -> list[Block]:
+        blocks = self._emit_expr_stmt_inner(stmt)
+        return self._flush_pending(blocks)
+
+    def _emit_expr_stmt_inner(self, stmt: A.ExprStmt) -> list[Block]:
         expr = stmt.expr
         if isinstance(expr, A.Name) and len(expr.parts) == 1:
             # ``breakpoint;`` — a debugger marker, no arguments.
@@ -1351,6 +1946,13 @@ class Codegen:
         if not isinstance(expr, A.Call):
             self.diag(stmt, "E0050", "only a call can own a block body")
             return []
+        if self.vanilla and self._is_comment_call(expr):
+            # A comment block with a body is the code underneath a note. The
+            # note is for a reader and the code is not, so the body is kept
+            # and the label goes.
+            return self._emit_body(stmt.body)
+        if self.vanilla and self._is_foreach_thread_var(expr):
+            return self._emit_foreach_thread_var(expr, stmt.body)
         blocks = self._command_call(expr, self.scope)
         if len(blocks) != 1:
             self.diag(stmt, "E0050", f"{expr.name} does not take a block body")
@@ -1358,11 +1960,175 @@ class Codegen:
         self._attach_substack(blocks[0], "SUBSTACK", stmt.body)
         return blocks
 
+    @staticmethod
+    def _is_comment_call(expr: A.Call) -> bool:
+        receiver = expr.receiver
+        return isinstance(receiver, A.Name) and receiver.parts == ("Comments",)
+
+    @staticmethod
+    def _is_foreach_thread_var(expr: A.Call) -> bool:
+        receiver = expr.receiver
+        return (isinstance(receiver, A.Name) and receiver.parts == ("Temp",)
+                and expr.name == "forEachThreadVariable")
+
+    def _emit_foreach_thread_var(self, call: A.Call, body: list[A.Stmt]) -> list[Block]:
+        """``Temp.forEachThreadVariable("_i", n) { … }`` as a counting loop.
+
+        The extension binds the variable to 1..n and runs the body each time.
+        With sprite-locals that is `set 0; repeat n { change by 1; body }`,
+        which visits the same values in the same order.
+        """
+        if not call.args:
+            self.diag(call, "E0044", "forEachThreadVariable needs a variable and a count")
+            return []
+        name_arg = call.args[0]
+        if not isinstance(name_arg, A.StringLit):
+            self.diag(call, "E0044",
+                      "forEachThreadVariable needs a literal variable name")
+            return []
+        parts = tuple(name_arg.value.split("."))
+        count = call.args[1] if len(call.args) > 1 else A.NumberLit(
+            line=call.line, col=call.col, raw="0")
+        target = A.Name(line=call.line, col=call.col, parts=parts)
+        zero = A.NumberLit(line=call.line, col=call.col, raw="0")
+        one = A.NumberLit(line=call.line, col=call.col, raw="1")
+        reset = A.Assign(line=call.line, col=call.col, target=target, op="=", value=zero)
+        step = A.Assign(line=call.line, col=call.col, target=target, op="+=", value=one)
+
+        loop = self._new("control_repeat")
+        loop.set_input("TIMES", self._as_input(self._eval(count), O.WHOLE_NUM))
+        inner: list[Block] = self._emit_assign(step)
+        inner.extend(self._emit_body(body))
+        self._link(inner)
+        if inner:
+            inner[0].parent = loop.id
+            loop.set_input("SUBSTACK", Ref(inner[0]))
+        return self._link(self._emit_assign(reset) + [loop])
+
+    def _emit_body(self, body: list[A.Stmt]) -> list[Block]:
+        """Emit statements as a bare run of blocks, with nothing wrapping them."""
+        out: list[Block] = []
+        for child in body:
+            out.extend(self._emit_stmt(child))
+        return self._link(out)
+
+    # -- vanilla lowerings for the two extensions a Scratch build cannot ship --
+    #: Where a Scratch build keeps the console, and the two lists that stand in
+    #: for named timers. A name in one list and its start value in the other,
+    #: at the same index, is a dictionary with the keys in the order they were
+    #: first used.
+    CONSOLE_LIST = "Console"
+    TIMER_NAMES = "TimerNames"
+    TIMER_STARTS = "TimerStarts"
+
+    def _shared_list(self, name: str) -> str:
+        """A Stage list, because a console is one console for the project.
+
+        A bare list name declared through ``_declare_list`` belongs to the
+        sprite that first mentions it, which would give each sprite its own
+        console and its own timers -- the opposite of what a named timer is.
+        """
+        return self.project.stage.declare_list(name, [])
+
+    def _string_is_true(self, text: object) -> Block:
+        """``x = "true"`` or ``x = "1"``: what ``stringToBoolean`` decides."""
+        first = self._new("operator_equals")
+        first.set_input("OPERAND1", self._as_input(text, O.TEXT))
+        first.set_input("OPERAND2", Lit(O.TEXT, "true"))
+        second = self._new("operator_equals")
+        second.set_input("OPERAND1", self._as_input(text, O.TEXT))
+        second.set_input("OPERAND2", Lit(O.TEXT, "1"))
+        block = self._new("operator_or")
+        block.set_input("OPERAND1", Ref(first))
+        block.set_input("OPERAND2", Ref(second))
+        return block
+
+    def _console_add(self, text: object) -> Block:
+        """``console.log(x)`` -> ``add x to (Console)``."""
+        block = self._new("data_addtolist")
+        block.set_field("LIST", self.CONSOLE_LIST, self._shared_list(self.CONSOLE_LIST))
+        block.set_input("ITEM", self._as_input(text, O.TEXT))
+        return block
+
+    def _timer_start(self, name: object) -> list[Block]:
+        """``Timer.startTimer(n)`` -> remember ``timer`` against the name.
+
+        Two lists and no dictionary: the name is appended the first time and
+        its start value is replaced every time after, so reading a timer is one
+        ``indexOf`` and one ``item``.
+        """
+        names = self._shared_list(self.TIMER_NAMES)
+        starts = self._shared_list(self.TIMER_STARTS)
+        contains = self._new("data_listcontainsitem")
+        contains.set_field("LIST", self.TIMER_NAMES, names)
+        contains.set_input("ITEM", self._as_input(name, O.TEXT))
+
+        not_there = self._new("operator_not")
+        not_there.set_input("OPERAND", Ref(contains))
+
+        known = self._new("control_if_else")
+        known.set_input("CONDITION", Ref(not_there))
+        add_name = self._new("data_addtolist")
+        add_name.set_field("LIST", self.TIMER_NAMES, names)
+        add_name.set_input("ITEM", self._as_input(name, O.TEXT))
+        add_start = self._new("data_addtolist")
+        add_start.set_field("LIST", self.TIMER_STARTS, starts)
+        add_start.set_input("ITEM", Ref(self._new("sensing_timer")))
+        self._link([add_name, add_start])
+        add_name.parent = known.id
+        known.set_input("SUBSTACK", Ref(add_name))
+
+        index = self._new("data_itemnumoflist")
+        index.set_field("LIST", self.TIMER_NAMES, names)
+        index.set_input("ITEM", self._as_input(name, O.TEXT))
+        replace = self._new("data_replaceitemoflist")
+        replace.set_field("LIST", self.TIMER_STARTS, starts)
+        replace.set_input("INDEX", Ref(index))
+        replace.set_input("ITEM", Ref(self._new("sensing_timer")))
+        replace.parent = known.id
+        known.set_input("SUBSTACK2", Ref(replace))
+        return [known]
+
+    def _timer_read(self, name: object) -> Ref:
+        """``Timer.getTimer(n)`` -> ``timer - item (indexOf n) of starts``.
+
+        A name nobody started reads as an index of 0, and Scratch answers 0 for
+        item 0 -- so an unstarted timer measures from the project start, which
+        is what the extension does too.
+        """
+        names = self._shared_list(self.TIMER_NAMES)
+        starts = self._shared_list(self.TIMER_STARTS)
+        index = self._new("data_itemnumoflist")
+        index.set_field("LIST", self.TIMER_NAMES, names)
+        index.set_input("ITEM", self._as_input(name, O.TEXT))
+        started = self._new("data_itemoflist")
+        started.set_field("LIST", self.TIMER_STARTS, starts)
+        started.set_input("INDEX", Ref(index))
+        block = self._new("operator_subtract")
+        block.set_input("NUM1", Ref(self._new("sensing_timer")))
+        block.set_input("NUM2", Ref(started))
+        return Ref(block)
+
+    def _vanilla_console(self, call: A.Call) -> list[Block] | None:
+        """The console's five writing blocks, as list writes."""
+        if call.args:
+            return [self._console_add(self._eval(call.args[-1]))]
+        return [self._console_add(Lit(O.TEXT, ""))]
+
     def _emit_console_stmt(self, name: str, args: list[A.Expr]) -> list[Block] | None:
         """``log(x)`` / ``breakpoint;`` -> the TurboWarp Consoles extension."""
         spec = _CONSOLE_STATEMENTS.get(name)
         if spec is None:
             return None
+        if self.vanilla:
+            # `log`/`warn`/`error` write a line to the console list; the log
+            # stopwatch and the breakpoint have nothing to act on without one.
+            if name in ("log", "warn", "error"):
+                if not args:
+                    self.diag(self.program, "E0044", f"{name} needs one argument")
+                    return []
+                return [self._console_add(self._eval(args[0]))]
+            return []
         opcode, slot = spec
         if slot is None:
             if args:
@@ -1379,6 +2145,10 @@ class Codegen:
         return [block]
 
     def _emit_assign(self, stmt: A.Assign) -> list[Block]:
+        blocks = self._emit_assign_inner(stmt)
+        return self._flush_pending(blocks)
+
+    def _emit_assign_inner(self, stmt: A.Assign) -> list[Block]:
         if isinstance(stmt.target, A.Index):
             return self._store_index(stmt)
         target = stmt.target
@@ -1398,8 +2168,9 @@ class Codegen:
             return []
         value = stmt.value
         if isinstance(value, A.ListLit):
-            self._declare_list_literal(target.parts, value, public=stmt.visibility == "public")
-            return []
+            return self._declare_list_literal(
+                target.parts, value, public=stmt.visibility == "public"
+            )
         if len(target.parts) == 1:
             name = target.parts[0]
             if name in self.scope.params:
@@ -1422,24 +2193,26 @@ class Codegen:
     def _emit_if(self, stmt: A.IfStmt) -> list[Block]:
         pairs: list[tuple[A.Expr, list[A.Stmt]]] = [(stmt.cond, stmt.body)]
         pairs.extend(stmt.elifs)
-        return [self._if_chain(pairs, stmt.orelse)]
+        return self._flush_pending([self._if_chain(pairs, stmt.orelse)])
 
     def _if_chain(
         self, pairs: list[tuple[A.Expr, list[A.Stmt]]], orelse: list[A.Stmt] | None
     ) -> Block:
-        cond, body = pairs[0]
-        has_else = len(pairs) > 1 or bool(orelse)
-        block = self._new("control_if_else" if has_else else "control_if")
-        block.set_input("CONDITION", self._as_bool(self._eval(cond)))
-        self._attach_substack(block, "SUBSTACK", body)
-        rest = pairs[1:]
-        if rest:
-            nested = self._if_chain(rest, orelse)
-            nested.parent = block.id
-            block.set_input("SUBSTACK2", Ref(nested))
-        elif orelse:
-            self._attach_substack(block, "SUBSTACK2", orelse)
-        return block
+        # Build the chain iteratively.  The VM runtime can have hundreds of
+        # ``elif`` arms, which would otherwise hit Python's recursion limit.
+        built: list[Block] = []
+        for index, (cond, body) in enumerate(pairs):
+            has_else = index + 1 < len(pairs) or bool(orelse)
+            block = self._new("control_if_else" if has_else else "control_if")
+            block.set_input("CONDITION", self._as_bool(self._eval(cond)))
+            self._attach_substack(block, "SUBSTACK", body)
+            built.append(block)
+        if orelse:
+            self._attach_substack(built[-1], "SUBSTACK2", orelse)
+        for outer, inner in zip(reversed(built[:-1]), reversed(built[1:])):
+            inner.parent = outer.id
+            outer.set_input("SUBSTACK2", Ref(inner))
+        return built[0]
 
     def _emit_while(self, stmt: A.WhileStmt) -> list[Block]:
         self._warn_loop_break(stmt.body)
@@ -1454,8 +2227,17 @@ class Codegen:
             block = self._new("control_repeat_until")
             block.set_input("CONDITION", self._as_bool(self._eval(cond.operand)))
         else:
-            block = self._new("control_while")
-            block.set_input("CONDITION", self._as_bool(self._eval(cond)))
+            if self.vanilla:
+                # `repeat until <not cond>` is `while cond` exactly: the one
+                # tests the same expression and leaves on the same answer.
+                # `control_while` is a TurboWarp block and Scratch rejects the
+                # whole project for containing one.
+                block = self._new("control_repeat_until")
+                block.set_input("CONDITION",
+                                self._as_bool(self._eval(cond), negate=True))
+            else:
+                block = self._new("control_while")
+                block.set_input("CONDITION", self._as_bool(self._eval(cond)))
         self._attach_substack(block, "SUBSTACK", stmt.body)
         return [block]
 
@@ -1470,7 +2252,7 @@ class Codegen:
         self._warn_loop_break(stmt.body)
         loop_var, start, stop, inclusive = _match_for_pattern(stmt)
         if loop_var is not None and start is not None and stop is not None:
-            if _is_one(start) and inclusive:
+            if _is_one(start) and inclusive and not self.vanilla:
                 block = self._new("control_for_each")
                 block.set_input("VALUE", self._as_input(self._eval(stop), O.WHOLE_NUM))
                 self._set_variable_field(block, "VARIABLE", loop_var)
@@ -1552,7 +2334,7 @@ class Codegen:
         if active:
             self._active_loops.append(name)
         try:
-            if _is_one(stmt.start) and not temp:
+            if _is_one(stmt.start) and not temp and not self.vanilla:
                 block = self._new("control_for_each")
                 block.set_input("VALUE", self._as_input(self._eval(stmt.stop), O.WHOLE_NUM))
                 self._set_variable_field(block, "VARIABLE", stmt.var)
@@ -2149,6 +2931,13 @@ class Codegen:
     #: How many call-argument lists enclose the expression being evaluated.
     #: ``any`` only means the key menu inside one of them.
     _arg_depth = 0
+    #: Ternary node id -> the variable its value was computed into. Filled by
+    #: `_prescan_ternaries` for one statement at a time.
+    _ternary_vars: dict[int, str] = {}
+    #: `Sensing.ask` call id -> the variable its answer was copied into, for the
+    #: same statement. See `_prescan_asks`.
+    _ask_vars: dict[int, str] = {}
+    _ask_serial = 0
 
     def _eval(self, expr: A.Expr | None) -> object:
         if expr is None:
@@ -2183,7 +2972,7 @@ class Codegen:
             # `WebSocket.closingCode`, `Pointerlock.isPointerLocked`. A real
             # variable of that name still wins, so declaring one keeps working.
             if len(expr.parts) == 2 and not self._is_declared_name(expr.parts):
-                extension = resolve(expr.parts[0], expr.parts[1], 0)
+                extension = resolve(expr.parts[0], expr.parts[1], 0, self.features)
                 if extension is not None and extension.is_reporter:
                     return self._extension_reporter(extension, None)
                 # ...and the core reporters too: `Sensing.timer`,
@@ -2197,6 +2986,13 @@ class Codegen:
         if isinstance(expr, A.Binary):
             return self._eval_binary(expr)
         if isinstance(expr, A.Ternary):
+            if self.vanilla:
+                name = self._ternary_vars.get(id(expr))
+                if name is not None:
+                    return self._var_read((name,))
+                self.diag(expr, "E0053",
+                          "a conditional here could not be hoisted; it needs to "
+                          "be part of a statement")
             self.project.use_extension("utilities")
             block = self._new("utilities_ternaryOperator")
             block.set_input("A", self._as_bool(self._eval(expr.cond)))
@@ -2273,6 +3069,21 @@ class Codegen:
             block.set_input("NUM2", self._as_input(self._eval(expr.right), O.MATH_NUM))
             return Ref(block)
         if op == "**":
+            if self.vanilla:
+                # Scratch has no power block, but it has `[10 ^]` and `[log]`:
+                # a^b is 10^(b * log10 a). The two round trips cost a bit or so
+                # of the mantissa, which matters for a comparison and does not
+                # for the tempo arithmetic this is used for.
+                log_of = self._new("operator_mathop")
+                log_of.set_field("OPERATOR", "log")
+                log_of.set_input("NUM", self._as_input(self._eval(expr.left), O.MATH_NUM))
+                scaled = self._new("operator_multiply")
+                scaled.set_input("NUM1", self._as_input(self._eval(expr.right), O.MATH_NUM))
+                scaled.set_input("NUM2", Ref(log_of))
+                block = self._new("operator_mathop")
+                block.set_field("OPERATOR", "10 ^")
+                block.set_input("NUM", Ref(scaled))
+                return Ref(block)
             self.project.use_extension("utilities")
             block = self._new("utilities_exponent")
             block.set_input("A", self._as_input(self._eval(expr.left), O.MATH_NUM))
@@ -2284,7 +3095,47 @@ class Codegen:
     # -- calls -------------------------------------------------------------
     @_inside_arguments
     def _eval_call(self, call: A.Call) -> object:
+        hoisted = self._ask_vars.get(id(call))
+        if hoisted is not None:
+            return self._var_read((hoisted,))
         receiver = call.receiver
+        if self.vanilla and self._is_comment_call(call):
+            # `Comments.commentReporter("why", x)` and its boolean twin are a
+            # label on a value: the value is what the program means.
+            if call.args:
+                return self._eval(call.args[-1])
+            return Lit(O.TEXT, "")
+        if self.vanilla and isinstance(receiver, A.Name):
+            if receiver.parts == ("Timer",) and call.name == "getTimer":
+                # A named timer is two lists and an arithmetic block.
+                return self._timer_read(self._eval(call.args[0]) if call.args
+                                        else Lit(O.TEXT, ""))
+            if receiver.parts == ("WebSocket",):
+                # A Scratch project has no socket, so nothing is ever connected
+                # and no message ever arrives. Reporting "not connected" is the
+                # honest answer; the code that guards on it then does nothing.
+                return Lit(O.MATH_NUM, "0")
+            if receiver.parts == ("Util",) and call.name == "stringToBoolean":
+                # "true" or "1", and Scratch's `=` folds case for strings and
+                # compares numerically when both sides look like numbers.
+                return Ref(self._string_is_true(
+                    self._eval(call.args[0]) if call.args else Lit(O.TEXT, "")))
+            if receiver.parts == ("Runtime",):
+                # What a browser can be asked about its own player. Scratch's
+                # answer is fixed: a 480x360 stage, 30 frames a second, 300
+                # clones, and no turbo switch a project may read.
+                fixed = {"turboMode": "0", "isTurboMode": "0",
+                         "framerateLimit": "30", "cloneLimit": "300",
+                         "stageWidth": "480", "stageHeight": "360",
+                         "compilerEnabled": "0"}
+                if call.name in fixed:
+                    return Lit(O.MATH_NUM, fixed[call.name])
+                return Lit(O.MATH_NUM, "0")
+            if receiver.parts in (("console",), ("Console",)) and call.name != "logTimer":
+                # `console.debug(x)` is a reporter by kind but a write by
+                # meaning; a Scratch build has no console, so it is a list.
+                return Ref(self._console_add(self._eval(call.args[-1]) if call.args
+                                             else Lit(O.TEXT, "")))
         if receiver is None:
             if call.name == "join" and len(call.args) >= 2:
                 # ``join(a, b, c)`` is a balanced chain of binary joins, so a
@@ -2349,7 +3200,7 @@ class Codegen:
         query = self._state_alias_query(full, call)
         if query is not None:
             return query
-        extension = resolve(full, call.name, len(call.args))
+        extension = resolve(full, call.name, len(call.args), self.features)
         if extension is not None and extension.is_reporter:
             return self._extension_reporter(extension, call)
         if extension is not None:
@@ -2567,6 +3418,38 @@ class Codegen:
         if call is None:
             return []
         receiver = call.receiver
+        if self.vanilla and self._is_comment_call(call):
+            # `Comments.commentCommand("...")` is a note with no code in it:
+            # nothing to keep, and nothing to warn about.
+            return []
+        if self.vanilla and isinstance(receiver, A.Name):
+            namespace = receiver.parts[0]
+            if (namespace, call.name) == ("Timer", "startTimer"):
+                return self._timer_start(self._eval(call.args[0]) if call.args
+                                         else Lit(O.TEXT, ""))
+            if namespace == "WebSocket":
+                # Sending is a no-op with no socket behind it. Dropping the
+                # call also means its arguments are never evaluated, which is
+                # what keeps the log's JSON formatting out of the build.
+                return []
+            if namespace in ("Events", "MoreEvents") and call.name in (
+                "beforeSave", "afterSave"
+            ):
+                return []          # no save event exists in a Scratch project
+            if namespace in ("console", "Console"):
+                if call.name in ("clear", "Emptying"):
+                    block = self._new("data_deletealloflist")
+                    block.set_field("LIST", self.CONSOLE_LIST,
+                                    self._shared_list(self.CONSOLE_LIST))
+                    return [block]
+                if call.name in ("log", "info", "warn", "error", "debug"):
+                    return self._vanilla_console(call)
+                if call.name in ("logTimer",):
+                    return [self._console_add(self._eval(call.args[-1])
+                                              if call.args else Lit(O.TEXT, ""))]
+                # startLogTimer/endLogTimer are a stopwatch on the console
+                # itself; with no console there is nothing to time.
+                return []
         if receiver is None:
             console = self._emit_console_stmt(call.name, call.args)
             if console is not None:
@@ -2624,7 +3507,7 @@ class Codegen:
         alias = self._state_alias(full, call)
         if alias is not None:
             return alias
-        if (full, call.name) in ARITY_ALIASES and resolve(full, call.name, len(call.args)) is None:
+        if (full, call.name) in ARITY_ALIASES and resolve(full, call.name, len(call.args), self.features) is None:
             allowed = sorted(ARITY_ALIASES[(full, call.name)])
             forms = ", ".join(str(n) for n in allowed)
             self.diag(
@@ -2633,10 +3516,10 @@ class Codegen:
                 f"{full}.{call.name} takes {forms} arguments, not {len(call.args)}",
             )
             return []
-        if full in known_namespaces() and resolve(full, call.name, len(call.args)) is None:
+        if full in known_namespaces(self.features) and resolve(full, call.name, len(call.args), self.features) is None:
             self.diag(call, "E0040", f"{qname} is not a block of the {full} extension")
             return []
-        extension = resolve(full, call.name, len(call.args))
+        extension = resolve(full, call.name, len(call.args), self.features)
         if extension is not None and not extension.is_reporter:
             return [self._extension_command(extension, call)]
 
@@ -2860,7 +3743,10 @@ class Codegen:
                 and name in self.plan.class_lists.get(self.class_name, {}))
         ):
             return self.target
-        if bare and not (self.plan is not None and name in self.plan.globals):
+        if bare and not (
+            self.plan is not None
+            and (name in self.plan.globals or name in self.plan.lists)
+        ):
             return self.target
         return self.project.stage
 
@@ -2872,6 +3758,13 @@ class Codegen:
         block = self._new("data_showvariable" if show else "data_hidevariable")
         owner = self._state_owner(name)
         block.set_field("VARIABLE", name, owner.declare_variable(name, self._initial_of(name)))
+        if show:
+            # ``data_showvariable`` only flips a monitor the runtime already
+            # knows about; with none stored the VM invents one at a default
+            # place, and the editor forgets it after a reload. One entry per
+            # shown variable keeps the position, hidden so the load looks the
+            # same as it did before the block ran.
+            self._shown_state.append((owner, name))
         return [block]
 
     def _list_visibility(self, call: A.Call, show: bool) -> list[Block]:
@@ -2892,8 +3785,8 @@ class Codegen:
             # A colour primitive must be ``#rrggbb``: the pen accepts a 24-bit
             # number at run time, but the file format does not.
             text = O.color_text(value.value) if prim == O.COLOR else value.value
-            if prim == O.TEXT and self.obfuscating:
-                pooled = self._pool_string(text)
+            if prim in (O.TEXT, O.MATH_NUM) and self.obfuscating:
+                pooled = self._pool_string(text, value.prim)
                 if pooled is not None:
                     return pooled
             return Lit(prim, text)
@@ -2901,29 +3794,137 @@ class Codegen:
             return Ref(value.block, Lit(prim, O.DEFAULT_SHADOWS.get(prim, "")))
         return value
 
-    def _pool_string(self, text: str) -> Ref | None:
-        """``doObfuscation``: keep the text in one list, write ``item i of it``.
+    def _integers_as_variables(self) -> int:
+        """Move every pooled integer literal into a variable; returns how many.
+
+        A pooled literal costs a reporter at every use, and the cost is *not*
+        where the literal appears in the source: a constant written once inside
+        a `while` body runs a million times. Measured on the i386 project, the
+        list form cost 3.3x the emulated work and no threshold fixed it -- the
+        lookups that survived were always in the inner loop.
+
+        A variable is the cheapest reporter Scratch has: the compiled runtime
+        reads a property where `item i of list` also has to convert and bound
+        the index. Same hiding (a variable's initial value is state, exactly
+        like a list item), 1.4x instead of 3.3x. Nothing ever writes one, and a
+        green flag resets variables to their declared value anyway.
+
+        The value is stored as a *number*: a string "5" in a variable costs
+        another 2x, because the compiled runtime has to convert it at every use
+        (measured), while a literal in a number slot was already a number. An
+        integer that is also used in a text slot -- `say("007")` -- keeps its
+        spelling and stays in the pool instead.
+        """
+        counts = collections.Counter(
+            text for pool in self._pools for _, text in pool.lookups
+        )
+        hidden = {
+            text for text in counts
+            if _INTEGER.fullmatch(text) and text not in self._text_integers
+        }
+        if not hidden:
+            return 0
+        # One Stage variable per constant, with the literal as its initial value.
+        # The name is a placeholder like every other; obfuscation renames it.
+        slots: dict[str, tuple[str, str]] = {}
+        for text in sorted(hidden):
+            name = f"Constant {len(slots) + 1}"
+            slots[text] = (name, self.project.stage.declare_variable(name, int(text)))
+            self.constant_variables[text] = slots[text][1]
+        # The reporter has to live in the target that reads it: a block id only
+        # resolves inside its own target, while the variable is Stage-global.
+        reporters: dict[tuple[str, str], Block] = {}
+        dropped: dict[str, str] = {}
+        for pool in self._pools:
+            keep: list[tuple[Block, str]] = []
+            for block, text in pool.lookups:
+                if text in hidden:
+                    dropped[block.id] = text
+                else:
+                    keep.append((block, text))
+            if len(keep) != len(pool.lookups):
+                pool.lookups = keep
+                for text in hidden:
+                    pool.items.pop(text, None)
+        if not dropped:
+            return 0
+        for target in self.project.targets:
+            blocks = target.blocks
+            # Creating a reporter adds to `blocks`, so iterate over a snapshot.
+            for block in list(blocks.values()):
+                for name, raw in list((block.inputs or {}).items()):
+                    if not (
+                        isinstance(raw, list)
+                        and len(raw) > 1
+                        and isinstance(raw[1], str)
+                        and raw[1] in dropped
+                    ):
+                        continue
+                    text = dropped[raw[1]]
+                    key = (target.name, text)
+                    reporter = reporters.get(key)
+                    if reporter is None:
+                        reporter = target.new_block("data_variable")
+                        reporter.set_field("VARIABLE", slots[text][0], slots[text][1])
+                        reporters[key] = reporter
+                    block.inputs[name] = [2, reporter.id]
+            for block_id in dropped:
+                blocks.pop(block_id, None)
+        return len(dropped)
+
+    def _pool_string(self, text: str, prim: int = O.MATH_NUM) -> Ref | None:
+        """``doObfuscation``: keep the text in a list, write ``item i of it``.
 
         The value is identical at run time — a list item is a string — but the
         script shows a reporter instead of the author's sentence, so a published
-        project cannot be read by scrolling through it. The list itself still
-        holds the text (a list is state, not a literal), which is documented.
+        project cannot be read by scrolling through it. The lists themselves
+        still hold the text (a list is state, not a literal), which is
+        documented: ``obfuscate_project`` shuffles them and buries them in junk
+        strings, so even the lists give nothing away.
+
+        Which pool a literal lands in is decided by a hash of the text, not by
+        which pool happened to have room, so the same source always produces the
+        same split.
         """
-        # Numbers carry no meaning to hide and are the bulk of the literals;
-        # pooling them would only bloat the project.
+        # Floats carry no meaning to hide and pooling them would only bloat the
+        # project. An integer is a different matter: `0` and `640` say what a
+        # machine does, and a script full of bare numbers reads as arithmetic
+        # with no author's intent left in it -- but only the *rare* ones are
+        # worth a block each, which is what ``auto`` decides afterwards (see
+        # `_depool_hot_integers`).
+        # A broadcast name is renamed by the message pass, not hidden in a
+        # string pool: pooling it would leave the sender holding the old text
+        # while the receiver's hat got the new name.
+        if text in self.project.stage.broadcasts.values():
+            return None
         if not text or _POOL_SKIP.fullmatch(text):
             return None
-        index = self._string_pool.get(text)
-        if index is None:
-            index = len(self._string_pool) + 1
-            self._string_pool[text] = index
-        if self._pool_list is None:
-            name = "Strings"
-            self._pool_list = (name, self.project.stage.declare_list(name, []))
-        name, list_id = self._pool_list
+        if self.obf_ints == "none" and _INTEGER.fullmatch(text):
+            return None
+        if _INTEGER.fullmatch(text) and prim != O.MATH_NUM:
+            # `say("007")` is text, not seven: that one has to keep its spelling,
+            # so it stays a pool item instead of becoming a numeric variable.
+            # `prim` here is the primitive the *source* literal was written
+            # with, not the slot it is going into.
+            self._text_integers.add(text)
+        known = self._pool_at.get(text)
+        if known is None:
+            slot = hashlib.sha1(text.encode()).digest()[0] % self.obf_pools
+            while len(self._pools) <= slot:
+                position = len(self._pools)
+                # The names are placeholders: obfuscation renames every list, so
+                # the pools end up as `v%d` like any other.
+                name = "Strings" if position == 0 else f"Strings{position + 1}"
+                self._pools.append(_Pool(name, self.project.stage.declare_list(name, [])))
+            pool = self._pools[slot]
+            known = (slot, len(pool.items) + 1)
+            pool.items[text] = known[1]
+            self._pool_at[text] = known
+        pool = self._pools[known[0]]
         block = self._new("data_itemoflist")
-        block.set_field("LIST", name, list_id)
-        block.set_input("INDEX", Lit(O.MATH_NUM, str(index)))
+        block.set_field("LIST", pool.name, pool.list_id)
+        block.set_input("INDEX", Lit(O.MATH_NUM, str(known[1])))
+        pool.lookups.append((block, text))
         return Ref(block)
 
     def _as_bool(self, value: object, negate: bool = False) -> object:
@@ -3189,6 +4190,34 @@ def _wav_info(payload: bytes) -> tuple[int, int]:
 
 
 #: ``rotation=all`` in a declaration -> the value ``project.json`` stores.
+#: The keys a target accepts, and the kind of value each one takes. A typo
+#: (``shwo=0``) used to be ignored in silence: the sprite came out in the
+#: default state and nothing said why.
+_SPRITE_META_KEYS = {
+    "name": "text",
+    "x": "number",
+    "y": "number",
+    "size": "number",
+    "direction": "number",
+    "show": "flag",
+    "namespace": "text",
+    "costume": "integer",
+    "volume": "number",
+    "layer": "integer",
+    "rotation": "rotation",
+    "draggable": "flag",
+}
+
+_STAGE_META_KEYS = {
+    "costume": "integer",
+    "volume": "number",
+    "layer": "integer",
+    "tempo": "number",
+    "video": "text",
+    "videoState": "text",
+    "videoTransparency": "number",
+}
+
 _ROTATION_STYLES = {
     "all": "all around",
     "leftright": "left-right",

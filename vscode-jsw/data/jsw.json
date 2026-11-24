@@ -163,6 +163,12 @@
    "doc": "Reserved for a future version — the compiler rejects it."
   },
   {
+   "label": "include",
+   "kind": "keyword",
+   "detail": "keyword",
+   "doc": "Splice another source file in: `include \"display.jsw\"` — one quoted path, nothing else on the line. A `class` is a sprite, so this is how a project with several sprites stays in several files."
+  },
+  {
    "label": "instanceof",
    "kind": "reserved",
    "detail": "reserved",
@@ -509,10 +515,14 @@
  ],
  "features": [
   "commentMetadata",
+  "corruptBlockPos",
   "doObfuscation",
   "hideObjectNames",
   "namespacedNames",
-  "useTempVariables"
+  "pishiSupport",
+  "useTempVariables",
+  "vanillaScratch",
+  "vmProtect"
  ],
  "namespaces": {
   "Clone": {
@@ -1486,6 +1496,22 @@
      }
     ],
     [
+     "midiPlayDrum",
+     {
+      "kind": "command",
+      "detail": "midiPlayDrum(drum, beats)",
+      "doc": "music_midiPlayDrumForBeats"
+     }
+    ],
+    [
+     "midiSetInstr",
+     {
+      "kind": "command",
+      "detail": "midiSetInstr(instrument)",
+      "doc": "music_midiSetInstrument"
+     }
+    ],
+    [
      "playDrum",
      {
       "kind": "command",
@@ -1750,10 +1776,50 @@
      }
     ],
     [
+     "allocdisk",
+     {
+      "kind": "command",
+      "detail": "allocdisk(bytes)",
+      "doc": "command"
+     }
+    ],
+    [
+     "diskcopy",
+     {
+      "kind": "command",
+      "detail": "diskcopy(len, lba, addr)",
+      "doc": "command"
+     }
+    ],
+    [
+     "diskread16",
+     {
+      "kind": "reporter",
+      "detail": "diskread16(addr)",
+      "doc": "reporter"
+     }
+    ],
+    [
+     "diskread8",
+     {
+      "kind": "reporter",
+      "detail": "diskread8(addr)",
+      "doc": "reporter"
+     }
+    ],
+    [
      "fill",
      {
       "kind": "command",
       "detail": "fill(addr, len, value)",
+      "doc": "command"
+     }
+    ],
+    [
+     "hexload",
+     {
+      "kind": "command",
+      "detail": "hexload(text, addr)",
       "doc": "command"
      }
     ],

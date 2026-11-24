@@ -309,6 +309,17 @@ the frame that follows is identical — 19,384 `penPoint` + 19,414 `penLine`
 calls, the same coordinates in the same order, and the same 831 projected
 vertices.
 
+The call form is only written when the sender is the receiver's own sprite.
+`call update_dynamic_geometry()` names a custom block, and custom blocks are
+local to a sprite, so a `main` script that broadcasts a message `processor`
+receives has to stay `Control.broadcast("…")`. It was lowered to
+`call update_dynamic_geometry(), update_camera_data(), …` anyway, and the
+rebuild stopped on `E0036 unknown function` for each name — six errors for
+`TheMast3D`. The linked name is *also* a real custom block in the receiver's
+sprite, so the compiler could not treat the bare call as a broadcast either.
+`_prepass` records `receiver_targets[message]`, and `_emit_script` only takes
+the call form when `self.current_target` is in that set.
+
 ### Canvas metadata is code now
 
 The decompiler used to write target properties, script positions and monitors

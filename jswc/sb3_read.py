@@ -15,6 +15,19 @@ class LoadedProject:
     name: str = "project"
 
     @property
+    def features(self) -> set[str]:
+        """Language features the project itself implies.
+
+        `project.json` names its extensions, and the pishi ones only exist in
+        pishi's player -- so a project that lists any of them is a pishi
+        project and decompiles to a source that asks for `pishiSupport`.
+        """
+        from .pishi_blocks import PISHI_BLOCKS
+
+        declared = set(self.data.get("extensions") or ())
+        return {"pishiSupport"} if declared & set(PISHI_BLOCKS) else set()
+
+    @property
     def targets(self) -> list[dict]:
         return self.data["targets"]
 

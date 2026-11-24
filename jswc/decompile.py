@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 
 from . import opcodes as O
 from .extension_blocks import MICROBIT_CONSTANT_NAMES
+from . import extensions as extension_tables
 from .extensions import reverse as reverse_extension
 from .keywords import ALL_KEYWORDS
 from .sb3 import DEFAULT_SVG
@@ -89,6 +90,11 @@ class Decompiler:
         self.class_context: dict[str, ClassContext] = {}
         self.param_renames: list[dict[str, str]] = []
         self.current_params: set[str] | None = None
+        #: The features the *project* asks for. Only `pishiSupport` is decided
+        #: by the project itself: it lists the pishi extensions in
+        #: `project.json`, so a decompiled source has to ask for the feature or
+        #: the blocks it just wrote would not compile back.
+        self.features: set[str] = set(loaded.features)
         self.var_renames: dict[str, dict[str, str]] = {}
         self.thread_renames: dict[str, dict[str, str]] = {}
         self.list_renames: dict[str, dict[str, str]] = {}
@@ -101,6 +107,10 @@ class Decompiler:
         self.linked_broadcasts: set[str] = set()
         #: Broadcast message -> the name a ``hook: broadcast`` method gets.
         self.receiver_calls: dict[str, str] = {}
+        #: Broadcast message -> the sprites that receive it. A broadcast from
+        #: another sprite has to stay a broadcast: a custom block is local to
+        #: its sprite, so lowering it to a bare ``call`` names nothing there.
+        self.receiver_targets: dict[str, set[str]] = {}
         #: Qualified names of the real custom blocks: a call to one of these
         #: stays a ``procedures_call``, so the receiver spelling would be wrong.
         self.procedure_names: set[str] = set()
@@ -272,6 +282,7 @@ class Decompiler:
                 for message in (broadcast, raw_broadcast):
                     if message:
                         self.receiver_calls.setdefault(message, _identifier(message))
+                        self.receiver_targets.setdefault(message, set()).add(target["name"])
                 body = _next_block(blocks, block)
                 if body is None or body["opcode"] != "procedures_call":
                     continue
@@ -478,6 +489,8 @@ class Decompiler:
             header.append("#enable_feature<useTempVariables>;")
         if self.prefix:
             header.append("#enable_feature<namespacedNames>;")
+        if extension_tables.PISHI_FEATURE in self.features:
+            header.append("#enable_feature<pishiSupport>;")
         # Target properties, script positions and monitors are real syntax now
         # (``main: …;``, ``metadata …;``), so no ``commentMetadata`` feature is
         # needed. The comments are still accepted when a source has them.
@@ -1026,6 +1039,16 @@ class Decompiler:
         context = self.class_context.get(sprite["name"])
         if context is not None:
             used |= set(context.variables.values()) | set(context.lists.values())
+        # A bare name inside a class can also reach a Stage variable or list.
+        # Its *sanitised* spelling is what collides with a parameter here:
+        # ``load theme | editor theme: %s`` has a parameter ``editor theme`` and
+        # the same-named global variable; both emit ``editor_theme``, and the
+        # rebuilt body then assigns the parameter to itself (E0042).
+        stage = self.class_context.get("Stage")
+        if stage is not None:
+            used |= set(stage.variables.values()) | set(stage.lists.values())
+        used |= set(self.var_renames.get("Stage", {}).values())
+        used |= set(self.list_renames.get("Stage", {}).values())
         for name in argument_names:
             renamed = _safe_name(name)
             if renamed != name or _body_uses_variable(blocks, body_first, name):
@@ -1101,8 +1124,7 @@ class Decompiler:
         self.level -= 1
         return lines
 
-    @staticmethod
-    def _is_reporter_block(block: dict) -> bool:
+    def _is_reporter_block(self, block: dict) -> bool:
         opcode = block["opcode"]
         if opcode in _BINARY_OPS or opcode in _PROPERTY_GET:
             return True
@@ -1124,7 +1146,7 @@ class Decompiler:
             ("_menu", "costume", "backdropnumbername", "costumenumbername")
         ):
             return True
-        extension = reverse_extension(opcode)
+        extension = reverse_extension(opcode, features=self.features)
         if extension is not None:
             return extension[2].is_reporter
         return False
@@ -1199,6 +1221,7 @@ class Decompiler:
             call_name = self.receiver_calls.get(name)
             if (
                 call_name is not None
+                and self.current_target in self.receiver_targets.get(name, ())
                 and call_name not in self.local_procedures.get(self.current_target, ())
                 and _valid_dotted(call_name)
                 and not _is_keyword(call_name)
@@ -1263,7 +1286,9 @@ class Decompiler:
                 return [f"{pad}breakpoint;"]
             return [f"{pad}console.debug({text});"]
 
-        extension = reverse_extension(opcode, self._block_values(blocks, block))
+        extension = reverse_extension(
+            opcode, self._block_values(blocks, block), self.features
+        )
         if extension is not None and not extension[2].is_reporter:
             namespace, method, spec = extension
             call = self._extension_call_text(blocks, block, namespace, method, spec)
@@ -1732,7 +1757,9 @@ class Decompiler:
         if opcode == "procedures_call":
             return self._call_text(blocks, block), 11
 
-        extension = reverse_extension(opcode, self._block_values(blocks, block))
+        extension = reverse_extension(
+            opcode, self._block_values(blocks, block), self.features
+        )
         if extension is not None:
             namespace, method, spec = extension
             return self._extension_call_text(blocks, block, namespace, method, spec), 11
@@ -1806,7 +1833,10 @@ class Decompiler:
                     # the same value the compiler turns back into the menu.
                     args.append(f"microbit.{constant}")
                 else:
-                    args.append(repr(value).replace("'", '"', 2))
+                    # `repr` looked like a quoting helper and was not one: a
+                    # menu value with a quote in it (AIChatBot's model JSON is
+                    # exactly that) came out as broken source.
+                    args.append(_quote(str(value)))
             elif block["opcode"].startswith("lmsTempVars2_") and name == "VAR":
                 # The loop/set/get family names a thread variable; it goes
                 # through the same renaming as every other reference, or the

@@ -13,6 +13,9 @@
       "include": "#strings"
     },
     {
+      "include": "#includes"
+    },
+    {
       "include": "#imports"
     },
     {
@@ -78,7 +81,7 @@
             },
             {
               "name": "constant.language.feature.jsw",
-              "match": "\\b(?:useTempVariables|commentMetadata|hideObjectNames|namespacedNames|doObfuscation)\\b"
+              "match": "\\b(?:useTempVariables|commentMetadata|corruptBlockPos|hideObjectNames|namespacedNames|vanillaScratch|doObfuscation|pishiSupport|vmProtect)\\b"
             },
             {
               "name": "entity.name.tag.jsw",
@@ -210,6 +213,25 @@
               "match": "\\\\."
             }
           ]
+        }
+      ]
+    },
+    "includes": {
+      "comment": "include \"display.jsw\" -- a module spliced in before lexing.",
+      "patterns": [
+        {
+          "match": "^(\\s*)(include)\\s+(\"[^\"]*\"|'[^']*')",
+          "captures": {
+            "1": {
+              "name": "punctuation.whitespace.leading.jsw"
+            },
+            "2": {
+              "name": "keyword.control.include.jsw"
+            },
+            "3": {
+              "name": "string.quoted.jsw"
+            }
+          }
         }
       ]
     },
@@ -414,12 +436,12 @@
             {
               "comment": "list / large / slider / normal / default",
               "name": "constant.language.monitor-mode.jsw",
-              "match": "\\b(?:default|normal|slider|large|list)\\b"
+              "match": "\\b(?:largeReadout|default|normal|slider|large|list)\\b"
             },
             {
               "comment": "pos / at / hidden / shown / range / watchers",
               "name": "keyword.other.metadata.jsw",
-              "match": "\\b(?:watchers|hidden|range|shown|max|min|pos|at)\\b"
+              "match": "\\b(?:continuous|discrete|watchers|hidden|range|shown|max|min|pos|at)\\b"
             },
             {
               "comment": "Stage.Lyrics.zh - the annotated target.",
@@ -569,7 +591,7 @@
       "patterns": [
         {
           "comment": "A known extension member: WebSocket.closingCode, Pointerlock.setPointerLock",
-          "match": "(\\b(?:Comments|JSON|Mem|MoreEvents|Pointerlock|Ram|Runtime|Temp|Timer|TurboWarp|Util|WebSocket|console|microbit)\\s*\\.\\s*)((?:broadcastDataToTargetAndWait|deleteAllRuntimeVariables|broadcastToTargetAndWait|broadcastDataToTarget|changeRuntimeVariable|deleteRuntimeVariable|forEachThreadVariable|runtimeVariableExists|broadcastDataAndWait|changeThreadVariable|listRuntimeVariables|threadVariableExists|listThreadVariables|receivedMessageData|secondaryButtonDown|closeWithoutReason|currentMillisecond|getRuntimeVariable|isConnectionClosed|jsonArrayRemoveAll|listExistingTimers|setRuntimeVariable|broadcastToTarget|connectionErrored|getLastKeyPressed|getThreadVariable|isMouseButtonDown|jsonArrayAnalysis|primaryButtonDown|setThreadVariable|whenButtonPressed|jsonArrayReverse|middleButtonDown|whenPinConnected|whenValueChanged|closeConnection|closeWithReason|commentReporter|compilerEnabled|getButtonIsDown|isButtonPressed|isPointerLocked|jsonArrayConcat|jsonArrayCreate|jsonArrayDelete|jsonArrayFilter|jsonArrayFromto|jsonArrayInsert|jsonArraySetlen|startResetTimer|stringToBoolean|ternaryOperator|whenStopClicked|whileKeyPressed|closingMessage|commentBoolean|commentCommand|framerateLimit|groupCollapsed|jsonArrayItemH|lastKeyPressed|setPointerLock|whileTrueFalse|broadcastData|buttonPressed|closeWithCode|displaySymbol|everyDuration|getCloneLimit|isLessOrEqual|isMoreOrEqual|jsonArrayFlat|jsonArrayFrom|jsonArrayJoin|jsonArrayPush|jsonArraySort|jsonVmGetlist|jsonVmSetlist|setCloneLimit|setDimensions|startLogTimer|whenKeyAction|whenTrueFalse|clearDisplay|closeMessage|displayClear|getDimension|getFramerate|getTiltAngle|jsonArrayGet|jsonArraySet|jsonHasValue|receivedData|regexReplace|removeTimers|setFramerate|setTurboMode|valueOfTimer|Information|changeTimer|closingCode|concatArray|displayText|endLogTimer|isConnected|isTurboMode|jsonIsValid|jsonJlength|messageData|newInstance|removeTimer|resumeTimer|ruleReplace|sendMessage|setUsername|stageHeight|timerExists|whenGesture|whenTimerOp|beforeSave|cloneLimit|commentHat|falseBlock|getEnabled|hasErrored|jsonDelete|jsonGetAll|jsonHasKey|jsonLength|pauseTimer|setEnabled|stageWidth|startTimer|whenChange|whenTilted|afterSave|arrayPush|closeCode|connectTo|fetchFrom|greenFlag|isBoolean|isExactly|jsonEqual|onMessage|parseJSON|setLocked|tiltAngle|trueBlock|turboMode|Emptying|Timerlog|Timeroff|arrayGet|commentC|exponent|getTimer|groupEnd|isClosed|isLocked|isNumber|isObject|isString|isTilted|logTimer|setTimer|Journal|Timeron|Warning|display|forever|isArray|isValid|jsonGet|jsonNew|jsonSet|letters|newline|onClose|onError|write16|write32|copyTo|jsonIs|length|onOpen|read16|read32|tilted|write8|Error|alloc|angle|clamp|clear|debug|error|group|parse|read8|stats|fill|info|load|save|size|warn|get|log|now|set|pi)\\b)",
+          "match": "(\\b(?:Comments|JSON|Mem|MoreEvents|Pointerlock|Ram|Runtime|Temp|Timer|TurboWarp|Util|WebSocket|console|microbit)\\s*\\.\\s*)((?:broadcastDataToTargetAndWait|deleteAllRuntimeVariables|broadcastToTargetAndWait|broadcastDataToTarget|changeRuntimeVariable|deleteRuntimeVariable|forEachThreadVariable|runtimeVariableExists|broadcastDataAndWait|changeThreadVariable|listRuntimeVariables|threadVariableExists|listThreadVariables|receivedMessageData|secondaryButtonDown|closeWithoutReason|currentMillisecond|getRuntimeVariable|isConnectionClosed|jsonArrayRemoveAll|listExistingTimers|setRuntimeVariable|broadcastToTarget|connectionErrored|getLastKeyPressed|getThreadVariable|isMouseButtonDown|jsonArrayAnalysis|primaryButtonDown|setThreadVariable|whenButtonPressed|jsonArrayReverse|middleButtonDown|whenPinConnected|whenValueChanged|closeConnection|closeWithReason|commentReporter|compilerEnabled|getButtonIsDown|isButtonPressed|isPointerLocked|jsonArrayConcat|jsonArrayCreate|jsonArrayDelete|jsonArrayFilter|jsonArrayFromto|jsonArrayInsert|jsonArraySetlen|startResetTimer|stringToBoolean|ternaryOperator|whenStopClicked|whileKeyPressed|closingMessage|commentBoolean|commentCommand|framerateLimit|groupCollapsed|jsonArrayItemH|lastKeyPressed|setPointerLock|whileTrueFalse|broadcastData|buttonPressed|closeWithCode|displaySymbol|everyDuration|getCloneLimit|isLessOrEqual|isMoreOrEqual|jsonArrayFlat|jsonArrayFrom|jsonArrayJoin|jsonArrayPush|jsonArraySort|jsonVmGetlist|jsonVmSetlist|setCloneLimit|setDimensions|startLogTimer|whenKeyAction|whenTrueFalse|clearDisplay|closeMessage|displayClear|getDimension|getFramerate|getTiltAngle|jsonArrayGet|jsonArraySet|jsonHasValue|receivedData|regexReplace|removeTimers|setFramerate|setTurboMode|valueOfTimer|Information|changeTimer|closingCode|concatArray|displayText|endLogTimer|isConnected|isTurboMode|jsonIsValid|jsonJlength|messageData|newInstance|removeTimer|resumeTimer|ruleReplace|sendMessage|setUsername|stageHeight|timerExists|whenGesture|whenTimerOp|beforeSave|cloneLimit|commentHat|diskread16|falseBlock|getEnabled|hasErrored|jsonDelete|jsonGetAll|jsonHasKey|jsonLength|pauseTimer|setEnabled|stageWidth|startTimer|whenChange|whenTilted|afterSave|allocdisk|arrayPush|closeCode|connectTo|diskread8|fetchFrom|greenFlag|isBoolean|isExactly|jsonEqual|onMessage|parseJSON|setLocked|tiltAngle|trueBlock|turboMode|Emptying|Timerlog|Timeroff|arrayGet|commentC|diskcopy|exponent|getTimer|groupEnd|isClosed|isLocked|isNumber|isObject|isString|isTilted|logTimer|setTimer|Journal|Timeron|Warning|display|forever|hexload|isArray|isValid|jsonGet|jsonNew|jsonSet|letters|newline|onClose|onError|write16|write32|copyTo|jsonIs|length|onOpen|read16|read32|tilted|write8|Error|alloc|angle|clamp|clear|debug|error|group|parse|read8|stats|fill|info|load|save|size|warn|get|log|now|set|pi)\\b)",
           "captures": {
             "1": {
               "name": "support.class.builtin.jsw"

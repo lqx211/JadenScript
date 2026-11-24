@@ -150,6 +150,28 @@ class BuildTests(CliTestCase):
         self.assertIn("extensions pen, sipcconsole", stdout)
         self.assertNotIn("extensions pen ·", stdout)
 
+    def test_only_sprite_keeps_the_stage_and_one_sprite(self) -> None:
+        out = self.tmp / "out.sb3"
+        source = self.source(
+            "class main {\n    public void greenFlag() { Looks.say(1); }\n}\n"
+            "class other {\n    public void greenFlag() { Looks.say(2); }\n}\n"
+        )
+        code, _, _ = run(["build", str(source), "-o", str(out), "--only-sprite", "other"])
+        self.assertEqual(code, 0)
+        import zipfile
+
+        data = json.loads(zipfile.ZipFile(out).read("project.json"))
+        self.assertEqual([t["name"] for t in data["targets"]], ["Stage", "other"])
+
+    def test_only_sprite_names_a_sprite_that_is_not_there(self) -> None:
+        out = self.tmp / "out.sb3"
+        code, _, stderr = run([
+            "build", str(self.source(GOOD)), "-o", str(out),
+            "--only-sprite", "nope", "--strict",
+        ])
+        self.assertEqual(code, 1)
+        self.assertIn("E0071", stderr)
+
     def test_verbose_prints_phase_timings(self) -> None:
         out = self.tmp / "out.sb3"
         code, _, stderr = run(["build", str(self.source(GOOD)), "-o", str(out), "-v"])
@@ -168,6 +190,54 @@ class DecompileTests(CliTestCase):
         self.assertTrue(jsw.exists())
         self.assertIn("Decompiled", stdout)
         self.assertIn("sprites", stdout)
+
+
+    def test_strict_roundtrip_fails_on_a_rename(self) -> None:
+        sb3 = self.tmp / "named.sb3"
+        source_text = (
+            "class main {\n"
+            "    public value = 0;\n"
+            "    public void greenFlag() { value = 1; }\n}\n"
+        )
+        self.assertEqual(run(["build", str(self.source(source_text)), "-o", str(sb3)])[0], 0)
+        # a variable name the language cannot spell is a rename, and a rename is
+        # what --strict-roundtrip exists to refuse
+        import zipfile
+
+        source = zipfile.ZipFile(sb3)
+        data = json.loads(source.read("project.json"))
+        for target in data["targets"]:
+            for entry in target["variables"].values():
+                if entry[0] == "value":
+                    entry[0] = "my value"
+            for block in target["blocks"].values():
+                if isinstance(block, dict):
+                    for field in block.get("fields", {}).values():
+                        if field[0] == "value":
+                            field[0] = "my value"
+        patched = self.tmp / "dirty.sb3"
+        with zipfile.ZipFile(patched, "w", zipfile.ZIP_DEFLATED) as out:
+            for item in source.infolist():
+                payload = (
+                    json.dumps(data).encode()
+                    if item.filename == "project.json"
+                    else source.read(item.filename)
+                )
+                out.writestr(item.filename, payload)
+        code, _, stderr = run([
+            "decompile", str(patched), "-o", str(self.tmp / "back.jsw"), "--strict-roundtrip"
+        ])
+        self.assertEqual(code, 1)
+        self.assertIn("strict round trip", stderr)
+        self.assertIn("I0001", stderr)
+
+    def test_strict_roundtrip_passes_on_a_clean_project(self) -> None:
+        sb3 = self.tmp / "hello.sb3"
+        self.assertEqual(run(["build", str(HELLO), "-o", str(sb3)])[0], 0)
+        code, _, stderr = run([
+            "decompile", str(sb3), "-o", str(self.tmp / "back.jsw"), "--strict-roundtrip"
+        ])
+        self.assertEqual(code, 0, stderr)
 
 
 class CheckTests(CliTestCase):
@@ -213,6 +283,27 @@ class CheckTests(CliTestCase):
         self.assertEqual(code, 0)
         self.assertEqual(stdout, "")
         self.assertEqual(stderr, "")
+
+    def test_check_reads_the_build_the_defines_select(self) -> None:
+        """``check`` is what the editor runs, so it has to see the same text the
+        build saw: a line inside ``#ifdef TURBOWARP`` is invisible without the
+        define and an error with it -- and it keeps its own line number either
+        way, because the dropped lines above it leave gaps."""
+        path = self.source("class A {\n  public void go() {\n"
+                           "#ifdef TURBOWARP\n    x = ;\n#endif\n"
+                           "    y = 1;\n  }\n}\n")
+        code, stdout, stderr = run(["check", str(path)])
+        self.assertEqual(code, 0)
+        self.assertNotIn("E0017", stdout + stderr)
+
+        # a syntax error is thrown, not recovered, so it lands on stderr and
+        # sets exit 2 -- the point is only that the line is now visible
+        for flag in (["--target", "turbowarp"], ["-D", "TURBOWARP"]):
+            code, stdout, stderr = run(["check", str(path), *flag])
+            self.assertEqual(code, 2, flag)
+            self.assertIn("E0017", stdout + stderr, flag)
+            self.assertIn("test.jsw:4:", stdout + stderr,
+                          "the error keeps the line the author wrote")
 
 
 class IntrospectionTests(CliTestCase):
@@ -359,6 +450,16 @@ class LogLevelTests(CliTestCase):
         self.assertTrue(ui.visible(note))
         printed = ui.format_diagnostic(note, None, "x.jsw")
         self.assertIn("I0001", printed)
+        ui.configure(color=False)
+
+    def test_a_diagnostic_past_eof_does_not_crash(self):
+        from jswc import ui
+
+        ui.configure(color=False)
+        printed = ui.format_diagnostic(
+            "99:2: E0037 unknown reporter 'x'", "one\ntwo\n", "x.jsw"
+        )
+        self.assertIn("E0037", printed)
         ui.configure(color=False)
 
     def test_loglevel_error_silences_warnings(self):

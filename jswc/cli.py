@@ -10,7 +10,7 @@ import time
 from pathlib import Path
 
 from . import __version__, include, lints, ui
-from .codegen import Codegen
+from .codegen import DEFAULT_OBF_FLATTEN, DEFAULT_OBF_POOLS, Codegen
 from .lexer import tokenize
 from .parser import Parser
 from .sb3 import write_project_json, write_sb3
@@ -33,7 +33,7 @@ def _read(path: str | Path) -> str:
 
 
 def _load(path: str | Path, defines: set[str] | None = None) -> Source:
-    """Read a source file with its ``// include`` lines expanded."""
+    """Read a source file with its ``include`` lines expanded."""
     return include.expand(path, defines=defines)
 
 
@@ -50,6 +50,17 @@ def _parse_source(source: Source, lenient: bool = True) -> tuple[Parser, object]
 def _err(message: str) -> None:
     sys.stdout.flush()
     print(message, file=sys.stderr)
+
+
+#: Diagnostics that mean the round trip is lossy: a name that had to change, and
+#: a block that had no source spelling. Both compile back into a project that
+#: runs the same but is not the file that came in.
+LOSSY_CODES = {"I0001", "W0008"}
+
+
+def _is_lossy(note: str) -> bool:
+    entry = ui.classify(note)
+    return entry.severity == "error" or entry.code in LOSSY_CODES
 
 
 def _report_diagnostics(notes: list[str], source: str | Source | None, name: str,
@@ -137,7 +148,7 @@ def _project_stats(project) -> dict[str, int]:
 def cmd_check(args: argparse.Namespace) -> int:
     started = time.perf_counter()
     try:
-        loaded = _load(args.source)
+        loaded = _load(args.source, _defines(args))
     except include.IncludeError as exc:
         _err(ui.failure(str(exc)))
         return EXIT_FAILED
@@ -284,14 +295,26 @@ def cmd_decompile(args: argparse.Namespace) -> int:
             ("lower", ui.elapsed(t_lowered - t_load)),
             ("write", ui.elapsed(t_done - t_lowered)),
         )))
+    if args.strict_roundtrip:
+        lossy = [note for note in diagnostics if _is_lossy(note)]
+        if lossy:
+            _err(ui.failure(
+                f"strict round trip: {len(lossy)} of these would not come back "
+                "the same"
+            ))
+            _err(ui.muted("  a rename or an unsupported block is a difference "
+                          "between the project and the source"))
+            for note in lossy[:10]:
+                _err("  " + ui.muted(note))
+            if len(lossy) > 10:
+                _err(ui.muted(f"  … and {len(lossy) - 10} more"))
+            return EXIT_FAILED
     return EXIT_OK
 
 
 def cmd_build(args: argparse.Namespace) -> int:
     source_path = Path(args.source)
-    defines = set(args.define)
-    if args.target is not None:
-        defines.add(args.target.upper())
+    defines = _defines(args)
     try:
         loaded = _load(args.source, defines)
     except include.IncludeError as exc:
@@ -312,10 +335,21 @@ def cmd_build(args: argparse.Namespace) -> int:
             base_dir=source_path.resolve().parent,
             allow_undefined=args.allow_undefined,
             features=set(args.enable),
+            obf_junk=args.obf_junk,
+            obf_flatten=args.obf_flatten,
+            obf_ints=args.obf_ints,
+            obf_pools=args.obf_pools,
+            obf_scrub=args.obf_scrub,
+            only_sprite=args.only_sprite,
+            vm_budget=args.vm_budget,
+            vm_style=args.vm_style,
+            vm_seed=args.vm_seed,
+            vm_split=args.vm_split,
+            vm_crypt=args.vm_crypt,
         )
         project = codegen.compile()
         t_codegen = time.perf_counter()
-        issues = validate(project)
+        issues = validate(project, corrupt=codegen.corrupt_block_pos)
         t_validate = time.perf_counter()
 
     took = spinner.stop()
@@ -459,6 +493,29 @@ exit codes:
 """
 
 
+def _defines(args: argparse.Namespace) -> set[str]:
+    """The names ``#ifdef`` may ask about, from ``-D`` and ``--target``.
+
+    ``--target`` is not a mode switch the compiler branches on -- it is
+    shorthand for one define, so the two builds of a machine that has to run in
+    both places differ only where the source says they do.
+    """
+    names = set(getattr(args, "define", None) or ())
+    target = getattr(args, "target", None)
+    if target is not None:
+        names.add(target.upper())
+    return names
+
+
+def _add_define_flags(parser: argparse.ArgumentParser) -> None:
+    """``-D`` / ``--target``, for every command that has to read the sources."""
+    parser.add_argument("-D", "--define", action="append", default=[], metavar="NAME",
+                        help="define NAME for #ifdef, e.g. -D TURBOWARP (repeatable)")
+    parser.add_argument("--target", choices=("scratch", "turbowarp"), default=None,
+                        help="shorthand for -D SCRATCH or -D TURBOWARP: the two builds "
+                             "of a machine that has to run in both places")
+
+
 def _add_visual_flags(parser: argparse.ArgumentParser) -> None:
     """``--no-color`` / ``--plain`` / ``--explain`` also after the command name."""
     parser.add_argument("--no-color", action="store_true", default=argparse.SUPPRESS,
@@ -505,12 +562,51 @@ def build_parser() -> argparse.ArgumentParser:
                        help="write project.json instead of a zipped .sb3")
     build.add_argument("--enable", action="append", default=[], metavar="FEATURE",
                        help="enable a language feature (useTempVariables, commentMetadata, "
-                            "namespacedNames, doObfuscation)")
-    build.add_argument("-D", "--define", action="append", default=[], metavar="NAME",
-                       help="define NAME for #ifdef, e.g. -D TURBOWARP (repeatable)")
-    build.add_argument("--target", choices=("scratch", "turbowarp"), default=None,
-                       help="shorthand for -D SCRATCH or -D TURBOWARP: the two builds "
-                            "of a machine that has to run in both places")
+                            "namespacedNames, doObfuscation, corruptBlockPos, vanillaScratch, "
+                            "pishiSupport)")
+    build.add_argument("--obf-junk", type=int, default=None, metavar="N",
+                       help="with doObfuscation: junk strings to shuffle into each string "
+                            "list (default: as many as it holds; 0 adds no decoys at all)")
+    build.add_argument("--obf-ints", choices=("auto", "list", "none"), default="auto",
+                       help="with doObfuscation: how integer literals are hidden (default "
+                            "auto: one variable each, ~1.4x; list puts them in the string "
+                            "lists like text, ~3.3x in a literal-heavy script; none keeps "
+                            "them inline and costs nothing)")
+    build.add_argument("--obf-flatten", type=int, default=DEFAULT_OBF_FLATTEN, metavar="N",
+                       help="with doObfuscation: turn every hat body of at most N blocks "
+                            f"into a state machine (default {DEFAULT_OBF_FLATTEN}; 0 disables)")
+    build.add_argument("--obf-pools", type=int, default=DEFAULT_OBF_POOLS, metavar="N",
+                       help="with doObfuscation: spread the text literals over N lists "
+                            f"(default {DEFAULT_OBF_POOLS}; 1 puts them all in one list)")
+    build.add_argument("--obf-scrub", action="store_true",
+                       help="with doObfuscation: drop workspace comments and randomise "
+                            "block positions, the last editor residue in a release build")
+    _add_define_flags(build)
+    build.add_argument("--vm-budget", type=int, default=1, metavar="N",
+                       help="with vmProtect: instructions per interpreter loop "
+                            "iteration (default 1: one per frame; 0 is treated "
+                            "as 1)")
+    build.add_argument("--vm-style", choices=("list", "h0"), default="h0",
+                       help="with vmProtect: 'h0' (default) emits one explicit "
+                            "switch case per instruction; 'list' uses __vm_step "
+                            "dispatch")
+    build.add_argument("--vm-seed", type=int, default=None, metavar="N",
+                       help="with vmProtect: seed the randomized VM layout for "
+                            "reproducible builds (default: fresh seed per build)")
+    build.add_argument("--vm-split", dest="vm_split", action="store_true",
+                       default=True,
+                       help="with vmProtect h0 style: put each instruction body "
+                            "in its own helper method (default)")
+    build.add_argument("--no-vm-split", dest="vm_split", action="store_false",
+                       help="with vmProtect h0 style: keep instruction bodies "
+                            "inside __vm_switch")
+    build.add_argument("--vm-crypt", type=int, choices=(0, 1, 2, 3), default=1,
+                       metavar="N",
+                       help="with vmProtect: 0 fixed layout, 1 randomized layout "
+                            "(default), 2 add checksum, 3 add decoy cases")
+    build.add_argument("--only-sprite", metavar="NAME", default=None,
+                       help="emit the Stage and the named sprite only, for a quick "
+                            "single-sprite edit loop")
     build.add_argument("--allow-undefined", action="store_true",
                        help="downgrade undefined-variable errors (needed for legacy sources)")
     build.add_argument("--strict", action="store_true",
@@ -530,6 +626,9 @@ def build_parser() -> argparse.ArgumentParser:
                            help="lists/variables longer than this are written to .jsa/.jsv files")
     decompile.add_argument("--assets-prefix", default="assets/",
                            help="folder (next to the output) that receives costumes and sounds")
+    decompile.add_argument("--strict-roundtrip", action="store_true",
+                           help="exit 1 when the source cannot be rebuilt into the "
+                                "same project (a rename, or a block kept as text)")
     decompile.add_argument("-v", "--verbose", action="store_true")
     _add_visual_flags(decompile)
     decompile.set_defaults(func=cmd_decompile)
@@ -541,6 +640,7 @@ def build_parser() -> argparse.ArgumentParser:
                        help="exit 1 when any diagnostic is reported")
     check.add_argument("--format", choices=("text", "efm", "json"), default="text",
                        help="output style; 'efm' is one 'file:line:col: T: msg' line each")
+    _add_define_flags(check)
     _add_visual_flags(check)
     check.set_defaults(func=cmd_check)
 
@@ -585,7 +685,7 @@ def main(argv: list[str] | None = None) -> int:
         source: str | Source | None = None
         if exc.line:
             try:
-                source = _load(args.source)
+                source = _load(args.source, _defines(args))
             except include.IncludeError:
                 source = ui.read_source(args.source)
         _err(ui.format_diagnostic(*_locate(text, source, Path(args.source).name)))

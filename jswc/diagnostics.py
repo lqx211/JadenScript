@@ -236,6 +236,11 @@ MESSAGES: tuple[Message, ...] = (
             "The parser closed the unclosed ``(`` at the end of the statement."),
 
     # -- semantics the compiler cannot prove -------------------------------
+    Message("I0004", "info", "vmProtect virtualised programs",
+            "Reported after a ``vmProtect`` build: how many programs (hats and "
+            "custom-block bodies) were compiled to bytecode, and how many "
+            "programs were left native (``W0031``)."),
+
     Message("I0003", "info", "large list written inline",
             "A list owned by a class is written as a literal so no item is "
             "lost; a file-scope list of the same size moves to a ``.jsa`` side "
@@ -309,6 +314,53 @@ MESSAGES: tuple[Message, ...] = (
             "acos, atan, ln, log, e ^ and 10 ^; use ``Operators.round(x)`` for "
             "rounding."),
 
+    Message("W0027", "warning", "vanillaScratch beats useTempVariables",
+            "``useTempVariables`` compiles ``_x`` to ``lmsTempVars2`` thread "
+            "variables, and that extension is not on scratch.mit.edu, so the "
+            "project would not load there. ``vanillaScratch`` wins and the "
+            "local stays a sprite-local variable -- which is already per clone "
+            "(rendered-target.js makeClone copies them), so the only difference "
+            "is that a nested call into the same sprite shares it."),
+
+    Message("E0077", "error", "pishiSupport namespace claimed twice",
+            "A namespace is how a block is spelled (``Arduino.high(13)``), so "
+            "two extensions answering to the same one is not a style problem: "
+            "the compiler would resolve the call to one of them and the player "
+            "would run the other. Drop one of the two, or rename one in the "
+            "extension."),
+
+    Message("W0028", "warning", "pishiSupport namespace shadows a name",
+            "The pishi extensions add the namespaces ``Facemesh``, ``Handpose``, "
+            "``Posenet``, ``ObjectDetection``, ``GoogleTeachableMachine``, "
+            "``SpeechRecognition``, ``AIChatBot`` and ``Arduino``, and a "
+            "namespace always wins when it is used as a receiver: with a "
+            "variable called ``Arduino``, ``Arduino.x`` still reaches the "
+            "extension. Rename the variable or the sprite."),
+
+    Message("E0078", "error", "unknown metadata key",
+            "A target accepts ``name``, ``x``, ``y``, ``size``, ``direction``, "
+            "``show``, ``namespace``, ``costume``, ``volume``, ``layer``, "
+            "``rotation`` and ``draggable``; the Stage accepts ``costume``, "
+            "``volume``, ``layer``, ``tempo``, ``video``, ``videoState`` and "
+            "``videoTransparency``. Anything else used to be dropped without a "
+            "word, so a typo left the sprite at its defaults."),
+
+    Message("E0079", "error", "metadata value has the wrong type",
+            "``size=big`` is not a number, ``show=yes`` is not 0 or 1, and "
+            "``rotation=spin`` is not ``all``/``leftright``/``none``."),
+
+    Message("W0030", "warning", "vmProtect skipped for vanillaScratch",
+            "``vmProtect`` is a deliberate slowdown, so a build that targets "
+            "scratch.mit.edu keeps its ordinary blocks; drop ``vanillaScratch`` "
+            "to virtualise the supported scripts."),
+    Message("W0031", "warning", "vmProtect left a program native",
+            "Only the instruction set vmProtect knows is virtualised; this hat "
+            "or custom block uses a block outside it and is executed as "
+            "ordinary blocks."),
+    Message("W0029", "warning", "sprite left out of an --only-sprite build",
+            "The kept sprite calls a custom block on a sprite that is not in "
+            "this build, so the compiled call has no definition behind it."),
+
     Message("E9999", "error", "unclassified",
             "No catalogue entry matched; please report the message verbatim."),
 )
@@ -333,6 +385,7 @@ LEGACY: tuple[tuple[str, str], ...] = (
     # Warnings carry distinctive wording, so they win over the generic shapes.
     (r"renamed to", "I0001"),
     (r"computed at runtime", "W0004"),
+    (r"vanillaScratch beats useTempVariables", "W0027"),
     (r"is not declared here", "W0005"),
     (r"declared both private and public|already a public variable", "W0011"),
     (r"menu option|keyword .* outside", "W0006"),

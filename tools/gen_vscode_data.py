@@ -72,6 +72,9 @@ KEYWORD_DOCS = {
     "return": "Stop this script (Scratch has no return values).",
     "call": "Fire-and-forget broadcast instead of a blocking call.",
     "import": "Pull a list (.jsa) / variable (.jsv) in from a side file.",
+    "include": "Splice another source file in: `include \"display.jsw\"` — one "
+               "quoted path, nothing else on the line. A `class` is a sprite, so "
+               "this is how a project with several sprites stays in several files.",
     "as": "Names the imported value.",
     "true": "Boolean literal.",
     "false": "Boolean literal.",

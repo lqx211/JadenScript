@@ -1,11 +1,17 @@
-"""``// include "file.jsw"`` — real source modules.
+"""``include "file.jsw"`` — real source modules.
 
 The language maps a ``class`` to a sprite, so a project with three sprites needs
 three classes; keeping them in one file makes the file the size of the machine.
 An include is therefore a *line* directive: the line is replaced by the contents
 of the named file, resolved relative to the file that mentioned it.
 
-    // include "display.jsw"
+    include "display.jsw"
+
+It is a keyword, and it was spelled ``// include`` once: the compiler treated a
+*comment* as a directive, which made every disabled include indistinguishable
+from a live one and every live one look like dead code. A line that still says
+``// include`` is reported rather than ignored, because the alternative is a
+module that silently disappears and a build that fails somewhere else.
 
 Everything after the directive is ordinary source, so the split is purely about
 where the text lives. Diagnostics have to keep pointing at the module the reader
@@ -19,7 +25,16 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-_INCLUDE = re.compile(r'^\s*//\s*include\s+"([^"]+)"\s*$')
+#: A trailing ``//`` comment is allowed: the path is inside the quotes, so the
+#: comment can never be part of it, and a line worth an explanation is worth
+#: being able to explain.
+_INCLUDE = re.compile(r'^\s*include\s+"([^"]+)"\s*(?://.*)?$')
+#: The spelling before `include` was a keyword. Reported, not honoured.
+_OLD_INCLUDE = re.compile(r'^\s*//\s*include\s+"([^"]+)"\s*$')
+#: An `include` line the pattern above could not read -- a missing quote, a
+#: path in angle brackets, trailing words. It would otherwise reach the parser
+#: as a bare keyword and fail somewhere that says nothing about this line.
+_STRAY_INCLUDE = re.compile(r'^\s*include\b')
 
 #: The preprocessor is line-based, like the include it sits beside: a project
 #: that has to build twice -- once for Scratch, which cannot load an extension,
@@ -64,7 +79,7 @@ class Source:
 
 def expand(path: str | Path, *, defines: set[str] | None = None,
            _seen: tuple[Path, ...] = ()) -> Source:
-    """Read ``path``, splicing in every ``// include`` it mentions.
+    """Read ``path``, splicing in every ``include`` it mentions.
 
     ``defines`` is the set of names ``#ifdef`` asks about; a ``#define`` in the
     source adds to the same set, so a module can set a flag an including file
@@ -111,8 +126,17 @@ def expand(path: str | Path, *, defines: set[str] | None = None,
             continue                    # a directive is not a source line
         if not live:
             continue                    # ... and neither is what it hides
+        stale = _OLD_INCLUDE.match(line)
+        if stale is not None:
+            raise IncludeError(
+                f"{path}:{number}: include is a keyword now, not a comment: "
+                f'write  include "{stale.group(1)}"  without the //')
         match = _INCLUDE.match(line)
         if match is None:
+            if _STRAY_INCLUDE.match(line) is not None:
+                raise IncludeError(
+                    f'{path}:{number}: an include is  include "file.jsw"  -- '
+                    "one quoted path and nothing else on the line")
             lines.append(line)
             origins.append((str(path), number))
             continue

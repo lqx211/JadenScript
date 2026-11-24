@@ -228,10 +228,12 @@ class Parser:
 
         The tail is free-form (``at 0,0 100x24 shown``), so it is sliced out of
         the source and handed to the same parser the ``// monitor`` comments
-        use. Two spellings are accepted for a monitor::
+        use. A monitor may name the mode first, name it after the target, or
+        leave it out for a plain read-out::
 
-            metadata Stage.score slider at 0,0 100x24 shown range 0..10;
-            metadata slider Stage.score at 0,0 100x24 shown range 0..10;
+            metadata slider(0,10) Stage.score at 0,0 100x24 shown;
+            metadata Stage.score slider(0,10) at 0,0 100x24 shown;
+            metadata Stage.score at 0,0 100x24 shown;
         """
         kw = self.expect_keyword("metadata")
         start = self.peek()
@@ -1025,7 +1027,43 @@ def _describe(tok: Token) -> str:
 _ROTATIONS = {"all": "all around", "leftright": "left-right", "none": "don't rotate"}
 
 
-_MONITOR_MODES = ("default", "large", "slider", "list")
+#: A monitor's mode, with the range a slider may carry in its parentheses:
+#: ``slider(-127,128)``. ``largeReadout`` is the long spelling of ``large``,
+#: ``normal`` of ``default``, and a bare ``slider`` keeps Scratch's ``0..100``.
+_MODE_TOKEN = (
+    r"(?P<mode>default|normal|large|largeReadout|slider|list)(?![\w-])"
+    r"(?:\(\s*(?P<lo>-?[\d.]+)\s*,\s*(?P<hi>-?[\d.]+)\s*\))?"
+)
+
+#: The owner and the state name. The owner may be quoted (``"img loader".x``),
+#: so the target is not simply "one word".
+_MONITOR_TARGET = r'(?:"[^"]*"\.\S+|\S+)'
+
+
+def _monitor_comment(
+    target: str, mode: str, lo: str | None, hi: str | None, rest: str
+) -> str:
+    """Normalise one monitor spelling to the ``// monitor`` comment form.
+
+    The comment -- which is what the codegen and the decompiler both write -- has
+    one spelling per mode plus ``range a..b``, so the aliases and the ranged
+    slider are resolved here rather than in every reader of the comment.
+    """
+    name = mode.lower()
+    if name in ("largereadout", "large"):
+        name = "large"
+    elif name == "normal":
+        name = "default"
+    parts = [f"monitor {target} {name}"]
+    if lo is not None and not re.search(r"\brange\b", rest, re.IGNORECASE):
+        # Whole-number bounds are steps. A slider a reader cannot drag to a
+        # value the program compares against is a trap: `dbgOn` tests `== 1`,
+        # and 1.5 would be a state that does nothing.
+        steps = all(re.fullmatch(r"-?\d+", bound) for bound in (lo, hi))
+        parts.append(f"range {lo}..{hi}" + (" discrete" if steps else ""))
+    if rest.strip():
+        parts.append(rest.strip())
+    return " ".join(parts)
 
 
 def _parse_metadata_tail(kw: Token, text: str) -> A.MetaDecl:
@@ -1051,34 +1089,49 @@ def _parse_metadata_tail(kw: Token, text: str) -> A.MetaDecl:
             values={"x": float(position.group("x")), "y": float(position.group("y"))},
         )
 
+    if re.match(r"(monitor|watch|comment|note)\s", text, re.IGNORECASE):
+        return A.MetaDecl(line=kw.line, col=kw.col, kind="line", text=text)
+
     # A monitor may name the mode first (``slider Stage.score at …``) or after
     # the target (``Stage.score slider at …``); both become the comment
-    # spelling ``monitor Stage.score slider at …``.
-    modes = "|".join(_MONITOR_MODES)
-    # The owner may be quoted (``"img list loader".score``), so it is not
-    # simply "one word".
-    target = r'(?:"[^"]*"\.\S+|\S+)'
-    hoisted = re.match(
-        rf"(?P<mode>{modes})\s+(?P<target>{target})\s*(?P<rest>.*)$", text, re.IGNORECASE
-    ) or re.match(
-        rf"(?P<target>{target})\s+(?P<mode>{modes})\b\s*(?P<rest>.*)$", text, re.IGNORECASE
-    )
-    if hoisted:
-        rest = hoisted.group("rest").strip()
-        text = (
-            f"monitor {hoisted.group('target')} "
-            f"{hoisted.group('mode').lower()} {rest}"
-        ).strip()
-
-    if not re.match(r"(monitor|watch|comment|note)\s", text, re.IGNORECASE):
-        raise ParseError(
-            "metadata expects 'pos x,y', a monitor mode, or "
-            "'monitor|watch|comment|note …'",
-            kw.line,
-            kw.col,
-            code="E0032",
+    # spelling ``monitor Stage.score slider at …``. With no mode at all the
+    # monitor is a plain read-out, which is the common case.
+    for pattern in (
+        rf"{_MODE_TOKEN}\s+(?P<target>{_MONITOR_TARGET})\s*(?P<rest>.*)$",
+        rf"(?P<target>{_MONITOR_TARGET})\s+{_MODE_TOKEN}\s*(?P<rest>.*)$",
+    ):
+        match = re.match(pattern, text, re.IGNORECASE)
+        if match:
+            return A.MetaDecl(
+                line=kw.line,
+                col=kw.col,
+                kind="line",
+                text=_monitor_comment(
+                    match.group("target"),
+                    match.group("mode"),
+                    match.group("lo"),
+                    match.group("hi"),
+                    match.group("rest"),
+                ),
+            )
+    implied = re.match(rf"(?P<target>{_MONITOR_TARGET})\s+(?P<rest>at\s+.*)$", text,
+                       re.IGNORECASE)
+    if implied:
+        return A.MetaDecl(
+            line=kw.line,
+            col=kw.col,
+            kind="line",
+            text=_monitor_comment(implied.group("target"), "default", None, None,
+                                  implied.group("rest")),
         )
-    return A.MetaDecl(line=kw.line, col=kw.col, kind="line", text=text)
+
+    raise ParseError(
+        "metadata expects 'pos x,y', a monitor ('Stage.score at 0,0 100x24', "
+        "'slider(0,10) Stage.score at …'), or 'monitor|watch|comment|note …'",
+        kw.line,
+        kw.col,
+        code="E0032",
+    )
 
 
 def _parse_sprite_meta(annotation: str | None) -> A.SpriteMeta | None:

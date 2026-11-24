@@ -191,6 +191,42 @@ class ReceiverTests(unittest.TestCase):
                    if isinstance(b, dict) and b.get("opcode") == "event_whenbroadcastreceived")
         self.assertEqual(hat["fields"]["BROADCAST_OPTION"][0], "update dynamic geometry")
 
+    def test_a_broadcast_from_another_sprite_stays_a_broadcast(self):
+        # A receiver whose only statement calls a real custom block names that
+        # block. The name is local to the receiver's sprite, so a *sender* in
+        # another sprite must keep broadcasting: lowering it to
+        # ``call update_dynamic_geometry()`` names nothing there.
+        source = (
+            "class processor { // Sprite: processor (0,0) size=100 show=1\n"
+            '    public void update_dynamic_geometry() { // proccode update dynamic geometry // receiver at 1,2 "update dynamic geometry"\n'
+            "        Looks.say(1);\n    }\n}\n"
+            "class main { // Sprite: main (0,0) size=100 show=1\n"
+            '    public void greenFlag() { Control.broadcast("update dynamic geometry"); }\n'
+            "}\n"
+        )
+        first = compile_source(source)[1]
+        text, _ = decompile(first)
+        self.assertIn('Control.broadcast("update dynamic geometry");', text)
+        self.assertNotIn("call update_dynamic_geometry();", text)
+        codegen = Codegen(
+            Parser(tokenize(text)).parse(),
+            features={"commentMetadata"},
+            allow_undefined=True,
+        )
+        again = build_project_dict(codegen.compile())[0]
+        self.assertEqual(
+            [d for d in codegen.diagnostics if "E0036" in d], [], codegen.diagnostics
+        )
+        self.assertEqual(self._messages(first), self._messages(again))
+
+    def _messages(self, data: dict) -> list[str]:
+        return sorted(
+            block["inputs"]["BROADCAST_INPUT"][1][1]
+            for sprite in data["targets"]
+            for block in sprite["blocks"].values()
+            if isinstance(block, dict) and block["opcode"] == "event_broadcast"
+        )
+
 
 class DuplicateProcedureTests(unittest.TestCase):
     """Two custom blocks can flatten to the same source name.
@@ -1379,3 +1415,138 @@ def compile_source_shipped(source: str) -> dict:
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class GlobalListScopeTests(unittest.TestCase):
+    """A Stage list is visible from a sprite by its bare name.
+
+    ``s3emu`` built its theme picker from ``light_themes``; a list is state,
+    and the planner only accepted globals and *sprite* lists as bare values.
+    ``Lists.showList(L)`` then looked the name up as a variable, failed with
+    E0035, and — because ``_state_owner`` did not know Stage lists either — the
+    rebuilt monitor would have named a new, empty sprite list.
+    """
+
+    SOURCE = (
+        "public L = [1, 2];\n"
+        "class a { // Sprite: a\n"
+        "    public void greenFlag() {\n"
+        "        Looks.say(Operators.length(L));\n"
+        "        L.add(3);\n"
+        "        Lists.showList(L);\n"
+        "    }\n"
+        "}\n"
+    )
+
+    def test_a_global_list_reads_as_its_contents(self):
+        _, data = compile_source(self.SOURCE)
+        self.assertIn("data_listcontents", opcodes(data, "a"))
+
+    def test_the_monitor_names_the_stage_list(self):
+        _, data = compile_source(self.SOURCE)
+        show = next(
+            block for block in target(data, "a")["blocks"].values()
+            if isinstance(block, dict) and block["opcode"] == "data_showlist"
+        )
+        self.assertIn(show["fields"]["LIST"][1], target(data, "Stage")["lists"])
+        self.assertEqual(target(data, "a")["lists"], {})
+
+
+class ElifScopeTests(unittest.TestCase):
+    """``elif`` bodies are ``(condition, body)`` tuples; the walker missed them."""
+
+    def test_a_list_method_inside_an_elif_is_still_a_list(self):
+        source = (
+            "class a { // Sprite: a\n"
+            "    private stuff = [1, 2];\n"
+            "    public void greenFlag() {\n"
+            "        if (x == 1) { Looks.say(1); }\n"
+            "        elif (x == 2) { Looks.say(stuff.indexOf(2)); }\n"
+            "    }\n"
+            "}\n"
+        )
+        codegen = Codegen(
+            Parser(tokenize(source)).parse(),
+            features={"commentMetadata"},
+            allow_undefined=True,
+        )
+        project = codegen.compile()
+        self.assertEqual(
+            [d for d in codegen.diagnostics if "E0037" in d], [], codegen.diagnostics
+        )
+        self.assertIn(
+            "data_itemnumoflist",
+            [b.opcode for b in next(t for t in project.targets if t.name == "a").blocks.values()],
+        )
+
+
+class ParameterOverGlobalTests(unittest.TestCase):
+    """A parameter whose sanitised name matches a Stage variable's must rename.
+
+    ``s3emu``'s ``load theme`` has parameter ``editor theme`` and a global
+    variable of the same name. Both flatten to ``editor_theme``, so the
+    decompiler wrote ``editor_theme = editor_theme;`` and the rebuild stopped on
+    E0042 (cannot assign to a parameter).
+    """
+
+    @staticmethod
+    def _project() -> dict:
+        def blk(op, **kw):
+            d = {"opcode": op, "next": None, "parent": None, "inputs": {},
+                 "fields": {}, "shadow": False, "topLevel": False}
+            d.update(kw)
+            return d
+
+        blocks = {
+            "def": blk("procedures_definition", next="set", topLevel=True, x=0, y=0,
+                       inputs={"custom_block": [1, "proto"]}),
+            "proto": blk("procedures_prototype", shadow=True, parent="def", inputs={},
+                         mutation={
+                             "tagName": "mutation", "children": [],
+                             "proccode": "do work %s",
+                             "argumentids": '["arg1"]',
+                             "argumentnames": '["editor theme"]',
+                             "argumentdefaults": '[""]',
+                             "warp": "false",
+                         }),
+            "set": blk("data_setvariableto",
+                       fields={"VARIABLE": ["editor theme", "editor_theme"]},
+                       inputs={"VALUE": [3, "arg", [10, ""]]}),
+            "arg": blk("argument_reporter_string_number",
+                       fields={"VALUE": ["editor theme", None]}),
+        }
+        costume = {"name": "b", "assetId": "x", "md5ext": "x.svg", "dataFormat": "svg",
+                   "rotationCenterX": 0, "rotationCenterY": 0}
+        return {
+            "targets": [
+                {"isStage": True, "name": "Stage",
+                 "variables": {"editor_theme": ["editor theme", ""]},
+                 "lists": {}, "broadcasts": {}, "blocks": {}, "comments": {},
+                 "currentCostume": 0, "costumes": [costume], "sounds": [],
+                 "volume": 100, "layerOrder": 0, "tempo": 60,
+                 "videoTransparency": 50, "videoState": "on",
+                 "textToSpeechLanguage": None},
+                {"isStage": False, "name": "renderer", "variables": {}, "lists": {},
+                 "broadcasts": {}, "blocks": blocks, "comments": {},
+                 "currentCostume": 0, "costumes": [costume], "sounds": [],
+                 "volume": 100, "layerOrder": 1, "visible": True, "x": 0, "y": 0,
+                 "size": 100, "direction": 90, "draggable": False,
+                 "rotationStyle": "all around"},
+            ],
+            "monitors": [], "extensions": [],
+            "meta": {"semver": "3.0.0", "vm": "0.2.0", "agent": ""},
+        }
+
+    def test_the_parameter_is_renamed_and_the_global_keeps_its_name(self):
+        text, _ = decompile(self._project())
+        self.assertIn("void do_work(editor_theme_arg)", text)
+        self.assertIn("editor_theme = editor_theme_arg;", text)
+        codegen = Codegen(
+            Parser(tokenize(text)).parse(),
+            features={"commentMetadata"},
+            allow_undefined=True,
+        )
+        codegen.compile()
+        self.assertEqual(
+            [d for d in codegen.diagnostics if "E0042" in d], [], codegen.diagnostics
+        )

@@ -44,7 +44,7 @@ CONTROL = {
     "default", "break", "continue", "return", "call", "loose",
 }
 WORD_OPERATORS = {"and", "or", "not"}
-DECLARATIONS = KEYWORDS - CONTROL - WORD_OPERATORS - LITERALS - MODIFIERS - TYPES - {"import", "as"}
+DECLARATIONS = KEYWORDS - CONTROL - WORD_OPERATORS - LITERALS - MODIFIERS - TYPES - {"import", "include", "as"}
 
 # ``log(x)``, ``join("a", b)`` ... - lowered to blocks by the compiler.
 BUILTIN_FUNCTIONS = (
@@ -91,6 +91,7 @@ def build_grammar() -> dict:
             {"include": "#directives"},
             {"include": "#comments"},
             {"include": "#strings"},
+            {"include": "#includes"},
             {"include": "#imports"},
             {"include": "#target"},
             {"include": "#metadata"},
@@ -217,6 +218,22 @@ def build_grammar() -> dict:
                         ],
                     },
                 ]
+            },
+            "includes": {
+                "comment": 'include "display.jsw" -- a module spliced in before lexing.',
+                "patterns": [
+                    {
+                        # A whole line: the preprocessor replaces it with the file,
+                        # so nothing else may share it. Quoted and single-quoted
+                        # are both accepted, the way import accepts them.
+                        "match": r"""^(\s*)(include)\s+("[^"]*"|'[^']*')""",
+                        "captures": {
+                            "1": {"name": "punctuation.whitespace.leading.jsw"},
+                            "2": {"name": "keyword.control.include.jsw"},
+                            "3": {"name": "string.quoted.jsw"},
+                        },
+                    }
+                ],
             },
             "imports": {
                 "comment": "import \"assets/lists/notes.jsa\" as notes;",

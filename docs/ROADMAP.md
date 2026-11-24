@@ -98,7 +98,7 @@ Legend: ✅ done · 🚧 in progress · ⬜ todo
 | 11.5 | Temp variables (`useTempVariables`) | `_x` → `lmsTempVars2` only when the feature is on | ✅ |
 | 11.6 | Custom Reporters for `return expr` from private functions | needs `lmsCustomReporters` opcodes | ⬜ |
 | 11.7 | Temp variables freed on **custom block return** | TurboWarp threads end with the script, not the block; needs a generated save/restore frame | ⬜ |
-| 11.8 | Type-checked metadata (``class X(show=1)``) and unknown keys | currently unknown keys are ignored | ⬜ |
+| 11.8 | Type-checked metadata (``class X(show=1)``) and unknown keys | `E0078` unknown key, `E0079` wrong value; an invalid value is not applied | ✅ |
 
 ## Phase 12 — Decompiler (sb3 → jsw → sb3)
 
@@ -120,7 +120,7 @@ Legend: ✅ done · 🚧 in progress · ⬜ todo
 | 12.14 | `join(x, "")` printed as `x` | `decompile.py` | no `string()` noise | ✅ |
 | 12.15 | Redundant `Class.` prefixes dropped and restored | `ns=` + `namespacedNames` | `Graph.doGraph` ↔ `doGraph` | ✅ |
 | 12.16 | Custom-block labels preserved | `// proccode …` | multi-word proccodes round-trip | ✅ |
-| 12.12 | `--strict-roundtrip` (fail on any rename/unsupported) | CLI flag | CI can enforce fidelity | ⬜ |
+| 12.12 | `--strict-roundtrip` (fail on any rename/unsupported) | CLI flag | CI can enforce fidelity | ✅ exits 1 on `I0001`/`W0008` and lists them |
 | 12.13 | Source maps: emit `// line N` comments for block ids | decompiler option | debuggable output | ⬜ |
 
 Reference-project coverage today: **0/3871 unsupported blocks**, 71 variables,
@@ -146,6 +146,15 @@ project loads in TurboWarp. See [`DECOMPILER.md`](./DECOMPILER.md).
 | 14.1 | `#enable_feature<hideObjectNames>;` | `jswc/obfuscate.py` | every class / variable / list name becomes a deterministic random identifier (thread variables too), Stage names keep the `Ns.name` shape | ✅ |
 | 14.2 | Names stay wired | `obfuscate.py` `_rename_block` / `_rename_monitor` / `_rename_state_picker` | variable/list references, monitors, comment keys, JSON list pickers follow the rename; ids and block structure unchanged | ✅ |
 | 14.2a | Broadcasts, costume/sound names, proccodes and text data stay | `obfuscate.py` | measured on the NotePlayer: renaming broadcasts broke `join(module, ".prop")` dispatch, so they are excluded | ✅ |
+| 14.1a | Numbered names | `obfuscate.py` `_number_state` / `_number_proccodes` / `_number_broadcasts` | variables and lists share one `v%d` counter across every scope, custom blocks are `p%d`, messages `c%d`; the numbers are shuffled so a decoy is not "the one at the end" | ✅ |
+| 14.1b | Decoys | `obfuscate.py` `_add_decoys` / `_decoy_procedure` / `_junk_strings` | decoy variables, lists (grown to the pool's size), custom blocks nobody calls and unused messages; `--obf-junk N` sets the junk count | ✅ |
+| 14.1c | Text pooled, pool shuffled | `codegen.py` `_pool_string`, `obfuscate.py` `_fill_pool` | every text literal becomes `item i of list`; the list is shuffled with junk mixed in and every index rewritten | ✅ |
+| 14.1c2 | Integers as constants | `codegen.py` `_integers_as_variables` | `--obf-ints auto` (default) gives each integer literal one Stage variable whose initial value *is* the constant: 1.44× the emulated work on i386 where `item of list` cost 3.30×, for the same hiding. `list` keeps the old form, `none` keeps them inline | ✅ |
+| 14.1h | Sprites are `s%d` | `obfuscate.py` | sprite names come from their own counter, shuffled like `v%d`, so the target list does not say which sprite came first | ✅ |
+| 14.1d | State machines | `obfuscate.py` `_flatten_scripts` | `--obf-flatten N` gives a hat body of ≤ N blocks a state variable and a straight chain of scattered-number guards; no loop and no call, so the frames match (`tools/obf_compare.js --step-ms=0.001` is frame-exact on i386). States are numbered from one project-wide counter, one to three dead guards sit at random positions, and either operand of a guard may be the state | ✅ |
+| 14.1e | Decoys with a shape | `obfuscate.py` `_decoy_procedure` / `_add_decoys` | a decoy block declares one to three arguments, names them like a real parameter and reads them in its body; every name the pass invents (`Phase3`, `Buffer1`, `flush sector %s`) is a placeholder, so no build spells `__trash0` | ✅ |
+| 14.1f | Several pools | `codegen.py` `_pool_string`, `--obf-pools N` | the literals are spread over three lists, chosen by a hash of the text; an empty pool is dropped rather than published | ✅ |
+| 14.1g | Scrub the editor residue | `obfuscate.py` `_scrub`, `--obf-scrub` | workspace comments dropped, top-level block `x`/`y` randomised; declaration order of variables and lists shuffled on every build | ✅ |
 | 14.3 | Eval warnings | `jswc/codegen.py` `_check_eval` | a runtime-computed name in a broadcast, clone target, costume/sound menu, extension picker or `menu()` field raises `warning: eval: …` | ✅ |
 | 14.4 | **User-friendly variable parameters** | `syntax.md` + parser | see below | ⬜ **INCOMPLETE — design only** |
 
@@ -153,6 +162,15 @@ Measured: the NotePlayer project (4,116 blocks, 108 monitors, 11 sprites)
 compiled with `--enable hideObjectNames` keeps its opcode multiset, block ids,
 monitor count and monitor→state wiring, and loads in TurboWarp; a small probe
 project was green-flagged in the editor and its broadcast receiver still ran.
+
+With the whole hardened pass on (`jswc/tests/test_obfuscate.py`,
+`tools/obf_compare.js`): i386 is frame-exact for 120 deterministic steps
+(`--step-ms=0.001`, the only differing variable is the display's frame timer,
+plain-vs-plain differs the same way), rv64 for 200 and the NotePlayer for 90
+frames differ only in the clock variables (`X.mtimeLo` / `X.steps`,
+`Piano.clock` / `Piano.ticks`), rv64's onset of drift varies run to run exactly
+as it does plain-vs-plain, `--obf-scrub` changes nothing observable, and two
+builds under different `PYTHONHASHSEED` values are byte-identical.
 
 ### 14.4 User-friendly variable parameters — **not implemented**
 
@@ -248,22 +266,22 @@ Each pack is one dictionary in `jswc/opcodes.py` + one test.
 
 | # | Namespace | Opcodes to map | Notes |
 | --- | --- | --- | --- |
-| 6.1 | `console.*` | `sipcconsole_Journal/Information/Warning/Error/debug` | extension `sipcconsole` |
-| 6.2 | `Timer.*` | `lmsTimers_valueOfTimer`, `lmsTimers_startResetTimer` | extension `lmsTimers` |
-| 6.3 | `JSON.*` | `skyhigh173JSON_json_*` | needs value-typed calls, see 6.6 |
-| 6.4 | `Runtime.*` | `runtimeoptions_getEnabled/getFramerate/...` | booleans + menu fields |
-| 6.5 | `Util.*` | `utilities_regexReplace`, `utilities_stringToBoolean` | extension `utilities` |
+| 6.1 | `console.*` | `sipcconsole_Journal/Information/Warning/Error/debug` | extension `sipcconsole` — ✅ done |
+| 6.2 | `Timer.*` | `lmsTimers_valueOfTimer`, `lmsTimers_startResetTimer` | extension `lmsTimers` — ✅ done |
+| 6.3 | `JSON.*` | `skyhigh173JSON_json_*` | value-typed calls as planned — ✅ done |
+| 6.4 | `Runtime.*` | `runtimeoptions_getEnabled/getFramerate/...` | booleans + menu fields — ✅ done |
+| 6.5 | `Util.*` | `utilities_regexReplace`, `utilities_stringToBoolean` | extension `utilities` — ✅ done |
 | 6.6 | Chained calls | `a.get(1).get(2)` → `shadow`/`JSON` reporter | needs call-result typing |
 
 ### 7. Output quality
 
 | # | Piece | Why |
 | --- | --- | --- |
-| 7.1 | `Motion.x = …; Motion.y = …` → `motion_gotoxy` | matches the reference (`gotoxy -239 -45`) |
-| 7.2 | `x = x + 1` → `data_changevariableby` | smaller scripts |
-| 7.3 | Boolean custom-block parameters (`%b` + `argument_reporter_boolean`) | needed by `Player.checkIfDisp`‑style code |
-| 7.4 | Warp policy per function (`// warp`, `// no-warp`) | avoid one global flag |
-| 7.5 | Monitors for `Variables.showVariable(x)` | `monitors[]` entries, not just the show block |
+| 7.1 | `Motion.x = …; Motion.y = …` → `motion_gotoxy` | matches the reference (`gotoxy -239 -45`) | ✅ |
+| 7.2 | `x = x + 1` → `data_changevariableby` | smaller scripts | ✅ done |
+| 7.3 | Boolean custom-block parameters (`%b` + `argument_reporter_boolean`) | needed by `Player.checkIfDisp`‑style code; the parser has no parameter types at all, so this needs a spelling first | ⬜ |
+| 7.4 | Warp policy per function (`// warp`, `// no-warp`) | avoid one global flag; `// no-warp` wins over `--warp` | ✅ |
+| 7.5 | Monitors for `Variables.showVariable(x)` | `monitors[]` entries, not just the show block | ✅ a hidden entry keeps the place; the block still decides visibility |
 | 7.6 | Source maps: block id → `line:col` stored as project comments | debug the generated project |
 
 ### 8. Project integration
@@ -272,17 +290,17 @@ Each pack is one dictionary in `jswc/opcodes.py` + one test.
 | --- | --- | --- |
 | 8.1 | `--base-project existing.sb3` | inject compiled sprites into a real project with its costumes/sounds |
 | 8.2 | Asset passthrough | reuse costumes/sounds referenced by name |
-| 8.3 | `--only-sprite NAME` | incremental rebuilds |
+| 8.3 | `--only-sprite NAME` | ✅ the Stage and one sprite; `W0029` when a kept sprite still reaches a dropped one |
 | 8.4 | `jswc fmt` | one canonical formatting, so diffs stay small |
-| 8.5 | `import "asset.png" as name;` | ✅ costumes/sounds embedded with real md5 assets (`tests/test_assets.py`) |
+| 8.5 | `import "asset.png" as name;` | ✅ costumes/sounds embedded with real md5 assets (`tests/test_assets.py`) | ✅ done |
 
 ### 9. Round-trip / confidence
 
 | # | Piece | Why |
 | --- | --- | --- |
-| 9.1 | `jswc decompile project.json` → `.jsw` | proves the lowering table both ways; also produces more fixtures |
-| 9.2 | Opcode coverage test | compile the reference and diff its opcode multiset against the real project |
-| 9.3 | Load-in-VM test (Node + `scratch-vm`) | **verified manually**: both builds load in the TurboWarp editor; automating it needs `npm i`, which was blocked | 🚧 |
+| 9.1 | `jswc decompile project.json` → `.jsw` | proves the lowering table both ways; also produces more fixtures | ✅ `jswc decompile` |
+| 9.2 | Opcode coverage test | compile the reference and diff its opcode multiset against the real project | ✅ `tools/i386_opcode_sweep.py`, `tools/obf_compare.js` |
+| 9.3 | Load-in-VM test (Node + `scratch-vm`) | both builds load in the TurboWarp editor; automating it needs `npm i`, which was blocked | ✅ the vendored `scratch-vm-develop` runs builds headlessly (`tools/obf_compare.js`, `tools/np5_probe.js`, `tools/jsw_sim.py`) |
 | 9.4 | Golden project fixtures | store a small `.sb3` per language feature |
 
 ### 10. Editor
@@ -290,23 +308,25 @@ Each pack is one dictionary in `jswc/opcodes.py` + one test.
 | # | Piece | Why |
 | --- | --- | --- |
 | 10.1 | Language server with push diagnostics | reuse `Parser.diagnostics` + `Codegen.diagnostics` |
-| 10.2 | Hover: show the Scratch opcode a namespace call maps to | teaching aid |
+| 10.2 | Hover: show the Scratch opcode a namespace call maps to | teaching aid | ✅ `vscode-jsw/extension.js` `provideHover` |
 | 10.3 | Go-to-definition for `Namespace.member` | navigate 800-line files |
-| 10.4 | Completion for `jswc/opcodes.py` namespaces | discoverability |
+| 10.4 | Completion for `jswc/opcodes.py` namespaces | discoverability | ✅ `make vscode-data` (27 namespaces, 297 members) |
 
 ---
 
 ## Suggested order
 
 ```
-6.1 → 6.2 → 7.1 → 7.2 → 8.1 → 9.1 → 9.2 → 10.1
+8.1 → 8.2 → 10.1 → 10.3 → 6.6 → 14.4 → 11.6 → 11.7
 ```
 
-Rationale: extension packs unblock real code (`console`, `Timer` are the two
-most frequent diagnostics in `sample.jsw`); 7.1/7.2 shrink output; 8.1 makes
-the compiler usable on existing projects; 9.1 turns the reference project into
-an endless source of fixtures; 10.1 is the point where editing `.jsw` stops
-being blind.
+6.x, 7.x, 8.3, 8.5, 9.x and 10.2/10.4 are done; what is left falls into two
+groups. 8.1/8.2 (compile into an existing project, reuse its assets) is what
+makes the compiler usable on a project that already exists, and 10.1/10.3
+(push diagnostics, go to definition) are what stop editing `.jsw` from being
+blind. The rest are language design: 6.6 needs a return type for an extension
+call, and 14.4 (`variable` parameters) is the piece 7.3's boolean parameters
+and 11.6's `return expr` both want to be built on.
 
 ## How to add a language feature
 
@@ -317,3 +337,66 @@ being blind.
    `jswc/opcodes.py` and verify the shape with `tools/opcode_report.py`.
 5. Document it in `syntax.md` §5/§6 and in the lowering table §8.
 6. If it is a keyword, run `make grammar` so the editor highlights it.
+
+## Scratch upload: can scratch.mit.edu take a project?
+
+Scratch rejects a project for three mechanical reasons, so none of them needs
+a guess. `tools/scratch_audit.py` checks all three against the VM's own opcode
+list and says which blocks would block an upload:
+
+    python3 tools/scratch_audit.py build/np.sb3 --vm scratch-vm-develop
+    python3 tools/scratch_audit.py build/np.sb3 --json
+
+`tools/scratch_slim.py` fixes the one that is only a file format:
+
+    python3 tools/scratch_slim.py in.sb3 -o out.sb3 --bitrate 128k
+
+The NotePlayer / World.execute(me) project (`userspace/wem_np4_26b5`) as it
+stands:
+
+| | original | Scratch edition |
+| --- | ---: | ---: |
+| blocks a vanilla VM cannot run | 2,231 | **0** |
+| sounds | 201.9 MB of WAV | 12.1 MB of mp3 |
+
+The Scratch edition lowers all of this by itself — `make np-scratch` builds
+`userspace/wem_np4_26b5/wem_np4_26b5.jsw` with `--target scratch`, slims the
+sounds and audits the result. One source, two builds:
+
+| | TurboWarp | Scratch edition |
+| --- | ---: | ---: |
+| blocks | 8,212 | 2,907 |
+| sprites | 11 | 8 |
+| sounds | 201.9 MB of WAV | 12.1 MB of mp3 |
+| extensions | 11 | 2 (`music`, `pen` — both built-in) |
+
+The audit's last line for the Scratch edition is `✔ ready to upload`.
+
+What the Scratch edition does with each thing the extensions used to provide:
+
+| was | becomes |
+| --- | --- |
+| `control_while` / `control_for_each` | `repeat until <not c>` / `repeat n` |
+| `Comments.*` blocks | dropped, the code they labelled kept |
+| `loose` palette stacks | dropped — they are not in the program |
+| `console.log/warn/error(x)` | `add x to (Console)`, a Stage list |
+| `console.clear()` | `delete all of (Console)` |
+| `Timer.startTimer(n)` | add/replace `n` in `TimerNames` and the `timer` reading in `TimerStarts` |
+| `Timer.getTimer(n)` | `timer - item (indexOf n) of TimerStarts` |
+| save hooks | dropped — Scratch has no save event |
+| `Runtime.stageWidth()` etc. | the constants Scratch actually is: 480x360, 30 fps, 300 clones |
+| `a ** b` | `10 ^ (b * log a)`, since Scratch has no power block |
+| `WebSocket.*` | no-ops: nothing is connected, nothing is sent |
+| D3 / anim3d | left out — `#ifndef SCRATCH` around the generated region |
+| NpPseudocode | left out — the pane is replaced rather than ported |
+| NpBuild (the FL loader sprite) | left out — it is the JSON consumer |
+| `ImportFL` / `ExportFL` / `ExportND` / `CreateNoteGroup` / `BuildPlayer` / `AutoAdjustPms` / the FL presets | left out — the FL Studio loader |
+| `Player.WSDebug` | left out — the debug panel is published over the socket |
+| `Lyrics.init` | left out — it parses a JSON blob into lists that already hold the data |
+| `JSON.arrayGet(k, item n of NotesCommand)` | three numeric lists (`Player.CmdType`/`CmdTick`/`CmdValue`) |
+
+Nothing remains. The last 12 were the FL command stream -- `JSON.arrayGet` over
+`"[1,0,130]"` -- and they became three numeric lists, which also removed three
+redundant JSON parses per branch from the *TurboWarp* build (8,224 → 8,212
+blocks) because the three fields are now read once per tick instead of four
+times per branch.

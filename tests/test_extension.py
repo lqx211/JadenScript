@@ -54,10 +54,11 @@ class DataIsCurrentTests(unittest.TestCase):
         for word in ("class", "public", "private", "void", "if", "elif", "else", "repeat"):
             with self.subTest(keyword=word):
                 self.assertIn(word, labels)
-        self.assertEqual(set(data["features"]), {
-            "useTempVariables", "commentMetadata", "namespacedNames",
-            "doObfuscation", "hideObjectNames",
-        })
+        # Keep this list in step with `jswc/keywords.py FEATURES`: the editor
+        # has to offer every switch the compiler understands.
+        from jswc.keywords import FEATURES
+
+        self.assertEqual(set(data["features"]), set(FEATURES))
         self.assertTrue(data["hats"])
         self.assertTrue(data["annotations"])
 

@@ -39,7 +39,7 @@ PLUGIN = ROOT / "nvim"
 CONDITIONAL = {"if", "elif", "else", "switch", "case", "default"}
 REPEAT = {"for", "while", "repeat", "break", "continue"}
 STATEMENT = {"return", "call", "loose"}
-DECLARATION = {"stage", "import", "as"}
+DECLARATION = {"stage", "import", "include", "as"}
 
 OPERATORS = (
     "**", "..", "==", "!=", "<=", ">=", "&&", "||", "+=", "-=", "*=", "/=",

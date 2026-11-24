@@ -174,6 +174,19 @@ COMMANDS: dict[str, Command] = {
         (Param("INSTRUMENT", MENU, "music_menu_INSTRUMENT", "INSTRUMENT"),),
         extension="music",
     ),
+    # The extension's *MIDI* variants: they take a GM program and a GM drum note
+    # and fold them onto Scratch's own 21 instruments and 18 drums
+    # (``MIDI_INSTRUMENTS`` / ``MIDI_DRUMS``), pitch offsets included. Both are
+    # hidden from the palette and both are real blocks in scratch-vm, which is
+    # what makes them usable where a project cannot ship its own extension.
+    "Music.midiPlayDrum": Command(
+        "music_midiPlayDrumForBeats",
+        (Param("DRUM", MATH_NUM), Param("BEATS", MATH_NUM)),
+        extension="music",
+    ),
+    "Music.midiSetInstr": Command(
+        "music_midiSetInstrument", (Param("INSTRUMENT", MATH_NUM),), extension="music"
+    ),
     "Music.setTempo": Command("music_setTempo", (Param("TEMPO", MATH_NUM),), extension="music"),
     "Music.changeTempo": Command(
         "music_changeTempo", (Param("TEMPO", MATH_NUM),), extension="music"

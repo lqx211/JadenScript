@@ -9,9 +9,27 @@ from __future__ import annotations
 
 from .ir import Project
 
+#: ``corruptBlockPos`` plants blocks whose ids and references start with this.
+#: They are meant to be missing; the VM never follows them.
+CORRUPT_PREFIX = "missing_"
 
-def validate(project: Project, known_opcodes: set[str] | None = None) -> list[str]:
+
+def validate(
+    project: Project,
+    known_opcodes: set[str] | None = None,
+    corrupt: bool = False,
+) -> list[str]:
+    """Structural checks for the parts a generator can get wrong.
+
+    ``corrupt`` accepts the ids ``corruptBlockPos`` leaves dangling: those
+    checks exist to catch a generator bug, and the feature is a deliberate
+    one.
+    """
     issues: list[str] = []
+
+    def planted(ident: object) -> bool:
+        return corrupt and isinstance(ident, str) and ident.startswith(CORRUPT_PREFIX)
+
     stage = project.stage
     stage_vars = set(stage.variables)
     stage_lists = set(stage.lists)
@@ -22,10 +40,12 @@ def validate(project: Project, known_opcodes: set[str] | None = None) -> list[st
         local_vars = set(target.variables)
         local_lists = set(target.lists)
         for block in blocks.values():
+            if planted(block.id):
+                continue
             where = f"{target.name}:{block.opcode}({block.id})"
-            if block.next is not None and block.next not in blocks:
+            if block.next is not None and block.next not in blocks and not planted(block.next):
                 issues.append(f"E0062 {where}: next points at missing block {block.next}")
-            if block.parent is not None and block.parent not in blocks:
+            if block.parent is not None and block.parent not in blocks and not planted(block.parent):
                 issues.append(f"E0062 {where}: parent points at missing block {block.parent}")
             if block.top_level and block.parent is not None:
                 issues.append(f"E0063 {where}: top-level block has a parent")
@@ -35,10 +55,10 @@ def validate(project: Project, known_opcodes: set[str] | None = None) -> list[st
                 if not isinstance(raw, list) or not raw:
                     issues.append(f"E0064 {where}: malformed input {name}")
                     continue
-                if raw[0] in (2, 3) and len(raw) > 1 and raw[1] not in blocks:
+                if raw[0] in (2, 3) and len(raw) > 1 and raw[1] not in blocks and not planted(raw[1]):
                     issues.append(f"E0062 {where}: input {name} references missing block {raw[1]}")
                 elif raw[0] == 1 and len(raw) > 1 and isinstance(raw[1], str):
-                    if raw[1] not in blocks:
+                    if raw[1] not in blocks and not planted(raw[1]):
                         issues.append(f"E0062 {where}: input {name} references missing shadow {raw[1]}")
             var_field = block.fields.get("VARIABLE")
             if var_field:

@@ -179,6 +179,7 @@
                 "keyword.declaration.stage.jsw",
                 "keyword.declaration.jsw",
                 "keyword.control.import.jsw",
+                "keyword.control.include.jsw",
                 "keyword.control.directive.jsw",
                 "storage.type.jsw"
               ],

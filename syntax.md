@@ -10,6 +10,39 @@ In JadenScript, we can enable some additional features by using the following co
 #enable_feature<feature_name>;
 ```
 
+The names are `useTempVariables`, `commentMetadata`, `namespacedNames`,
+`doObfuscation`, `corruptBlockPos`, `vanillaScratch`, `vmProtect` and
+`pishiSupport`.
+
+`vanillaScratch` is the one that changes what blocks are emitted rather than how
+names are spelled: it compiles to blocks scratch.mit.edu can run, because Scratch
+rejects a whole project for containing a single block its VM does not have. What
+it lowers, and to what:
+
+| written | vanilla Scratch |
+| --- | --- |
+| `while (c) { … }` | `repeat until <not (c)>` |
+| `for i in 1..n { … }` | `repeat (n)` with the counter declared |
+| `Comments.commentC("note") { … }` | the body, without the label |
+| `Comments.commentCommand("note");` | nothing |
+| `Comments.commentReporter("note", x)` | `x` |
+| `console.log/info/warn/error(x)` | `add (x) to (Console)`, a Stage list |
+| `console.clear()` | `delete all of (Console)` |
+| `Timer.startTimer(n)` | add-or-replace `n` in `TimerNames` with the `timer` in `TimerStarts` |
+| `Timer.getTimer(n)` | `(timer) - (item (item # of (n) in (TimerNames)) of (TimerStarts))` |
+| `a ** b` | `10 ^ (b * log a)` |
+| `Util.stringToBoolean(x)` | `x = "true" or x = "1"` |
+| `Runtime.stageWidth()` and friends | 480, 360, 30 fps, 300 clones |
+| `WebSocket.sendMessage(x)`, `WebSocket.isConnected()` | nothing, and `0` |
+| `Temp.forEachThreadVariable("_i", n) { … }` | `set 0; repeat n { change by 1; … }` |
+| a `// hook: before project save` function | nothing — Scratch has no save event |
+| a `loose { … }` stack | nothing — it is on the canvas, not in the program |
+| `a if c else b` in an argument | `set _t = b; if c { set _t = a }` before the statement, then `_t` |
+
+Blocks with no equivalent are **not** silently kept: the build still contains
+them, and `tools/scratch_audit.py` reports every one, so the gap is a number
+rather than a surprise at upload time.
+
 ## Green flag
 In TurboWarp, a green flag event means the Scratch VM has been resetted, and all sprites immediately stops, then VM start calling all 'When green flag clicked' blocks in sprites. 
 
@@ -547,54 +580,230 @@ TurboWarp extensions cannot load in vanilla Scratch, so the guard is satisfied
 by construction. Declaring a variable with the same name takes over:
 `public isCompiled = 0;` makes `isCompiled()` read that variable.
 
+## pishi.ai extensions (v1.0)
+
+```jsw
+#enable_feature<pishiSupport>;
+```
+
+pishi.ai's player ships eight extensions of its own — computer vision, a chat
+bot and an Arduino bridge — and they exist **only** in that player, so they are
+behind a feature: a source that turns it on is saying "this build is for
+pishi.ai", and a source that does not cannot depend on them by accident.
+
+| namespace | what it is | blocks |
+| --- | --- | --- |
+| `Facemesh` | face landmarks | 21 |
+| `Handpose` | hand landmarks | 19 |
+| `Posenet` | body pose, named joints | 54 |
+| `ObjectDetection` | boxes, labels, confidence | 36 |
+| `GoogleTeachableMachine` | a trained image/sound model | 26 |
+| `SpeechRecognition` | speech to text | 9 |
+| `AIChatBot` | chat completion, models, roles | 12 |
+| `Arduino` | pins, PWM, servos, I²C, LEDs, tone | 45 |
+
+```jsw
+#enable_feature<pishiSupport>;
+
+public lastNose = 0;
+
+class main {
+    public void greenFlag() {
+        Facemesh.turnClassification("on");
+        Posenet.setMinimumConfidence(0.5);
+        lastNose = Posenet.getNoseX();
+        if (Arduino.isAnalogInRange(3, 2, 9)) {
+            Arduino.digitalWrite(13, "high");
+        }
+        Arduino.setPinMode(9, "servo");
+    }
+}
+```
+
+Arguments are positional, the dropdowns are literals, and the extension is
+declared in the project (`extensions: ["facemesh", …]`) with **no
+`extensionURLs`** — exactly what the player writes. Menus become shadow blocks
+the way every other extension's do (`facemesh_menu_keypointMenu`).
+
+The table is generated from a project the player saved
+(`examples/PishiExtensions.sb3`): argument names, order and menus are read from
+the blocks themselves, and the block *kind* (command / reporter / boolean / hat)
+from the player's bundle, snapshotted into `examples/pishi_kinds.json` so a
+refresh needs no download:
+
+```
+python3 tools/extract_pishi.py examples/PishiExtensions.sb3 --write
+```
+
+Two name collisions are reported, because a namespace is how a block is
+*spelled*:
+
+| collision | severity | why |
+| --- | --- | --- |
+| another extension claims the same namespace | **error** `E0077` | the compiler would resolve the call to one extension and the player would run the other |
+| a variable, list or sprite has the namespace's name | **warning** `W0028` | the declaration still compiles, but `Arduino.x` always reaches the extension, so the two cannot both be spelled that way |
+
+Decompiling a project that lists any pishi extension writes
+`#enable_feature<pishiSupport>;` at the top and turns every block back into a
+call, so a pishi project round-trips like any other.
+
 ## Obscured names (v1.0)
 
 ```jsw
 #enable_feature<doObfuscation>;
 ```
 
-Compiling with this switch rewrites **every** name the project exposes to a
-deterministic random identifier, so publishing a build does not publish your
-naming:
+Compiling with this switch rewrites **every** name the project exposes, fills
+the workspace with things that are not real, and can turn a straight script into
+a state machine -- so publishing a build publishes neither your naming nor your
+shape:
 
 | object | before | after |
 | --- | --- | --- |
-| class / sprite | `main` | `CEdsbc` |
-| Stage variable | `Player.score` | `rsVY.KkxJQ` — Stage names keep the `Ns.name` shape |
-| sprite-local variable | `local` | `CEILhm` |
-| list | `Player.notes` | `RxBO.hdnM7` |
+| variable, list | `Player.score`, `Player.notes` | `v0`, `v1`, … |
+| custom block label | `Player.move %s` | `p4 %s` — the `%s`/`%b` slots stay |
+| broadcast | `Ping` | `c0` |
+| class / sprite | `main` | `s0`, `s1`, … |
 | thread variable (`lmsTempVars2`) | `_i` | `_kQm2xW` (keeps the underscore) |
-| custom block label | `Player.move %s` | `QkP3rB %s` — the `%s`/`%b` slots stay |
 | custom block argument | `n` | `Vh2kQa` |
-| broadcast | `Ping` | `c0ndTp` |
-| text literal | `say "Hello"` | `say (item 1 of `q7Xk2p`)` — every string moves into one Stage list |
+| text and integer literal | `say "Hello"`, `Pen.setSize(3)` | `item 7 of (v12)`, `item 41 of (v40)` |
+
+**Why numbers.** A dotted name (`Player.score`) still says which class a
+variable belongs to, and a word says what to look for. A number says nothing:
+one counter runs across the *whole* project, so a Stage global and a
+sprite-local sit next to each other in the numbering, and neither the spelling
+nor the position says which sprite a name came from. The numbers are handed out
+in shuffled order, and the decoys below take numbers from the same counter, so
+`v17` is no more likely to be real than `v16`. Sprites are `s%d` from their own
+counter, shuffled the same way, so the target list does not say which sprite
+came first either.
+
+**What is added.** All of it is inert -- nothing calls it, nothing reads it, and
+a script that never runs costs nothing at run time:
+
+* decoy variables and decoy lists, on the Stage and in the sprites, sized to
+  match the real ones so the string lists are not the big obvious ones;
+* decoy custom blocks with plausible bodies (`repeat`, `if/else`, list adds)
+  that nothing calls, so "My Blocks" has more entries than the project has
+  functions. A decoy **declares arguments too** -- names from the same word
+  generator a real parameter gets, `%s` and `%b` mixed, and a body that reads
+  them: a workspace whose one zero-argument block is also the one nobody calls
+  answers "which block is the decoy?" by itself;
+* decoy broadcast messages, so the message list has unused names in it.
+
+Nothing the pass invents keeps a working name. Decoys are called what an author
+would have called them (`Phase3`, `Buffer1`, `flush sector %s`) until the
+renaming runs, and then they are `v%d`/`p%d` like everything else -- a build
+with a name that spells `__trash0` would hand a reader the whole trick.
+
+**The string lists.** Every *text* literal moves into Stage lists, and the
+script reads it back as `item i of list`. The literals are spread over **three**
+lists (`--obf-pools N`; `1` puts them all in one), because one list holding
+every string in the project is the one thing in the workspace that reads as
+"this is the string table". Which list a literal lands in is decided by a hash
+of the text, not by fill order, so the same source always produces the same
+split.
+
+Each list is shuffled and filled with junk strings (numbers, hex blobs, words,
+coordinates) -- `--obf-junk N` sets how much per list, `--obf-junk 0` turns the
+decoys off. The decoy lists are grown to a similar length, so list size says
+nothing either. Floats stay inline: a float is a number with no words in it, and
+there are far fewer of them than integers.
+
+**Integers become variables** (`--obf-ints auto`, the default). A hidden
+integer still has to be *read*, and the shape of that read is the whole cost:
+
+| form | what a use becomes | i386 emulated work |
+| --- | --- | --- |
+| `--obf-ints none` | the literal, inline | 1.00× |
+| `--obf-ints auto` | one variable per constant, read as `(v123)` | **1.44×** |
+| `--obf-ints list` | `item i of v456` in a string list | **3.30×** |
+
+The list form is the expensive one because the compiled runtime has to convert
+and bound the index on every single use, and an inner loop runs those thousands
+of times -- no threshold helps, because the constants that matter at run time
+are not the ones that appear often in the source (a constant written once inside
+a `while` body runs forever). A variable read compiles to a property load, and a
+variable's initial value is state exactly like a list item, so `auto` hides just
+as much for less than half the cost. The value is stored as a number; a string
+`"5"` in a variable costs another 2×, and an integer that is used as *text*
+(`say("007")`) keeps its spelling and stays in the pool instead.
+
+Speed, measured on the two projects in this repository (a fixed slice of real
+time in the real VM, count of emulated frames / player ticks):
+
+| project | plain | hidden (`auto`) | hidden (`list`) |
+| --- | --- | --- | --- |
+| i386 (`make i386-obf` uses `none`) | 9,840 | 6,715 (1.44×) | 2,727 (3.3×) |
+| NotePlayer (`build/np5-release.sb3`) | 349,086 ticks | 310,959 (0.89×) | 277,883 (0.80×) |
+
+`--obf-ints none` stays the switch for a build that has to keep every last
+frame — a CPU is literal-heavy and this machine's whole point is speed, which is
+why `make i386-obf` uses it. `--obf-junk`, `--obf-pools` and `--obf-flatten` do
+not measurably change the cost.
+
+**State machines.** With `--obf-flatten N` (default 16) every hat whose body is
+at most `N` blocks gets a state variable and a chain of guards:
+
+```
+when green flag clicked            when green flag clicked
+  set x to 0                         set v8 to 17
+  change x by 1                      if <17 = (v8)> { set x to 0;     set v8 to 4 }
+  change x by 2                      if <(v8) = 4>  { change x by 1;  set v8 to 31 }
+                                     if <(v8) = 31> { change x by 2 }
+                                     set v12 to 3
+                                     if <(v8) = 93> { set v12 to 7 }   <- never true
+```
+
+The state lives in a variable and the numbers are scattered, so a reader has to
+follow `v8` to recover the order. The chain is *straight line* on purpose: a
+`repeat until` dispatch costs a frame per state (Scratch yields at the end of
+every loop iteration) and a self-calling block costs a step per call (the
+compiled runtime cannot inline a recursive procedure). Either one changes the
+project's timing; measured on the i386 machine, both did — the display thread
+fell behind on the very first step. A guard that is already true costs one
+comparison, so the whole thing measures at about 10% of the emulated work in a
+3-second run.
+
+The variety is deliberate: every script gets its own state variable from one
+counter across the whole project (two scripts on one sprite are not both
+`Phase1`), one to three dead guards are mixed in among the live ones at random
+positions, a guard writes `<(v8) = 4>` or `<4 = (v8)>` depending on the draw,
+and a dead guard carries a different body each time. A uniform shape -- always
+one decoy guard, always the state on the left, always the last state -- is a
+signature the shape itself gives away.
+
+Scattered numbers also mean the *order* is not readable from the branch order,
+and a script that `stop this script` flattens like any other: nothing was pushed
+on the stack, so the stop stops exactly what it stopped before. The dead guards
+only ever write their own variable, so a mistake there cannot steer the machine
+that does run. `--obf-flatten 0` turns the whole thing off.
+
+**The editor residue.** `--obf-scrub` takes out what is left after the names:
+block `x`/`y` (where the author dropped each script on the canvas -- a column at
+`x = 200` growing downwards is a script somebody wrote by hand) and workspace
+comments (`// comment` notes are free text about the source). It is off by
+default because a note is sometimes the point of the build; monitors and lists
+are not affected, since those are state, not metadata.
 
 Everything stays wired: variable/list references, monitor mode/position/range,
 workspace comments, extension dropdowns that name a list or variable
 (`JSON`'s list pickers) and thread-variable names follow the rename, and
-variable/list/block **ids do not change**, so the block structure is
-byte-for-byte the same project with different labels.
-
-A published build therefore reads as blocks with no author naming left —
-including the `Sprite.function %s` labels, which would otherwise spell out the
-whole call graph. `%s`, `%b` and `%n` placeholders survive verbatim and in
-order, because Scratch pairs them with `argumentids`.
+variable/list/block **ids do not change**, so the block structure is the same
+project with different labels. The *declaration order* of variables and lists is
+shuffled as well -- nothing addresses state by position, so the order was free
+information about what the source declared first.
+variable/list/block **ids do not change**, so the block structure is the same
+project with different labels.
 
 Deliberately *not* renamed, with the reason:
 
 | kept | why |
 | --- | --- |
 | costume / sound names | menus and the project's own name lookups point at them |
-| text data (list items, string literals) | a string that happens to spell an object name is data, not a reference |
 | `// monitor` / `// watch` comments | source directives naming the *original* objects |
-
-The strings land in a single Stage list (the name is randomised like everything
-else), so a published script shows `item 4 of q7Xk2p` instead of the sentence.
-The list itself is still state and still holds the text — that is the trade-off:
-reading the scripts no longer tells you what the project says, but the list
-monitor does. Empty strings and numbers stay inline (there is nothing to hide), and
-dropdown values (costume, key, drum, …) are fields the VM matches by text, so
-they are never pooled.
+| float literals | a number with a decimal point has no words in it |
+| workspace comments, block `x`/`y` | metadata, not names — `--obf-scrub` drops these |
 
 Two consequences:
 
@@ -609,6 +818,158 @@ tests still work. `--enable doObfuscation` does the same from the command line.
 
 `hideObjectNames` is the old spelling of this switch: it is still accepted and
 reported as `I0002`, but `doObfuscation` is the name to write.
+
+## VM protection (v1.1, `vmProtect`)
+
+```jsw
+#enable_feature<vmProtect>;
+```
+
+`vmProtect` replaces the body of every script and custom block it understands
+with a call to a bytecode interpreter. A hat stays where it was, so Scratch
+still decides when the script starts; its body becomes
+`__vm_start(program, frame)`. A custom block keeps its definition and signature,
+but its body becomes a call to `__vm_proc_start(program, temps, argc, ...)`.
+The interpreter lives in the same sprite because Scratch custom blocks are
+per-target. The default `h0` backend emits the shape of `examples/h0.jsw`:
+`__vm_switch` has one numbered `case` per instruction, and `__vm_run` calls
+that switch in a loop. `--vm-style list` keeps the immutable instruction
+stream and its arguments in Stage lists (`__vm_ops`, `__vm_args`), with
+constants in `__vm_k`, then dispatches each instruction through `__vm_step`.
+The h0 style trades a larger project (one Scratch case block group per
+instruction) and a potentially slower case scan for explicit dispatch; it is
+still a block backend, not a source-to-source class rewriter.
+
+The generated layout is randomized on every build: opcode ids, h0 case labels
+and their order, and helper names all depend on a fresh seed. `--vm-seed N`
+reproduces a build exactly. `--vm-crypt 0..3` selects the hardening level:
+0 fixed layout for debugging, 1 default randomized layout, 2 adds a checksum
+guard to every VM entry, and 3 adds unreachable decoy cases. The h0 backend
+puts each unique instruction body in its own random-named helper method by
+default; `--no-vm-split` keeps the bodies inside `__vm_switch`.
+
+Generic community-extension commands and reporters are lowered through the
+same native-call vocabulary as the core blocks. Their fixed menu values are
+written as literals; a computed menu, an extension loop/conditional, or an
+unknown extension opcode leaves the program native with `W0031`. Extension
+hats keep their native trigger block and virtualize the body.
+
+### Milestones
+
+This is the original vmProtect plan, kept so the stage names do not drift.
+The `M2` label in early checkpoints meant procedure virtualization; in this
+plan that work belongs to **M3**.
+
+| stage | work | status |
+| --- | --- | --- |
+| M0 | prototype the dispatcher by hand; prove wait/warp, thread variables across yields, and clone list copying | ✅ |
+| M1 | bytecode compiler for hats, variables, literals, arithmetic, `if`/`repeat`/`forever`, `wait`, `broadcast`; stubs and runtime skeleton | ✅ |
+| M2 | all built-in and extension blocks, reporter handlers, menus, boolean truthiness, list operations | 🟡 partial: generic extension commands/reporters/menus, comment blocks and `forEachThreadVariable` are virtualized; some extension loops, conditionals and dynamic menu values still fall back to native `W0031` |
+| M3 | custom blocks: frames, parameters, recursion, warp, receiver hats, cross-sprite broadcasts | ✅ |
+| M4 | clones, stop variants, ask, glide, `broadcastAndWait`, `wait until`, edge/extension hats | ✅ wait-until is bytecode now; extension hats keep their native trigger and virtualize their bodies |
+| M5 | thread arena, lazy growth, overflow handling, green-flag reset | ✅ dynamic growth/reuse, active-frame cleanup, and a guarded green-flag reset |
+| M6 | encoding/crypt levels, dispatch shuffling, checksums, decoys, slow knobs | ✅ `--vm-crypt 0..3`: fixed/random layout, checksum guards and decoy cases; `--vm-seed`, `--vm-budget` and split helpers |
+| M7 | `doObfuscation` / `corruptBlockPos` composition, validator, diagnostics | ✅ |
+| M8 | differential harness, CI fixtures, docs/CLI/editor data | 🟡 partial: tests and docs are in place; extension-heavy fixtures are not fully covered |
+
+Mutable frame state always lives in one `__vm_stack` list, and
+`__vm_next`/`__vm_free` track frame allocation. Each VM frame's `base` is a
+custom-block parameter, which the interpreter keeps per invocation across
+yields and broadcasts, so clones and concurrent scripts never share a state
+block. Stage hats are left native in this slice: the Stage owns the programs and
+the arena, so it is already where the state lives.
+
+The instruction set is deliberately small at this stage:
+
+| source | bytecode |
+| --- | --- |
+| variable read/write, `+=`, literals | load/store/change, constant pool |
+| `+ - * / %`, `< > =`, `and or not` | arithmetic and comparison cases |
+| `join` | `join` case |
+| `if` / `if/else`, `repeat`, `forever`, `repeat until` / `while`, `wait` | jumps, a repeat counter, a wait case |
+| `broadcast`, `broadcast and wait` | queued and delivered at a yield point |
+| simple looks/motion/sound/pen/music/sensing commands | native call, with each input read from the bytecode |
+| `length of`, `item of`, `contains`, `item # of` and list add/set/insert/delete/clear | native list method; a list name that is not an identifier stays native |
+| `Motion.x`, `Motion.direction`, `Sound.volume`, `Looks.size` writes | native property setter/change |
+| `say`, `say for secs`, `stop this script`, `stop all`, `stop other scripts` | native looks/stop calls |
+| a custom block defined in the same sprite | its body is virtualised; calls go through its native stub |
+| a call to a custom block | a native call into the stub, with arguments read from the VM frame |
+| `green flag`, broadcast, key, click, backdrop, clone hats | the hat is kept, its body is virtualised |
+| custom-block parameters | `argument_reporter` blocks load from the frame's parameter slots |
+
+A script or custom block that uses anything else is **left as ordinary blocks**
+and reported as `W0031`; the project always builds. A script that calls a
+native custom block whose body contains `while (1)` is left native too: the
+native call would never return to the interpreter, and a clone started from it
+could take the scheduler's only slot. `vanillaScratch` wins over `vmProtect`: a
+build for scratch.mit.edu keeps its native blocks and reports `W0030`.
+
+A virtualised `procedures_definition` is still a real Scratch custom block, so
+native scripts (including a hat that `W0031` left native) can call it and get
+the interpreter. Its parameters occupy frame slots immediately after the eight
+interpreter state slots; temporary values come after the parameters, and the
+operand stack comes after both. A call starts a nested `__vm_run`; the frame is
+allocated from `__vm_next` and returned to `__vm_free` when that run halts, so
+recursive and concurrent calls reuse frames instead of walking off the arena.
+There is no separate bytecode call stack: the native custom-block call is the
+call stack. `stop this script` inside a virtualised custom block halts the
+frame and returns to its caller, matching Scratch.
+
+A `// warp` custom block is left native, and so is every procedure reachable
+from one. The interpreter's `__vm_run` is a `while (1)` loop and must yield at
+the end of each iteration; Scratch's warp mode skips that yield, so putting the
+interpreter inside a warp call chain would freeze the tab. A virtualised
+caller can still call a native warp custom block, so only the warp chain loses
+protection. The same rule explains the conservative counts below: i386's CPU
+is almost entirely warp procedures.
+
+The field values of a block (`effect`, `mathop`, `rotation style`) are literals
+in Scratch, so they are written straight into the generated call; the input
+values are the only thing read from the VM stack. A field is not an input
+socket, and handing it a reporter would leave that reporter orphaned in the
+project JSON.
+
+On this repository's large projects the split (counted in programs: scripts
+plus custom-block bodies) is: i386 3 protected and 228 native, rv64 2 and 102,
+and the Scratch 3 emulator 89 and 210. Most of the native programs are `// warp`
+custom blocks or helpers called by one. The i386 CPU boot script is also native
+because it calls `mainLoop`, an infinite native block; the three protected
+programs are the service hats that were protected in M1, and the machine still
+boots. Leaving the warp chain native is what keeps that boot from turning into
+a frozen tab.
+
+`wait until` is left native: it takes a **reporter**, and passing one evaluated
+boolean would freeze the script on the first false. `--vm-budget` is the speed
+knob: 1 is the deliberate crawl, 10 is usable for a small project, and a CPU
+that has to keep its frame rate needs a much higher number. The frame arena
+starts with 320 slots and grows by one frame when nested custom-block calls or
+simultaneous clones need more; a running frame is never overwritten. The free
+list reuses frames as calls return, so a long-running project does not pay for
+the arena's high-water mark on every call.
+
+The point is the slowdown: `__vm_run` is a `while (1)` loop, and Scratch yields
+at the end of every iteration. The interpreter is always non-warp, even in a
+`--warp` build; a warp loop would never yield back to Scratch, so `--warp` only
+reaches the native custom blocks the interpreter calls. `--vm-budget N` runs N interpreter steps per
+iteration. The default is 1 (one instruction per frame), which is intentionally
+extreme; raise it for a playable build. `0` is treated as `1`.
+
+Broadcasts are queued rather than started in the middle of a bytecode step, and
+delivered before a wait, a loop back edge, `broadcast and wait`, or the end of
+the script. That keeps the native ordering where a receiver sees the sender's
+state at its next yield, instead of seeing a half-updated interpreter frame.
+
+With `doObfuscation`, text literals are already pooled before this pass: those
+pool reads are resolved to constants when the bytecode is built, and a queued
+broadcast follows the message rename so sender and receiver stay matched.
+The VM's own state lists and helper blocks go through the same rename as
+everything else, so a protected release does not advertise itself with a row of
+`__vm_` names.
+
+This is anti-tamper, not encryption: the program is bytecode in a Stage list, so
+somebody who is determined can read and change it. What it removes is the
+straightforward "open the project, read the scripts" path, and the interpreter
+makes the control flow much harder to follow in the editor.
 
 ## Eval warnings (v1.0)
 
@@ -757,6 +1118,46 @@ and converted to decimal on the way into the project, because that is what the
 VM stores. A round trip therefore *normalises* `0x…` to plain decimal — the
 value is identical, the spelling is not.
 
+## Comparing text (a VM trap, not a language rule)
+
+Scratch's `=` and its list search compare two values by **first trying numbers**
+and only then falling back to a case-folded string compare. Two consequences
+that a program has to be written around:
+
+```jsw
+"0" == " ";      // true!  both cast to the number 0
+"a" == "A";      // true:  the fallback lowercases
+item # of "a" in ["A","b"];   // 1, not 0
+```
+
+So `if (ch == " ")` does **not** test for a space when `ch` might be `"0"`, and
+a Base64 alphabet cannot be looked up in a list, because its upper and lower
+halves would collide. Text that has to survive this is either hex (where `A` and
+`a` mean the same digit) or matched against a known alphabet rather than against
+whitespace. `userspace/np5/loader.jsw` does both, and says why.
+
+## `+` is arithmetic, and `join` is text (the other VM trap)
+
+`+` is `operator_add` and nothing else: both operands are cast to numbers
+before the addition, so text on either side is worth zero.
+
+```jsw
+"abc" + "def";     // 0, not "abcdef"
+"0x" + n;          // 0, not "0x2f"
+join("abc", "def");        // "abcdef"
+join("0x", n);             // "0x2f"
+```
+
+There is no operator that concatenates. A chain of `+` therefore *compiles* --
+it is a read-only block, not an error -- and then quietly produces `0` at
+runtime, which is how a decoder that built every line out of `+` came to
+publish the number zero while every test that ran it agreed it worked.
+
+The decompiler writes `join` blocks back as `join(…)` or as an f-string
+(§ *f-strings*), and `operator_add` back as `+`, so a round trip is exact. The
+simulator in `tools/jsw_sim.py` follows the same rule and reports `0`, so a
+test that runs the decompiled project cannot hide this.
+
 ## Naming style (v0.4)
 
 `#enable_feature<namespacedNames>;` plus `ns=<Prefix>` in the sprite comment
@@ -785,6 +1186,12 @@ A custom block whose label cannot be a function name keeps its exact text:
 ```jsw
 private void create_note(t, n) { // proccode create note %s in tick %s
 ```
+
+The placeholders are `%s`, `%n` and `%b`; the language itself has one untyped
+parameter, so the **count** is what has to match the parameter list. `%b` is
+kept because a decompiled Scratch project may declare a boolean parameter: the
+prototype then gets an `argument_reporter_boolean` shadow with the default
+`false`, which is what scratch-blocks expects for that slot.
 
 ## Huge state (v0.4)
 
@@ -875,6 +1282,9 @@ In TurboWarp, we can import attachments (photos, audios, etc.) within the UI
 | `import "logo.svg" (as Logo);` | parenthesised form from the user rules |
 
 * Paths resolve relative to the `.jsw` file.
+* *Where* the line sits picks the target: inside a class it is that sprite's
+  costume or sound, in `stage { … }` or at the top level it is the Stage's --
+  which is how a project gets a backdrop of its own.
 * Images (`.svg .png .jpg .jpeg .bmp .gif .webp`) become costumes; PNG and SVG
   dimensions are read so the rotation centre is correct.
 * Sounds (`.wav .mp3 .ogg`) become sounds; WAV headers are parsed for
@@ -943,15 +1353,18 @@ Defined once in [`jswc/keywords.py`](./jswc/keywords.py) and imported by both
 the compiler and the TextMate grammar generator, so the editor can never
 highlight a different set from the one the parser accepts.
 
-**Keywords (v0.1)**
-`class` `void` `public` `private` `if` `elif` `else` `for` `while` `switch`
-`case` `default` `break` `continue` `return` `call` `true` `false` `null`
-`any` `and` `or` `not`
+**Keywords**
+`class` `stage` `loose` `metadata` `void` `public` `private` `if` `elif` `else`
+`for` `while` `repeat` `switch` `case` `default` `break` `continue` `return`
+`call` `import` `include` `as` `true` `false` `null` `any` `and` `or` `not`
+
+`import` names an asset, `include` splices a source file in (§"Modules"), and
+`as` is the alias word both of them use.
 
 **Reserved for later** (parsed as keywords, rejected where unsupported)
 `extends` `static` `final` `const` `let` `var` `new` `this` `typeof`
 `instanceof` `delete` `try` `catch` `finally` `throw` `yield` `await` `async`
-`do` `in` `of` `enum` `struct` `typedef` `import` `export`
+`do` `in` `of` `enum` `struct` `typedef` `export`
 
 **Literal forms**
 
@@ -1007,7 +1420,7 @@ public void hello() { // hook: green flag
 }   // lives on the Stage, exactly as if it were inside ``stage { … }``
 ```
 
-### Modules: `// include "file.jsw"`
+### Modules: `include "file.jsw"`
 
 A `class` is a sprite, so a project with three sprites needs three classes. An
 include keeps each of them in its own file: the line is replaced by the contents
@@ -1017,9 +1430,9 @@ of the named file, resolved relative to the file that mentioned it.
 // rv64.jsw -- the board: shared state and nothing else
 import "assets/lists/X.image.jsa";
 
-// include "display.jsw"
-// include "net.jsw"
-// include "core.jsw"
+include "display.jsw"
+include "net.jsw"
+include "core.jsw"
 ```
 
 ```jsw
@@ -1033,7 +1446,8 @@ class Display {
 
 | rule | why |
 | --- | --- |
-| the directive is a whole line | it is text substitution, not an expression; nothing else may share the line |
+| `include` is a keyword, not a comment | a disabled include and a live one have to look different; the line is text substitution, so nothing else may share it |
+| one quoted path, then optionally a `//` comment | the path is inside the quotes, so a comment can never be part of it |
 | paths are relative to the *including* file | a module can live beside the one that pulls it in |
 | nesting is allowed, cycles are an error | `a.jsw -> b.jsw -> a.jsw` is reported with the chain, not a hang |
 | a diagnostic names the module and its own line | the compiler keeps a line map, so an error in `core.jsw:120` never points at the joined text |
@@ -1046,6 +1460,7 @@ including file, above the includes.
 
 ```jsw
 metadata <script> pos <x>,<y>;                        // where the script sits
+metadata <variable> at <x>,<y> <W>x<H> <shown|hidden>;          // a read-out
 metadata <variable> <mode> at <x>,<y> <W>x<H> <shown|hidden> [range a..b [discrete]];
 metadata <mode> <variable> at <x>,<y> <W>x<H> <shown|hidden>;   // same thing
 metadata watch <target>.<opcode> id="…" mode=… at …;
@@ -1056,8 +1471,26 @@ metadata note <target> at <x>,<y> <W>x<H> [minimized]: "text";
 | --- | --- |
 | `<script>` | the method name as written: `greenFlag`, `Stage.startFrameCounter`, `Events.keyPressed` |
 | `<variable>` | `Owner.name`: `Stage.Score`, `main.lives`, `"obj loader".score` |
-| `<mode>` | `default` · `large` · `slider` · `list` |
+| `<mode>` | `default` · `large` · `slider` · `list` — see below |
 | `<W>x<H>` | the monitor box, e.g. `100x24` |
+
+**Monitor modes.** Omitting the mode is the same as writing `default`: an
+ordinary read-out. The other modes are Scratch's own, with the spellings a
+reader is likely to try:
+
+| written | Scratch `mode` | notes |
+| --- | --- | --- |
+| *(nothing)* · `default` · `normal` | `default` | a plain read-out box |
+| `large` · `largeReadout` | `large` | the big number, for a value someone is watching |
+| `slider` | `slider` | `0..100`, stepping by 1 — Scratch's default range |
+| `slider(a,b)` | `slider` | the range in parentheses, in either position |
+| `list` | `list` | the list's contents |
+
+`slider(a,b)` also accepts whole-number bounds as steps: `slider(0,2)` is a
+three-state switch, `slider(0.2,4)` is a rate. The explicit `range a..b
+[discrete]` spelling still works and is what the decompiler writes, so a
+`metadata slider(0,2) …` line comes back as `metadata slider … range 0..2
+discrete` after a round trip.
 
 `metadata` may appear at the top level or inside a `class` / `stage` body; the
 target is named explicitly, so its position in the file does not matter.
@@ -1085,6 +1518,36 @@ the same opcode, so a project may use either:
 
 The decompiler always writes the canonical name, so round-tripped source uses
 one spelling throughout.
+
+### Asking: `Sensing.ask(q)` is a value too
+
+Scratch's ask block is a *statement* that waits, and the answer is a separate
+reporter. In JadenScript the statement still works, and the same call used as a
+value asks first and answers with what was typed:
+
+```jsw
+Sensing.ask("Name?");           // the statement: the answer is read later
+name = Sensing.answer;
+
+age = Sensing.ask("Age?");      // the value form: asks, then assigns
+if (age == "42") { … }
+```
+
+The value form compiles to `ask and wait` followed by a `set` of a temporary
+from `answer`, and the expression becomes a read of that temporary — so two
+questions in one statement do not read each other's answer:
+
+```jsw
+Looks.say(join(Sensing.ask("one"), Sensing.ask("two")));
+```
+
+The temporary is called `_ask1`, `_ask2`, … and lives in the sprite, like the
+`_t1` temporaries a conditional in an argument needs. A bare
+`Sensing.ask("…");` line emits the block on its own, with no temporary.
+
+The question is asked **once per statement**, before that statement runs — so a
+`Sensing.ask` in a `while` condition asks before the loop starts and reads the
+same answer every time round. Ask inside the loop body instead.
 
 ### Keys: `Sensing.keyPressed(x)` / `Sensing.isKeyPressed(x)`
 
@@ -1510,6 +1973,7 @@ JadenScript if the compiler ignores them.
 | `// Stage: costume=… volume=… layer=… tempo=… video=… videoTransparency=…` | stage metadata for the `stage { }` block |
 | `// hook: when [key] key pressed` | turns the function into an `event_whenkeypressed` hat |
 | `// warp` or `// main thread` | sets `warp: "true"` on the custom block |
+| `// no-warp` | keeps that one block's frames even under `--warp` |
 | `// green flag` | turns the function into `event_whenflagclicked` |
 | `// proccode <label>` | the exact custom-block label, used when it cannot be spelled as a function name |
 | `// at x,y` | canvas position of the script / loose stack |
@@ -1627,6 +2091,64 @@ exist. Building with no `--target` defines neither name, which is the "neither
 build in particular" case the tests and the offline simulators want. Use
 `#ifdef SCRATCH` when the *Scratch* side is the one that has to differ — as
 above, where 480 x 360 is a constant and measuring it is wasted frames.
+
+`--target` is shorthand and nothing more: it is exactly `-D TURBOWARP` or
+`-D SCRATCH` and has no other effect, so a build is reproducible from the
+defines alone and `check` can be asked the same question:
+
+```bash
+jswc check machine.jsw --target turbowarp   # what the TurboWarp build sees
+jswc check machine.jsw                      # neither: every guarded line gone
+```
+
+Without the flags `check` hides every guarded branch, which is why a line that
+only exists under `#ifdef TURBOWARP` looks fine until you build the build it
+belongs to.
+
+### A define flows into what it includes, and no further
+
+`#define` is not scoped to a file: a define in the including file is visible to
+every module it includes, which is what makes one switch enough.
+
+```jsw
+// machine.jsw -- the switch and the modules it governs
+#define WANT_SPEAKER
+include "speaker.jsw"          // the whole class is inside #ifdef WANT_SPEAKER
+include "core.jsw"
+```
+
+```jsw
+// speaker.jsw
+#ifdef WANT_SPEAKER
+class Speaker { public void speakerInit() { … } }
+#endif
+```
+
+That is also why a dropped block's `#define` does nothing: the preprocessor
+walks the text once, top to bottom, and a line it never keeps never runs. When a
+flag needs to be shared but not in the including file, put it on the command
+line — `-D` is the same set, so `#define` in a source and `-D` on the command
+line are interchangeable.
+
+Nest freely; the branches read top to bottom and only the enclosing `live`
+matters:
+
+```jsw
+#ifdef TURBOWARP
+    #ifdef TRACE
+        console.log("frame");            // TurboWarp build, tracing on
+    #else
+        _trace = 0;                      // TurboWarp build, tracing off
+    #endif
+#else
+    _trace = 0;                          // Scratch build: no console at all
+#endif
+```
+
+`-D TRACE --target turbowarp` takes the first branch, `--target turbowarp` the
+second, `--target scratch` the third. A stray `#else` or `#endif` is reported
+against its own line, and an unbalanced `#ifdef` is `#ifdef without #endif`, not
+a silently truncated program.
 
 ## 12. Command line
 

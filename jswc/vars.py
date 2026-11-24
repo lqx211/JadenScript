@@ -191,32 +191,71 @@ def collect_list_names(program: A.Program) -> set[str]:
     """
     from .extensions import known_namespaces
 
-    namespaces = BUILTIN_NAMESPACES | known_namespaces()
+    namespaces = set(BUILTIN_NAMESPACES) | set(known_namespaces())
+    # A class is a sprite, so ``Player.clear()`` is a custom block or a
+    # broadcast, never a list — even though ``clear`` is a list method. A
+    # decompiled ``elif`` arm can call one, and the walker now sees it.
+    namespaces |= {cls.name for cls in program.classes}
+    namespaces |= {meta.sprite for meta in program.sprite_meta if meta.sprite}
+    for cls in program.classes:
+        if cls.sprite is not None and cls.sprite.namespace:
+            namespaces.add(cls.sprite.namespace)
+        namespace = cls.params.get("namespace")
+        if isinstance(namespace, A.StringLit) and namespace.value:
+            namespaces.add(namespace.value)
+    # ``Player.clear()`` where ``Player.clear`` is a declared public block is a
+    # procedure call that happens to share a name with ``list.clear()``; the
+    # decompiled sample has exactly that, and it must not invent a list called
+    # ``Player``.
+    procedures = {
+        ".".join(fn.name) for cls in program.classes for fn in cls.funcs
+    }
     names: set[str] = set()
     for cls in program.classes:
         for node in _all_nodes(cls):
             if isinstance(node, A.Call) and isinstance(node.receiver, A.Name):
                 if node.name in O.LIST_METHODS:
                     full = ".".join(node.receiver.parts)
-                    if node.receiver.parts[0] not in namespaces:
+                    qualified = f"{full}.{node.name}"
+                    if (
+                        node.receiver.parts[0] not in namespaces
+                        and qualified not in procedures
+                    ):
                         names.add(full)
     return names
 
 
 def _all_nodes(root):
+    """Every AST node under ``root``, through any list, tuple or dict.
+
+    ``IfStmt.elifs`` is a list of ``(condition, body)`` tuples whose body is
+    itself a list. Walking only the nodes that sit directly in a list misses
+    every call inside an ``elif`` arm — ``light_themes.indexOf(...)`` under one
+    was not collected, so codegen treated the list method as an unknown
+    reporter.
+    """
     stack = [root]
+    seen: set[int] = set()
     while stack:
-        node = stack.pop()
-        yield node
-        for f in node.__dataclass_fields__.values():
-            value = getattr(node, f.name)
-            if isinstance(value, A.Node):
-                stack.append(value)
-            elif isinstance(value, list):
-                stack.extend(item for item in value if isinstance(item, A.Node))
-                for item in value:
-                    if isinstance(item, tuple):
-                        stack.extend(sub for sub in item if isinstance(sub, A.Node))
+        item = stack.pop()
+        if isinstance(item, A.Node):
+            if id(item) in seen:
+                continue
+            seen.add(id(item))
+            yield item
+            stack.extend(
+                getattr(item, f.name) for f in item.__dataclass_fields__.values()
+            )
+        elif isinstance(item, A.Case):
+            # ``Case`` is a plain dataclass, not an ``A.Node``; a list method
+            # used only inside a switch arm would otherwise be invisible to
+            # list inference and lower as an unknown ``items.get`` call.
+            stack.append(item.value)
+            stack.extend(item.body)
+        elif isinstance(item, dict):
+            stack.extend(item.values())
+        elif isinstance(item, (list, tuple, set, frozenset)):
+            stack.extend(item)
 
 
 # Console statements that read like a bare name (see jswc/codegen.py).
@@ -245,8 +284,14 @@ class VarPlanner:
 
     @property
     def temp_locals(self) -> bool:
-        """``_x`` means a thread (temp) variable only with ``useTempVariables``."""
-        return "useTempVariables" in self.features
+        """``_x`` means a thread (temp) variable only with ``useTempVariables``.
+
+        ``vanillaScratch`` overrides it: a thread variable *is* the
+        lmsTempVars2 extension, and a project carrying one does not load on
+        scratch.mit.edu -- which is the whole promise of that switch. Codegen
+        reports W0027 so the ignored switch does not pass in silence.
+        """
+        return "useTempVariables" in self.features and "vanillaScratch" not in self.features
 
     # -- entry -------------------------------------------------------------
     def run(self) -> VarPlan:
@@ -637,6 +682,8 @@ class VarPlanner:
                 return  # a list of this sprite, read as a value
             if name in self.plan.globals:
                 return
+            if name in self.plan.lists:
+                return  # a Stage list, read as its contents
             self._undefined(node, name)
             return
         if name in O.PROPERTIES or name in O.REPORTERS:
