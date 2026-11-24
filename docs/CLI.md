@@ -75,6 +75,8 @@ Useful flags:
 | `--vm-seed N` | with `vmProtect`: seed the randomized VM layout; omit it for a fresh layout on every build |
 | `--vm-crypt 0..3` | with `vmProtect`: `0` fixed layout, `1` randomized layout (default), `2` add checksum guards, `3` add decoy cases |
 | `--vm-split` / `--no-vm-split` | with `vmProtect`: put each h0 instruction body in its own helper method (default: split; `--no-vm-split` keeps it in `__vm_switch`) |
+| `--layout auto\|always\|never` | block placement: `auto` (default) lays out scripts that have no recorded position, `always` ignores recorded positions and cleans up everything, `never` leaves them where they are |
+| `--layout-height PX` | how tall one column of scripts may get before a new one starts (default: 4000) |
 | `--only-sprite NAME` | emit the Stage and that one sprite, for a quick single-sprite edit loop (a kept sprite that still calls a dropped one gets `W0029`) |
 | `-D/--define NAME` | define `NAME` for `#ifdef` (repeatable) |
 | `--allow-undefined` | undefined globals become warnings instead of errors |
@@ -222,6 +224,60 @@ archive is built in memory for the packager).
 Autoplay and turbo mode are on in the packaged page, since it is meant to be
 handed to someone and double-clicked. For a title screen or a different
 appearance, use <https://packager.turbowarp.org/> with the same `.sb3`.
+
+### Where the blocks land: `--layout`
+
+```bash
+jswc build userspace/np5/main.jsw -o build/np5.sb3 --layout always
+```
+
+A project that opens in TurboWarp already arranged is a project you can read,
+and the placement is the one TurboWarp's own **Clean up blocks** produces: the
+first script at `(48, 64)`, each following script 72 px below the last, and a
+new column starting one widest-script plus 96 px to the right. That is
+TurboWarp's DevTools "Clean up Plus" addon, which replaces `Blockly`'s
+`cleanUp`; the compiler reproduces its placement, not its column-splitting (see
+below).
+
+Clean-up gets its spacing right because it asks the rendered workspace how tall
+each script is. A compiler has no workspace, so `jswc/layout.py` models it.
+Every constant there was measured by reading `block.height` off a live editor —
+4,476 blocks across NotePlayer V5 and a shape probe, all reproduced exactly:
+
+| shape | height |
+| --- | --- |
+| a statement row | 56, `pen_*` / `music_*` rows 64 (they draw an icon) |
+| a block that ends a script (`stop all`, `delete this clone`) | 48, no bottom notch to share |
+| a reporter, flat | 40 |
+| a literal or dropdown | 32 |
+| `if` / `repeat` | row + 24 + the substack (32 even when empty) |
+| `forever` | row + 16 + the substack (no bottom arm) |
+| `if`/`else` | row + 24 + then + 24 + else |
+| an input taller than its slot | grows the row above it, 8 px per 8 px (16 for statements) |
+| stacked rows | share a notch: 8 px per joint |
+
+Which scripts move is the point of `--layout`:
+
+| mode | behaviour |
+| --- | --- |
+| `auto` (default) | scripts the source placed with `// at x,y` or `metadata … pos` stay put; everything else is arranged |
+| `always` | ignore the recorded positions and arrange the whole project — TurboWarp's button |
+| `never` | place nothing; every script keeps the coordinates it was given |
+
+`auto` is the default because a decompiled project carries the original
+author's layout in its `metadata pos` lines, and rebuilding it should not
+scatter a hand-arranged workspace.
+
+Two differences from the button in the editor:
+
+* **Columns are packed by height, not inferred from where the blocks already
+  are.** Clean-up splits columns by looking for x positions more than 256 px
+  apart, which a freshly compiled project has none of. `--layout-height PX`
+  says how tall one column may get before the next starts (default 4000, about
+  two screens).
+* **Workspace comments are left where they are.** They are free-floating
+  `blockId: null` comments with coordinates from the source, so they do not
+  move with a script.
 
 ---
 

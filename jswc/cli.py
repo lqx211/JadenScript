@@ -350,6 +350,8 @@ def cmd_build(args: argparse.Namespace) -> int:
             vm_seed=args.vm_seed,
             vm_split=args.vm_split,
             vm_crypt=args.vm_crypt,
+            column_height=args.layout_height,
+            layout_mode=args.layout,
         )
         project = codegen.compile()
         if "SCRATCH" in defines and GTM_EXTENSION in project.extensions:
@@ -603,6 +605,13 @@ def build_parser() -> argparse.ArgumentParser:
                             "needs node and `npm install`)")
     build.add_argument("--html-title", metavar="TEXT",
                        help="page title for the --html file (default: the file name)")
+    build.add_argument("--layout", choices=("auto", "always", "never"), default="auto",
+                       help="block placement: auto (default) lays out scripts that have no "
+                            "recorded position, always ignores recorded positions and cleans "
+                            "up every script, never leaves them where they are")
+    build.add_argument("--layout-height", type=int, default=4000, metavar="PX",
+                       help="how tall a column of scripts may get before a new one "
+                            "starts (default: 4000, about two screens)")
     build.add_argument("--enable", action="append", default=[], metavar="FEATURE",
                        help="enable a language feature (useTempVariables, commentMetadata, "
                             "namespacedNames, doObfuscation, corruptBlockPos, vanillaScratch, "

@@ -775,7 +775,9 @@ class MetadataStatementTests(unittest.TestCase):
         )
         hat = next(b for b in target(data, "main")["blocks"].values()
                    if isinstance(b, dict) and b["opcode"] == "event_whenflagclicked")
-        self.assertEqual((hat["x"], hat["y"]), (0, 0))
+        # No `metadata … pos`, so the layout pass places it: TurboWarp's
+        # clean-up origin, not a corner of the canvas.
+        self.assertEqual((hat["x"], hat["y"]), (48, 64))
 
     def test_monitor_statement_mode_first(self):
         _, data = compile_source(

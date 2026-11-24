@@ -433,7 +433,7 @@ stage { // Stage: costume=0 volume=100 layer=0 tempo=275.3784 video=on videoTran
 
 | directive | meaning |
 | --- | --- |
-| `// at x,y` | top-level position of the script that follows |
+| `// at x,y` | top-level position of the script that follows (without one the script is arranged with the rest, see `--layout` in `docs/CLI.md`) |
 | `loose { … }` | blocks with no hat; one chain per `loose` block |
 | `// monitor <target>.<name> <mode> at x,y WxH shown\|hidden [range a..b [discrete]]` | a variable or list monitor |
 | `// watch <target>.<opcode> at x,y WxH` | a monitor that shows a plain reporter |

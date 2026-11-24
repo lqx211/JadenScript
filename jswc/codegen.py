@@ -31,7 +31,7 @@ from . import ast_nodes as A
 from . import opcodes as O
 from . import keycodes
 from .ir import Block, IdGen, Inline, Lit, Project, Ref, ShadowRef, Target, Value
-from . import lints
+from . import layout, lints
 from .obfuscate import corrupt_block_positions, obfuscate_project
 from .vmprotect import protect_project
 from .extension_blocks import MICROBIT_CONSTANTS
@@ -276,11 +276,15 @@ class Codegen:
         vm_seed: int | None = None,
         vm_split: bool = True,
         vm_crypt: int = 1,
+        column_height: int = layout.COLUMN_HEIGHT,
+        layout_mode: str = "auto",
     ):
         if locals_mode not in ("sprite", "thread"):
             raise ValueError("locals_mode must be 'sprite' or 'thread'")
         if vm_style not in ("list", "h0"):
             raise ValueError("vm_style must be 'list' or 'h0'")
+        if layout_mode not in ("auto", "always", "never"):
+            raise ValueError("layout_mode must be 'auto', 'always' or 'never'")
         self.program = program
         self.project = Project(seed)
         self.locals_mode = locals_mode
@@ -356,6 +360,8 @@ class Codegen:
         self.vm_split = vm_split
         #: 0 = fixed layout, 1 = randomized layout, 2 = checksum, 3 = decoys.
         self.vm_crypt = max(0, min(3, vm_crypt))
+        self.column_height = max(480, column_height)
+        self.layout_mode = layout_mode
         #: ``--only-sprite NAME``: emit the Stage and that one sprite. The
         #: others are dropped after their scripts are built, so a quick edit of
         #: one sprite does not have to re-serialise the whole project.
@@ -396,7 +402,8 @@ class Codegen:
         self.namespace: str = ""
         self.namespaced = False
         self.scope = Scope()
-        self._script_y = 0
+        #: Block ids whose x/y came from the source; layout skips them.
+        self._fixed_positions: set[str] = set()
         self._next_position: tuple[float, float] | None = None
         #: ``metadata <name> pos x,y;`` — consumed in source order.
         self._positions: dict[str, list[tuple[float, float]]] = {}
@@ -565,13 +572,11 @@ class Codegen:
     def _top_level(self, block: Block) -> Block:
         block.top_level = True
         if self._next_position is not None:
+            # ``metadata … pos`` / ``// at x,y``: the author's own position, so
+            # it is kept and the layout pass leaves this block alone.
             block.x, block.y = self._next_position
             self._next_position = None
-            self._script_y = max(self._script_y, block.y + 400)
-            return block
-        block.x = 0
-        block.y = self._script_y
-        self._script_y += 400
+            self._fixed_positions.add(block.id)
         return block
 
     def _attach_substack(self, block: Block, name: str, stmts: list[A.Stmt]) -> None:
@@ -671,6 +676,17 @@ class Codegen:
                     "a broadcast name built at runtime cannot survive obfuscation",
                 )
         self.project.normalize()
+        # After normalize, so blocks added by a later pass (vmProtect's runtime,
+        # the obfuscator's state machines) are placed too, and before the
+        # corrupt pass, which moves things on purpose.
+        if self.layout_mode != "never":
+            # `always` is TurboWarp's clean-up button: ignore the positions the
+            # source recorded and arrange everything. `auto` keeps them, because
+            # a decompiled project's `metadata pos` is the author's own layout.
+            fixed = set() if self.layout_mode == "always" else self._fixed_positions
+            layout.layout_project(
+                self.project.targets, fixed=fixed, column_height=self.column_height
+            )
         if self.corrupt_block_pos:
             # After ``normalize``: it recomputes every parent link, which is
             # exactly the pointer the corrupt form needs to leave dangling.
@@ -764,11 +780,10 @@ class Codegen:
         if not self.runtime_vars:
             return
         stage = self.project.stage
-        previous = (self.target, self.class_name, self.scope, self._script_y)
+        previous = (self.target, self.class_name, self.scope)
         self.target = stage
         self.class_name = "Stage"
         self.scope = Scope()
-        self._script_y = max((block.y for block in stage.blocks.values()), default=0) + 400
         try:
             hat = self._top_level(self._new("event_whenflagclicked"))
             blocks: list[Block] = [hat]
@@ -779,7 +794,7 @@ class Codegen:
                 blocks.append(block)
             self._link(blocks)
         finally:
-            self.target, self.class_name, self.scope, self._script_y = previous
+            self.target, self.class_name, self.scope = previous
 
     def _emit_notes(self) -> None:
         """``// comment Stage at x,y WxH: "text"`` -> workspace comments."""
@@ -1012,7 +1027,6 @@ class Codegen:
         # written sources are never rewritten implicitly.
         self.namespaced = "namespacedNames" in self.features and bool(namespace)
         self.target_namespaces[target.name] = (self.namespace, self.namespaced)
-        self._script_y = 0
         # Keep the numeric type: float positions must not be truncated.
         target.x = _whole_if_integral(metadata.get("x", 0))
         target.y = _whole_if_integral(metadata.get("y", 0))
@@ -1286,7 +1300,6 @@ class Codegen:
         """Scripts that live on the Stage rather than on a sprite."""
         self.target = self.project.stage
         self.class_name = "Stage"
-        self._script_y = 0
         self._apply_stage_meta(decl.annotation or "")
         self._apply_stage_declaration()
         # A file may hold nothing but the Stage; the context only needs *a*
