@@ -40,6 +40,8 @@ let s:lines = [
       \ '        keySim.clickLeft(-100, 20);',
       \ '        keySim.holdRight(1, 2);',
       \ '    cloud score = 0;',
+      \ '        l.delete(1);',
+      \ '        for i in 1..10 { }',
       \ ]
 
 " (line, snippet, expected group)
@@ -92,6 +94,8 @@ let s:expect = [
       \ [23, 'holdRight(', 'jswFunctionCall'],
       \ [24, 'cloud', 'jswModifier'],
       \ [24, 'score', 'jswIdentifier'],
+      \ [25, 'delete(', 'jswFunctionCall'],
+      \ [26, 'in', 'jswRepeat'],
       \ ]
 
 call setline(1, s:lines)

@@ -2042,6 +2042,11 @@ Only the mappings listed in [`jswc/opcodes.py`](./jswc/opcodes.py) are
 implemented; the table is verified against `scratch-vm/src/blocks` and the pen
 and music extensions.
 
+There is no `c ? a : b`. `?` is not a JadenScript operator: write the ternary
+the postfix way (`x = (1) if (c) else (2);`, above). A `?` in an expression is
+`E0087` with that hint, and the grammar flags it as illegal rather than
+pretending a C-shaped ternary exists.
+
 ### State by name: `Variables`, `Lists`, `Clone`, `Stage`
 
 A variable that is only known at run time can still be reached, because these

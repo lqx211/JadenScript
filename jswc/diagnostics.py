@@ -407,6 +407,12 @@ MESSAGES: tuple[Message, ...] = (
             "function without ``public`` compiles to; it stays callable inside "
             "its own class, with arguments."),
 
+    Message("E0087", "error", "the ternary is `a if c else b`",
+            "JadenScript's conditional expression is the postfix, Python-shaped "
+            "``x = (1) if (c) else (2)``; it lowers to TurboWarp's "
+            "``utilities_ternaryOperator``. The C-shaped ``c ? a : b`` is not "
+            "part of the language, so ``?`` never lexes into anything."),
+
     Message("W0033", "warning", "the loop changes the list it is walking",
             "A ``for … in <list>`` loop reads ``item (i) of`` the list as it "
             "goes; deleting or inserting inside the body shifts the rest of the "

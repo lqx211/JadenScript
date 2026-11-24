@@ -834,7 +834,18 @@ class Parser:
 
     # -- expressions -------------------------------------------------------
     def parse_expr(self) -> A.Expr:
-        return self.parse_ternary()
+        expr = self.parse_ternary()
+        tok = self.peek()
+        if tok.kind is Kind.OP and tok.value == "?":
+            # ``?`` is lexed so this can say what to write instead of the
+            # "expected ')'" the caller would otherwise produce.
+            raise ParseError(
+                "the ternary is `a if c else b`, not `c ? a : b`",
+                tok.line,
+                tok.col,
+                code="E0087",
+            )
+        return expr
 
     def parse_ternary(self) -> A.Expr:
         expr = self.parse_binary(0)

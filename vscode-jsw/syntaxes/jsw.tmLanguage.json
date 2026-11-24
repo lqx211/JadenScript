@@ -51,8 +51,37 @@
   ],
   "repository": {
     "directives": {
-      "comment": "#enable_feature<name>; - the only compiler directive.",
+      "comment": "#enable_feature<name>; and the #ifdef family, which the preprocessor resolves before lexing.",
       "patterns": [
+        {
+          "comment": "#ifdef NAME / #ifndef NAME / #define NAME",
+          "name": "meta.preprocessor.jsw",
+          "match": "^(\\s*)(#(?:ifdef|ifndef|define))\\b\\s*([A-Za-z_]\\w*)?",
+          "captures": {
+            "1": {
+              "name": "punctuation.whitespace.leading.jsw"
+            },
+            "2": {
+              "name": "keyword.other.directive.jsw"
+            },
+            "3": {
+              "name": "entity.name.tag.jsw"
+            }
+          }
+        },
+        {
+          "comment": "#else / #endif",
+          "name": "meta.preprocessor.jsw",
+          "match": "^(\\s*)(#(?:else|endif))\\b",
+          "captures": {
+            "1": {
+              "name": "punctuation.whitespace.leading.jsw"
+            },
+            "2": {
+              "name": "keyword.other.directive.jsw"
+            }
+          }
+        },
         {
           "name": "meta.preprocessor.jsw",
           "begin": "^(\\s*)(#enable_feature)",
@@ -220,7 +249,7 @@
       "comment": "include \"display.jsw\" -- a module spliced in before lexing.",
       "patterns": [
         {
-          "match": "^(\\s*)(include)\\s+(\"[^\"]*\"|'[^']*')",
+          "match": "^(\\s*)(include)\\s+(\"(?:[^\"\\\\]|\\\\.)*\"|\\'(?:[^\\'\\\\]|\\\\.)*\\')",
           "captures": {
             "1": {
               "name": "punctuation.whitespace.leading.jsw"
@@ -239,7 +268,7 @@
       "comment": "import \"assets/lists/notes.jsa\" as notes;",
       "patterns": [
         {
-          "match": "\\b(import)\\s+(\"[^\"]*\"|'[^']*')(?:\\s+(as)\\s+(\"[^\"]*\"|'[^']*'|[A-Za-z_$][\\w$]*))?",
+          "match": "\\b(import)\\s+(\"(?:[^\"\\\\]|\\\\.)*\"|\\'(?:[^\\'\\\\]|\\\\.)*\\')(?:\\s+(as)\\s+(\"(?:[^\"\\\\]|\\\\.)*\"|\\'(?:[^\\'\\\\]|\\\\.)*\\'|[A-Za-z_$][\\w$]*))?",
           "captures": {
             "1": {
               "name": "keyword.control.import.jsw"
@@ -290,7 +319,7 @@
         {
           "comment": "Reserved for future versions; flagged so users avoid them.",
           "name": "invalid.illegal.reserved.jsw",
-          "match": "\\b(?:instanceof|extends|finally|typedef|delete|export|struct|typeof|async|await|catch|const|throw|yield|enum|this|let|new|try|var|do|of)\\b"
+          "match": "(?<!\\.)\\b(?:instanceof|extends|finally|typedef|delete|export|struct|typeof|async|await|catch|const|throw|yield|enum|this|let|new|try|var|do|of)\\b"
         }
       ]
     },
@@ -462,6 +491,18 @@
             },
             {
               "name": "constant.numeric.jsw",
+              "match": "\\b0[xX][0-9a-fA-F]+\\b"
+            },
+            {
+              "name": "constant.numeric.jsw",
+              "match": "\\b\\d+(?:\\.\\d+)?(?=[x×])"
+            },
+            {
+              "name": "constant.numeric.jsw",
+              "match": "(?<=[x×])\\d+(?:\\.\\d+)?\\b"
+            },
+            {
+              "name": "constant.numeric.jsw",
               "match": "\\b\\d+(?:\\.\\d+)?\\b"
             }
           ]
@@ -535,6 +576,10 @@
           "match": "\\b_[A-Za-z0-9_$][\\w$]*\\b"
         },
         {
+          "name": "variable.other.object.jsw",
+          "match": "\\b[A-Za-z_$][\\w$]*(?=\\s*\\.)"
+        },
+        {
           "comment": "A bare identifier: not a call, not a member, but a list name before ``[`` counts.",
           "name": "variable.other.jsw",
           "match": "\\b[A-Za-z_$][\\w$]*\\b(?!\\s*(?:\\(|\\.))"
@@ -580,7 +625,7 @@
         {
           "comment": "log/warn/error/join/string/block ... - the compiler's builtins.",
           "name": "support.function.builtin.jsw",
-          "match": "\\b(?:isTurboWarp|breakpoint|isCompiled|startTimer|stopTimer|lengthOf|ceiling|length|string|block|error|float|floor|log10|pow10|acos|asin|atan|ceil|join|menu|sqrt|warn|abs|cos|exp|len|log|sin|tan|ln)\\b(?=\\s*\\()"
+          "match": "(?<!\\.)\\b(?:isTurboWarp|breakpoint|isCompiled|startTimer|stopTimer|lengthOf|ceiling|length|string|block|error|float|floor|log10|pow10|acos|asin|atan|ceil|join|menu|sqrt|warn|abs|cos|exp|len|log|sin|tan|ln)\\b(?=\\s*\\()"
         },
         {
           "name": "entity.name.function.call.jsw",
@@ -633,12 +678,12 @@
     "operators": {
       "patterns": [
         {
-          "name": "keyword.operator.assignment.jsw",
-          "match": "(\\+=|-=|\\*=|/=|%=|=)"
-        },
-        {
           "name": "keyword.operator.comparison.jsw",
           "match": "(==|!=|<=|>=|<|>)"
+        },
+        {
+          "name": "keyword.operator.assignment.jsw",
+          "match": "(\\+=|-=|\\*=|/=|%=|=)"
         },
         {
           "name": "keyword.operator.logical.jsw",
@@ -653,8 +698,16 @@
           "match": "\\.\\."
         },
         {
-          "name": "keyword.operator.ternary.jsw",
+          "name": "constant.character.escape.line-continuation.jsw",
+          "match": "\\\\$"
+        },
+        {
+          "name": "invalid.illegal.no-ternary.jsw",
           "match": "\\?"
+        },
+        {
+          "name": "punctuation.accessor.jsw",
+          "match": "\\."
         }
       ]
     },

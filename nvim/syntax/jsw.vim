@@ -22,6 +22,8 @@ syn match jswNumber /\%(\<[0-9][0-9_]*\)\@<=\.[0-9][0-9_]*\>/
 " -- operators (before the regions, so ``//`` is a comment) ---------
 syn match jswOperator /\V**\|..\|==\|!=\|<=\|>=\|&&\|||\|+=\|-=\|*=\|\/=\|%=\|++\|--\|+\|-\|*\|\/\|%\|<\|>\|=\|!/
 syn match jswDelimiter /[(){}\[\];,]/
+" A trailing backslash joins the next line; the lexer swallows both.
+syn match jswContinuation /\\$/
 
 " -- comments and strings ----------------------------------------
 syn match jswAnnotationWord /\%(\<receiver\ at\>\|\<main\ thread\>\|\<proccode\>\|\<monitor\>\|\<comment\>\|\<grouped\>\|\<watch\>\|\<Sprite:\|\<warp\>\|\<Stage:\|\<hook:\|\<at\>\)/ contained
@@ -52,13 +54,13 @@ syn keyword jswBuiltin abs acos asin atan block breakpoint ceil ceiling cos erro
 syn keyword jswNamespace AIChatBot Arduino Clone Comments Control Events Facemesh GoogleTeachableMachine Handpose JSON Lists Looks Mem MoreEvents Motion Music ObjectDetection Operators Pen Pointerlock Posenet Ram Runtime Sensing Sound SpeechRecognition Stage Temp Timer TurboWarp Util Variables WebSocket console gtm keySim microbit pen sound
 syn keyword jswLiteral any false null true
 syn keyword jswConditional case default elif else if switch
-syn keyword jswRepeat break continue for repeat while
+syn keyword jswRepeat break continue for in repeat while
 syn keyword jswStatement call loose return
 syn keyword jswDeclaration as import include stage
 syn keyword jswModifier cloud final private public static
 syn keyword jswType void
 syn keyword jswWordOperator and not or
-syn keyword jswReserved async await catch const delete do enum export extends finally in instanceof let new of struct this throw try typedef typeof var yield
+syn match jswReserved /\%(\.\)\@<!\<\%(instanceof\|extends\|finally\|typedef\|delete\|export\|struct\|typeof\|async\|await\|catch\|const\|throw\|yield\|enum\|this\|let\|new\|try\|var\|do\|of\)\>/
 
 " A call is the name before the parenthesis, a class is the name after
 " ``class`` (the region keeps the keyword itself a declaration).
@@ -106,6 +108,7 @@ hi def link jswFString String
 hi def link jswHole Special
 hi def link jswOperator Operator
 hi def link jswDelimiter Delimiter
+hi def link jswContinuation SpecialChar
 hi def link jswComment Comment
 hi def link jswAnnotationWord SpecialComment
 hi def link jswTodo Todo

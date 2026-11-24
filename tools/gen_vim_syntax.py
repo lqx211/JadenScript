@@ -37,7 +37,9 @@ PLUGIN = ROOT / "nvim"
 
 #: Control flow, split so a colourscheme can tell the three apart.
 CONDITIONAL = {"if", "elif", "else", "switch", "case", "default"}
-REPEAT = {"for", "while", "repeat", "break", "continue"}
+#: ``in`` closes a ``for`` header, so it reads as control flow; the compiler
+#: keeps it in RESERVED only so a variable cannot take the name.
+REPEAT = {"for", "while", "repeat", "break", "continue", "in"}
 STATEMENT = {"return", "call", "loose"}
 DECLARATION = {"stage", "import", "include", "as"}
 
@@ -164,6 +166,8 @@ def syntax_file() -> str:
         '" -- operators (before the regions, so ``//`` is a comment) ---------',
         "syn match jswOperator /" + _literal_alternation(OPERATORS) + "/",
         r"syn match jswDelimiter /[(){}\[\];,]/",
+        '" A trailing backslash joins the next line; the lexer swallows both.',
+        r"syn match jswContinuation /\\$/",
         "",
         '" -- comments and strings ----------------------------------------',
         r"syn match jswAnnotationWord /" + _annotation_pattern(ANNOTATION_WORDS) + r"/ contained",
@@ -201,7 +205,12 @@ def syntax_file() -> str:
         "syn keyword jswModifier " + _words(MODIFIERS),
         "syn keyword jswType " + _words(TYPES),
         "syn keyword jswWordOperator " + _words(WORD_OPERATORS),
-        "syn keyword jswReserved " + _words(RESERVED - KEYWORDS - MODIFIERS - TYPES),
+        # A match, not a keyword: ``l.delete(1)`` is a list method, and a
+        # keyword beats a match at the same column regardless of rule order, so
+        # the lookbehind has to be able to veto the word entirely.
+        r"syn match jswReserved /\%(\.\)\@<!\<\%("
+        + _alternation(RESERVED - KEYWORDS - MODIFIERS - TYPES - REPEAT)
+        + r"\)\>/",
         "",
         '" A call is the name before the parenthesis, a class is the name after',
         '" ``class`` (the region keeps the keyword itself a declaration).',
@@ -236,6 +245,7 @@ def syntax_file() -> str:
         "hi def link jswHole Special",
         "hi def link jswOperator Operator",
         "hi def link jswDelimiter Delimiter",
+        "hi def link jswContinuation SpecialChar",
         "hi def link jswComment Comment",
         "hi def link jswAnnotationWord SpecialComment",
         "hi def link jswTodo Todo",

@@ -200,9 +200,24 @@
               }
             },
             {
-              "scope": "invalid.illegal.reserved.jsw",
+              "scope": [
+                "invalid.illegal.reserved.jsw",
+                "invalid.illegal.no-ternary.jsw"
+              ],
               "settings": {
                 "foreground": "#F44747"
+              }
+            },
+            {
+              "scope": "variable.other.object.jsw",
+              "settings": {
+                "foreground": "#9CDCFE"
+              }
+            },
+            {
+              "scope": "constant.character.escape.line-continuation.jsw",
+              "settings": {
+                "foreground": "#D7BA7D"
               }
             },
             {
@@ -222,7 +237,6 @@
                 "keyword.operator.assignment.jsw",
                 "keyword.operator.comparison.jsw",
                 "keyword.operator.logical.jsw",
-                "keyword.operator.ternary.jsw",
                 "keyword.operator.word.jsw",
                 "punctuation.definition.tag.begin.jsw",
                 "punctuation.definition.tag.end.jsw"

@@ -89,6 +89,15 @@ class ParserTests(unittest.TestCase):
         with self.assertRaises(ParseError):
             Parser(tokenize("class a { void f(){ x = ((y); } }"), lenient=False).parse()
 
+    def test_a_c_style_ternary_says_what_to_write(self):
+        from jswc.lexer import tokenize
+        from jswc.parser import Parser
+
+        with self.assertRaises(ParseError) as caught:
+            Parser(tokenize("class a { void f(){ x = (a ? b : c); } }"), lenient=False).parse()
+        self.assertIn("a if c else b", str(caught.exception))
+        self.assertIn("E0087", str(caught.exception))
+
     def test_reference_file_parses(self):
         parser, program = parse_source(SAMPLE_SOURCE.read_text(encoding="utf-8"))
         self.assertEqual([c.name for c in program.classes], ["graphical", "synth", "core"])

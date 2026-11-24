@@ -27,11 +27,22 @@ try {
 // token -> the innermost scope it must end up with.
 const EXPECT = [
   ['#enable_feature<canvas>;', '#enable_feature', 'keyword.other.directive.jsw'],
+  ['#ifdef TURBOWARP', '#ifdef', 'keyword.other.directive.jsw'],
+  ['#ifdef TURBOWARP', 'TURBOWARP', 'entity.name.tag.jsw'],
+  ['#endif', '#endif', 'keyword.other.directive.jsw'],
+  ['#else', '#else', 'keyword.other.directive.jsw'],
+  ['#define TRACE', 'TRACE', 'entity.name.tag.jsw'],
+  // Not a language operator: the ternary is ``a if c else b``.
+  ['x = (a ? b : c);', '?', 'invalid.illegal.no-ternary.jsw'],
   ['#enable_feature<canvas>;', 'canvas', 'entity.name.tag.jsw'],
   ['import "assets/x.svg" as "img loader";', '"assets/x.svg"', 'string.quoted.jsw'],
   ['import "assets/x.svg" as "img loader";', 'as', 'keyword.control.import.jsw'],
   ['import "assets/x.svg" as "img loader";', '"img loader"', 'entity.name.namespace.jsw'],
   ['import "assets/x.svg" as notes;', 'notes', 'entity.name.namespace.jsw'],
+  // A sprite may be named a quote, so the alias keeps its escapes: without
+  // them the trailing quote opened a string region for the rest of the file.
+  ['import "a.svg" as "\\"";', '"\\""', 'entity.name.namespace.jsw'],
+  ['x = "a" +\\', '\\', 'constant.character.escape.line-continuation.jsw'],
   ['Empty: name="Empty", x=36, y=28;', 'Empty', 'entity.name.type.class.jsw'],
   ['stage: costume=0, volume=100;', 'stage', 'keyword.declaration.stage.jsw'],
   ['class Empty {', 'Empty', 'entity.name.type.class.jsw'],
@@ -103,6 +114,17 @@ const EXPECT = [
   ['    import "a.svg" as a; // costume centerx=0 res=1', 'centerx', 'variable.parameter.annotation.jsw'],
   ['    import "a.wav" as b; // sound rate=48000 samples=8225', 'sound', 'keyword.other.annotation.jsw'],
   ['    import "a.wav" as b; // sound rate=48000 samples=8225', 'samples', 'variable.parameter.annotation.jsw'],
+  ['if (a == b) { }', '==', 'keyword.operator.comparison.jsw'],
+  // A receiver that is not a namespace keeps its own colour, and the dot is an
+  // accessor rather than unscoped text.
+  ['        log.clear();', 'log', 'variable.other.object.jsw'],
+  ['        log.clear();', '.', 'punctuation.accessor.jsw'],
+  ['        obj.mu();', 'obj', 'variable.other.object.jsw'],
+  ['        q = a.b;', 'b', 'variable.other.property.jsw'],
+  // A method after a dot is a call, even when the name is a builtin or a
+  // reserved word.
+  ['        lst.delete(1);', 'delete', 'entity.name.function.call.jsw'],
+  ['        lst.length();', 'length', 'entity.name.function.call.jsw'],
   ['for i in 0..3 {', 'i', 'variable.other.loop.jsw'],
   ['for i in 0..3 {', 'in', 'keyword.control.jsw'],
   ['for i in 0..3 {', '..', 'keyword.operator.range.jsw'],
@@ -114,6 +136,12 @@ const EXPECT = [
 const REJECT = [
   // A ``case`` label must not be mistaken for a target declaration.
   ['case foo:', 'entity.name.type.class.jsw'],
+  // A list method is not the reserved word ``delete``.
+  ['        lst.delete(1);', 'invalid.illegal.reserved.jsw'],
+  // ``lst.length()`` is the list's method, not the ``lengthOf`` builtin.
+  ['        lst.length();', 'support.function.builtin.jsw'],
+  // ``==`` is one comparison, not two assignments.
+  ['if (a == b) { }', 'keyword.operator.assignment.jsw'],
   // ``in`` is real syntax now, so it must not be flagged as a reserved word.
   ['for i in 0..3 {', 'invalid.illegal.reserved.jsw'],
 ];
@@ -156,8 +184,13 @@ const REJECT = [
 
   for (const file of process.argv.slice(2)) {
     const lines = fs.readFileSync(file, 'utf8').split('\n');
+    // The rule stack carries from line to line, the way VS Code does it: a
+    // block comment or a multi-line f-string is one region, so only this way
+    // does the dump show what the editor really paints.
+    let stack = vsctm.INITIAL;
     lines.forEach((line, i) => {
-      const row = grammar.tokenizeLine(line, vsctm.INITIAL);
+      const row = grammar.tokenizeLine(line, stack);
+      stack = row.ruleStack;
       const parts = row.tokens.map(
         (t) => `${JSON.stringify(line.slice(t.startIndex, t.endIndex))}=${t.scopes.at(-1)}`,
       );

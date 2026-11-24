@@ -305,7 +305,9 @@ class ConstructTests(unittest.TestCase):
         ("a || b;", "||", "keyword.operator.logical.jsw"),
         ("a != b;", "!=", "keyword.operator.comparison.jsw"),
         ("a += 1;", "+=", "keyword.operator.assignment.jsw"),
-        ("x = a ? b : c;", "?", "keyword.operator.ternary.jsw"),
+        # ``?`` is not a language operator: the ternary is ``a if c else b``,
+        # so the grammar flags it rather than promising a C-style one.
+        ("x = a ? b : c;", "?", "invalid.illegal.no-ternary.jsw"),
         ("for i in 0..3 {", "for", "keyword.control.jsw"),
         ("for i in 0..3 {", "i", "variable.other.loop.jsw"),
         ("for i in 0..3 {", "in", "keyword.control.jsw"),

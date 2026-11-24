@@ -62,6 +62,14 @@ ANNOTATION_WORDS = (
 )
 
 
+#: A quoted string in *match* form (not a region), so escapes have to be part of
+#: the pattern. ``import "a.svg" as "\"";`` is a real alias: the decompiler
+#: writes the sprite's own name, and that may be a quote. Without the escape
+#: branch the trailing quote opened a string region that ran to the next quote
+#: in the file, painting everything between the two as a string.
+QUOTED = r'"(?:[^"\\]|\\.)*"|\'(?:[^\'\\]|\\.)*\''
+
+
 def _annotation_re(words) -> str:
     """Like ``_word_re`` but labels ending in punctuation (``Sprite:``)."""
     parts = []
@@ -106,8 +114,30 @@ def build_grammar() -> dict:
         ],
         "repository": {
             "directives": {
-                "comment": "#enable_feature<name>; - the only compiler directive.",
+                "comment": "#enable_feature<name>; and the #ifdef family, which "
+                           "the preprocessor resolves before lexing.",
                 "patterns": [
+                    {
+                        "comment": "#ifdef NAME / #ifndef NAME / #define NAME",
+                        "name": "meta.preprocessor.jsw",
+                        "match": r"^(\s*)(#(?:ifdef|ifndef|define))\b\s*([A-Za-z_]\w*)?",
+                        "captures": {
+                            "1": {"name": "punctuation.whitespace.leading.jsw"},
+                            "2": {"name": "keyword.other.directive.jsw"},
+                            "3": {"name": "entity.name.tag.jsw"},
+                        },
+                    },
+                    {
+                        # ``#else`` would otherwise be scoped by the ``else``
+                        # keyword rule as plain control flow.
+                        "comment": "#else / #endif",
+                        "name": "meta.preprocessor.jsw",
+                        "match": r"^(\s*)(#(?:else|endif))\b",
+                        "captures": {
+                            "1": {"name": "punctuation.whitespace.leading.jsw"},
+                            "2": {"name": "keyword.other.directive.jsw"},
+                        },
+                    },
                     {
                         "name": "meta.preprocessor.jsw",
                         "begin": r"^(\s*)(#enable_feature)",
@@ -226,7 +256,7 @@ def build_grammar() -> dict:
                         # A whole line: the preprocessor replaces it with the file,
                         # so nothing else may share it. Quoted and single-quoted
                         # are both accepted, the way import accepts them.
-                        "match": r"""^(\s*)(include)\s+("[^"]*"|'[^']*')""",
+                        "match": r"^(\s*)(include)\s+(" + QUOTED + r")",
                         "captures": {
                             "1": {"name": "punctuation.whitespace.leading.jsw"},
                             "2": {"name": "keyword.control.include.jsw"},
@@ -241,7 +271,8 @@ def build_grammar() -> dict:
                     {
                         # The decompiler writes the raw target name, so the alias may
                         # be quoted: import "assets/x.svg" as "img loader";
-                        "match": r"""\b(import)\s+("[^"]*"|'[^']*')(?:\s+(as)\s+("[^"]*"|'[^']*'|[A-Za-z_$][\w$]*))?""",
+                        "match": r"\b(import)\s+(" + QUOTED + r")(?:\s+(as)\s+(" + QUOTED
+                                 + r"|[A-Za-z_$][\w$]*))?",
                         "captures": {
                             "1": {"name": "keyword.control.import.jsw"},
                             "2": {"name": "string.quoted.jsw"},
@@ -267,8 +298,11 @@ def build_grammar() -> dict:
                     {
                         "comment": "Reserved for future versions; flagged so users avoid them.",
                         "name": "invalid.illegal.reserved.jsw",
-                        # ``in`` is the range-for separator, not a future keyword.
-                        "match": _word_re(RESERVED - MODIFIERS - TYPES - LITERALS - KEYWORDS - {"in"}),
+                        # ``in`` is the range-for separator, not a future keyword,
+                        # and ``l.delete(1)`` is a list method: a reserved word
+                        # after a dot is a member name.
+                        "match": r"(?<!\.)"
+                        + _word_re(RESERVED - MODIFIERS - TYPES - LITERALS - KEYWORDS - {"in"}),
                     },
                 ]
             },
@@ -384,6 +418,11 @@ def build_grammar() -> dict:
                                 "end": '"',
                                 "patterns": [{"name": "constant.character.escape.jsw", "match": r"\\."}],
                             },
+                            {"name": "constant.numeric.jsw", "match": r"\b0[xX][0-9a-fA-F]+\b"},
+                            # ``100x24`` - a monitor's size, scoped either side of
+                            # the x the way #numbers does it.
+                            {"name": "constant.numeric.jsw", "match": r"\b\d+(?:\.\d+)?(?=[x×])"},
+                            {"name": "constant.numeric.jsw", "match": r"(?<=[x×])\d+(?:\.\d+)?\b"},
                             {"name": "constant.numeric.jsw", "match": r"\b\d+(?:\.\d+)?\b"},
                         ],
                     }
@@ -430,6 +469,16 @@ def build_grammar() -> dict:
                         "match": r"\b_[A-Za-z0-9_$][\w$]*\b",
                     },
                     {
+                        # ``lu.clear()``, ``log.append(x)``, ``obj.field``: the
+                        # receiver of a member access. Only capitalised names
+                        # (``Motion.x``) and known extension namespaces
+                        # (``gtm.load``) were claimed by #namespaces, which runs
+                        # earlier; without this rule the receiver and its dot
+                        # fell through unmatched and read as plain text.
+                        "name": "variable.other.object.jsw",
+                        "match": r"\b[A-Za-z_$][\w$]*(?=\s*\.)",
+                    },
+                    {
                         "comment": "A bare identifier: not a call, not a member, "
                                    "but a list name before ``[`` counts.",
                         # Oniguruma nests character classes, so this is an
@@ -468,8 +517,10 @@ def build_grammar() -> dict:
                 "patterns": [
                     {
                         "comment": "log/warn/error/join/string/block ... - the compiler's builtins.",
+                        # ``(?<!\.)``: ``lst.length()`` is the list's method, not
+                        # the ``lengthOf`` builtin.
                         "name": "support.function.builtin.jsw",
-                        "match": _word_re(BUILTIN_FUNCTIONS) + r"(?=\s*\()",
+                        "match": r"(?<!\.)" + _word_re(BUILTIN_FUNCTIONS) + r"(?=\s*\()",
                     },
                     {
                         # A custom block call — ``playNote(60)``, ``LogStatic("x")``,
@@ -537,12 +588,25 @@ def build_grammar() -> dict:
             },
             "operators": {
                 "patterns": [
-                    {"name": "keyword.operator.assignment.jsw", "match": r"(\+=|-=|\*=|/=|%=|=)"},
+                    # Comparison first: ``==`` also starts with ``=``, and
+                    # Oniguruma alternation takes the first branch that fits, so
+                    # an assignment-first table scoped ``==`` as two ``=``.
                     {"name": "keyword.operator.comparison.jsw", "match": r"(==|!=|<=|>=|<|>)"},
+                    {"name": "keyword.operator.assignment.jsw", "match": r"(\+=|-=|\*=|/=|%=|=)"},
                     {"name": "keyword.operator.logical.jsw", "match": r"(&&|\|\||!)"},
                     {"name": "keyword.operator.arithmetic.jsw", "match": r"(\*\*|\+|-|\*|/|%|\+\+|--)"},
                     {"name": "keyword.operator.range.jsw", "match": r"\.\."},
-                    {"name": "keyword.operator.ternary.jsw", "match": r"\?"},
+                    # A trailing backslash joins this line to the next; the
+                    # lexer swallows both characters.
+                    {"name": "constant.character.escape.line-continuation.jsw",
+                     "match": r"\\$"},
+                    # ``?`` is not an operator the parser has: the ternary is
+                    # ``a if c else b`` (E0087). Lexed so the error can say so,
+                    # and flagged here so the editor says it first.
+                    {"name": "invalid.illegal.no-ternary.jsw", "match": r"\?"},
+                    # A member accessor. ``..`` is claimed above, and a number's
+                    # dot is inside the #numbers rules, so what is left is ``.``.
+                    {"name": "punctuation.accessor.jsw", "match": r"\."},
                 ]
             },
             "punctuation": {
