@@ -56,6 +56,28 @@ class BlockTableTests(unittest.TestCase):
         # that never mentions `--enable` can still call it.
         self.assertIn("gtm", extensions.known_namespaces())
 
+    def test_the_update_interval_reads_and_writes_with_one_name(self):
+        # ``gtm.updateInterval`` reports, ``gtm.updateInterval(n)`` sets: the
+        # argument count picks the block, like WebSocket.closeConnection.
+        read = extensions.resolve("gtm", "updateInterval", 0)
+        write = extensions.resolve("gtm", "updateInterval", 1)
+        self.assertEqual((read.opcode, read.kind), ("updateInterval", "REPORTER"))
+        self.assertEqual((write.opcode, write.kind), ("setUpdateInterval", "COMMAND"))
+        self.assertEqual(extensions.resolve("gtm", "setUpdateInterval", 1).opcode,
+                         "setUpdateInterval")
+
+    def test_the_interval_compiles_to_both_blocks(self):
+        _, project = compile_source(
+            "class a { void f() { gtm.updateInterval(0.05); x = gtm.updateInterval(); } }"
+        )
+        blocks = blocks_of(project, "a")
+        ops = [b["opcode"] for b in blocks.values()]
+        self.assertIn("gtm_setUpdateInterval", ops)
+        self.assertIn("gtm_updateInterval", ops)
+        setter = next(b for b in blocks.values() if b["opcode"] == "gtm_setUpdateInterval")
+        filled = setter["inputs"]["SECONDS"]
+        self.assertEqual(filled[1], [4, "0.05"])
+
     def test_an_unknown_member_is_a_diagnostic(self):
         codegen, _ = compile_source("class a { void f(){ gtm.notAThing(); } }")
         self.assertTrue(

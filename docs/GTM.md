@@ -60,8 +60,40 @@ which is why they are in one place in `gtm.js` and not spread over the blocks.
 | `gtm.confidence(label)` | reporter | 0–1; `0` when the label is unknown |
 | `gtm.isLabel(label)` | boolean | `confidence(label) >= threshold` |
 | `gtm.predictions()` | reporter | every label with its confidence, as JSON |
+| `gtm.updateInterval()` | reporter | seconds between background updates, default `0.001` |
+| `gtm.updateInterval(n)` | command | set it: `0` means "as fast as a classification finishes" |
 | `gtm.threshold()` | reporter | default `0.5` |
 | `gtm.setThreshold(n)` | command | clamped to `0…1` |
+
+### Updates happen on their own
+
+A reporter only runs when the project asks for it, so a model that classified
+only inside `top label from the camera` answered every `confidence(…)` with the
+value from the last time that block ran — sample it in a `while` loop and every
+sample is the same number, which reads as "it is not recognising anything".
+
+The extension classifies **in the background**: while a model is `ready` and the
+camera is on, it re-runs inference every `updateInterval` seconds and keeps the
+result, so `confidence`, `isLabel` and `predictions` always read the latest one.
+`0.001` (1 ms) is the default, and `0` removes the wait entirely: the next
+classification starts as soon as the previous one calls back, which is the
+fastest a model can go.
+
+```jsw
+public void init() {
+    gtm.load(model_url);
+    gtm.startCamera();
+    gtm.updateInterval(0.05);  // 20 classifications a second is plenty
+}
+
+public void tick() {           // no classify call needed any more
+    Looks.say(gtm.confidence("up"));
+}
+```
+
+The loop stops with `gtm.stopCamera()`, `gtm.unload()` and the moment the model
+stops being `ready`; two classifications never overlap, so a slow model simply
+produces fewer updates instead of a queue.
 
 Labels are compared case-insensitively and trimmed, so `cat` finds `Cat`.
 

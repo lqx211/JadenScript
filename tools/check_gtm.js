@@ -304,6 +304,36 @@ async function main() {
   check('labelAt is empty below 1', extension.labelAt({ INDEX: 0 }) === '');
 
   check('predictions is the last list as JSON', extension.predictions() === JSON.stringify(extension.last));
+
+  // -- the background update loop -----------------------------------------
+  // A reporter only runs when the project asks, so without this loop every
+  // `confidence` answered with the value from the last click on
+  // `top label from the camera`.
+  const idle = extension.updateInterval();
+  check('the update interval starts at 1 ms', idle === 0.001, String(idle));
+  extension.setUpdateInterval({ SECONDS: 0.05 });
+  check('the interval can be set', extension.updateInterval() === 0.05);
+  extension.setUpdateInterval({ SECONDS: 0 });
+  check('0 means no limit', extension.updateInterval() === 0);
+  extension.setUpdateInterval({ SECONDS: -1 });
+  check('a negative interval is refused', /not a number of seconds/.test(extension.lastError()));
+  check('the interval survives a bad value', extension.updateInterval() === 0);
+  extension.setUpdateInterval({ SECONDS: 'soon' });
+  check('a non-numeric interval is refused', /not a number of seconds/.test(extension.lastError()));
+
+  extension.updateEvery = 10;                 // long enough not to fire here
+  extension.state = 'ready';
+  extension.last = [];
+  extension.video = { readyState: 4 };
+  extension.stream = { active: true };
+  extension.keepUpdating();
+  check('a ready model with a camera arms the loop', extension.timer !== null);
+  check('nothing is classified before the interval elapses', extension.last.length === 0);
+  extension.stopUpdates();
+  check('the loop can be stopped', extension.timer === null);
+  extension.video = null;
+  extension.stream = null;
+  extension.state = 'idle';
   check('labels is a readable list', extension.labels() === 'Cat, Dog');
   check('status is a word before loading', extension.status() === 'error' || extension.status() === 'idle');
 

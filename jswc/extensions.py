@@ -208,6 +208,13 @@ ARITY_ALIASES: dict[tuple[str, str], dict[int, Alias]] = {
         1: Alias("WebSocket", "closeConnection", "closeWithCode", ("CODE",)),
         2: Alias("WebSocket", "closeConnection", "closeWithReason", ("CODE", "REASON")),
     },
+    # ``gtm.updateInterval`` reads the interval, ``gtm.updateInterval(0.05)``
+    # sets it: the same name in both positions, told apart by the argument count
+    # the way `WebSocket.closeConnection` is.
+    ("gtm", "updateInterval"): {
+        0: Alias("gtm", "updateInterval", "updateInterval"),
+        1: Alias("gtm", "updateInterval", "setUpdateInterval", ("SECONDS",)),
+    },
 }
 
 # The extension's own block names, still accepted so that older sources and
@@ -363,6 +370,9 @@ def extension_arity(namespace: str, method: str, features=()) -> int | None:
     to print instead.
     """
     table = catalogue(features)
+    forms = ARITY_ALIASES.get((namespace, method))
+    if forms:
+        return max(forms)
     alias = ALIASES.get((namespace, method))
     if alias is not None:
         entry = table.get(_extension_of(alias.opcode, namespace), {})

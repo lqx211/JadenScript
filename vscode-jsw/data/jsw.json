@@ -3038,6 +3038,14 @@
      }
     ],
     [
+     "setUpdateInterval",
+     {
+      "kind": "command",
+      "detail": "setUpdateInterval(seconds)",
+      "doc": "command"
+     }
+    ],
+    [
      "startCamera",
      {
       "kind": "command",
@@ -3075,6 +3083,14 @@
       "kind": "command",
       "detail": "unload()",
       "doc": "command"
+     }
+    ],
+    [
+     "updateInterval",
+     {
+      "kind": "reporter",
+      "detail": "updateInterval()",
+      "doc": "reporter"
      }
     ]
    ]

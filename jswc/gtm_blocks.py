@@ -65,6 +65,12 @@ GTM_BLOCKS: dict[str, dict] = {
             "confidence": {"type": "REPORTER", "args": [("LABEL", "STRING", "")]},
             "isLabel": {"type": "BOOLEAN", "args": [("LABEL", "STRING", "")]},
             "predictions": {"type": "REPORTER", "args": []},
+            # ``gtm.updateInterval`` reads, ``gtm.updateInterval(0.05)`` writes
+            # (see the arity table in ``extensions.py``): the extension
+            # classifies in the background, at this many seconds apart, so
+            # ``confidence`` is never the value from an old click.
+            "updateInterval": {"type": "REPORTER", "args": []},
+            "setUpdateInterval": {"type": "COMMAND", "args": [("SECONDS", "NUMBER", "")]},
             "threshold": {"type": "REPORTER", "args": []},
             "setThreshold": {"type": "COMMAND", "args": [("VALUE", "NUMBER", "")]},
         },

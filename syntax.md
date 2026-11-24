@@ -529,6 +529,26 @@ Machine extension in `userspace/school/gtm.js`) and `keySim` (Key Simulation).
 The extension id (and its `extensionURLs` entry) is added to the project
 automatically the first time one of its blocks is emitted.
 
+### `gtm` — a Teachable Machine model
+
+Every block the extension in `userspace/school/gtm.js` defines is callable
+(`gtm.load`, `classify` — *top label from the camera*, `classifyImage`,
+`confidence`, `isLabel`, `predictions`, `status`, `lastError`, `modelName`,
+`labels`, `labelAt`, `startCamera`, `stopCamera`, `cameraActive`, `threshold`,
+`setThreshold`; see [`docs/GTM.md`](./docs/GTM.md)). `classify` is the "top
+label from this camera" block, and it is highlighted like the rest.
+
+Classification runs **in the background**, so `confidence` is never a stale
+value from an old click: `gtm.updateInterval(0.05)` is 20 updates a second,
+`0` is as fast as the model finishes, and `gtm.updateInterval()` reads it back
+(one name, two blocks, chosen by the argument count).
+
+```jsw
+public void tick() {
+    Looks.say(gtm.confidence("up"));   // no classify call needed
+}
+```
+
 ### `keySim` — pressing keys and clicking for the player
 
 Key Simulation (`cubesterKeySimulation`, from

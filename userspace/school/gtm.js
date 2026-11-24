@@ -217,12 +217,16 @@
       this.error = '';
       this.progress = 0;
       this.minConfidence = 0.5;
+      /* Seconds between background classifications. 0 means "no limit": the
+         next one starts as soon as the previous one finishes. */
+      this.updateEvery = 0.001;
       this.labelList = [];
       this.last = [];
       this.stream = null;
       this.video = null;
       this.busy = false;
       this.loadedFrom = '';
+      this.timer = null;
     }
 
     getInfo() {
@@ -327,6 +331,19 @@
             text: 'all predictions as JSON',
           },
           {
+            opcode: 'updateInterval',
+            blockType: Scratch.BlockType.REPORTER,
+            text: 'seconds between updates',
+          },
+          {
+            opcode: 'setUpdateInterval',
+            blockType: Scratch.BlockType.COMMAND,
+            text: 'update every [SECONDS] seconds, 0 = as fast as it can',
+            arguments: {
+              SECONDS: { type: Scratch.ArgumentType.NUMBER, defaultValue: 0.001 },
+            },
+          },
+          {
             opcode: 'threshold',
             blockType: Scratch.BlockType.REPORTER,
             text: 'confidence needed',
@@ -415,6 +432,9 @@
         this.labelList = metadata.labels.slice();
         this.loadedFrom = base;
         this.state = 'ready';
+        /* The camera may already be on: start classifying in the background
+           now, so `confidence`/`isLabel`/`predictions` are never stale. */
+        this.keepUpdating();
       } catch (error) {
         this.state = 'error';
         this.error = error && error.message ? error.message : String(error);
@@ -439,6 +459,7 @@
     }
 
     unload() {
+      this.stopUpdates();
       this.stopCamera();
       this.dispose();
       this.state = 'idle';
@@ -503,6 +524,7 @@
         this.stream = stream;
         this.video = video;
         this.error = '';
+        this.keepUpdating();
       } catch (error) {
         this.error = error && error.message ? error.message : String(error);
         this.stopCamera();
@@ -511,6 +533,7 @@
     }
 
     stopCamera() {
+      this.stopUpdates();
       if (this.stream) {
         for (const track of this.stream.getTracks()) track.stop();
         this.stream = null;
@@ -525,6 +548,36 @@
 
     cameraActive() {
       return Boolean(this.stream && this.stream.active && this.video);
+    }
+
+    /* -- the background loop ----------------------------------------------
+       A Scratch project reads a reporter when it runs, so a model that is only
+       classified when `top label from the camera` is clicked answers every
+       `confidence` with the value from that one click -- a project that samples
+       in a loop sees nothing move. The loop below keeps `this.last` fresh, at
+       `updateInterval` seconds apart (0 = start the next one immediately),
+       while a model is ready and the camera is on. */
+    keepUpdating() {
+      if (this.timer !== null) return;
+      if (this.state !== 'ready' || !this.cameraActive()) return;
+      const wait = this.updateEvery > 0 ? this.updateEvery * 1000 : 0;
+      this.timer = setTimeout(() => {
+        this.timer = null;
+        if (this.state !== 'ready' || !this.cameraActive()) return;
+        /* `busy` covers load() and an in-flight classification, and a video
+           with no frame yet would classify as "nothing to classify". */
+        if (!this.busy && this.video && this.video.readyState >= 2) {
+          this.run(this.video);
+        }
+        this.keepUpdating();
+      }, wait);
+    }
+
+    stopUpdates() {
+      if (this.timer !== null) {
+        clearTimeout(this.timer);
+        this.timer = null;
+      }
     }
 
     /* -- inference --------------------------------------------------------- */
@@ -631,6 +684,23 @@
 
     predictions() {
       return JSON.stringify(this.last);
+    }
+
+    updateInterval() {
+      return this.updateEvery;
+    }
+
+    setUpdateInterval(args) {
+      const value = Number(args.SECONDS);
+      if (!Number.isFinite(value) || value < 0) {
+        this.error = `gtm: ${args.SECONDS} is not a number of seconds`;
+        return '';
+      }
+      this.updateEvery = value;
+      /* Take effect now: the pending timer was armed with the old interval. */
+      this.stopUpdates();
+      this.keepUpdating();
+      return '';
     }
 
     threshold() {
