@@ -176,9 +176,49 @@ class CanonicalSpellingTests(unittest.TestCase):
             self.assertIn(name, member["match"], name)
 
         vim = (root / "nvim" / "syntax" / "jsw.vim").read_text(encoding="utf-8")
-        rule = next(line for line in vim.splitlines() if "jswExtensionMember /" in line)
+        # The member names are spread over several rules (Vim gives up on a
+        # single multi-kilobyte pattern), so search all of them.
+        rules = " ".join(line for line in vim.splitlines() if "jswExtensionMember /" in line)
         for name in ("closingCode", "setPointerLock", "isPointerLocked"):
-            self.assertIn(name, rule, name)
+            self.assertIn(name, rules, name)
+
+    def test_the_highlighters_know_gtm_and_pishi(self) -> None:
+        """`gtm.*` and the pishi namespaces, in both editors.
+
+        `pishiSupport` is a compiler gate, not a reading aid: a file written
+        against `Arduino.high(13)` should light up whether or not the build that
+        follows enables the feature.
+        """
+        import json
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parent.parent
+        grammar = json.loads((root / "vscode-jsw" / "syntaxes" / "jsw.tmLanguage.json")
+                             .read_text(encoding="utf-8"))
+        patterns = grammar["repository"]["namespaces"]["patterns"]
+        member = next(p for p in patterns if "known extension member" in p.get("comment", ""))
+        namespace = next(p for p in patterns if "Known runtime namespace" in p.get("comment", ""))
+
+        for name in ("gtm", "Arduino", "Facemesh", "GoogleTeachableMachine", "Posenet"):
+            self.assertIn(name, namespace["match"], name)
+            self.assertIn(name, member["match"], name)
+
+        for name in ("classifyImage", "isLabel", "setThreshold",      # gtm
+                     "digitalWrite", "getImageLabel", "getX", "setImageModelUrl"):
+            self.assertIn(name, member["match"], name)
+
+        vim = (root / "nvim" / "syntax" / "jsw.vim").read_text(encoding="utf-8")
+        namespaces = next(line for line in vim.splitlines()
+                          if line.startswith("syn keyword jswNamespace "))
+        members = " ".join(line for line in vim.splitlines()
+                           if "jswExtensionMember /" in line)
+        for name in ("gtm", "Arduino", "Facemesh", "GoogleTeachableMachine"):
+            self.assertIn(name, namespaces, name)
+        for name in ("classifyImage", "isLabel", "digitalWrite", "getImageLabel", "getX"):
+            self.assertIn(name, members, name)
+        # The member rule only counts after a known namespace; without the
+        # lookbehind `Pen.load` would be coloured as an extension member too.
+        self.assertIn(r"\@<=", members)
 
 
 if __name__ == "__main__":

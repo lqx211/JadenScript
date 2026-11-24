@@ -28,6 +28,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from .extension_blocks import EXTENSION_BLOCKS
+from .gtm_blocks import GTM_BLOCKS
 from .opcodes import BOOLEAN, COLOR, MATH_NUM, TEXT
 from .pishi_blocks import PISHI_BLOCKS
 
@@ -38,17 +39,24 @@ PISHI_FEATURE = "pishiSupport"
 def catalogue(features=()) -> dict[str, dict]:
     """The extension table this build resolves against.
 
-    Everything in :data:`EXTENSION_BLOCKS` is always there -- a TurboWarp
+    Everything in :data:`EXTENSION_BLOCKS` and in
+    :data:`jswc.gtm_blocks.GTM_BLOCKS` is always there -- a TurboWarp
     extension is fetched from a URL and works in any player. pishi's are only
     there when the source asked for them, so a project that never mentions the
     feature cannot silently depend on a player it does not name.
     """
     if PISHI_FEATURE not in features:
-        return EXTENSION_BLOCKS
+        return _GENERIC
     return _MERGED
 
 
-_MERGED: dict[str, dict] = {**EXTENSION_BLOCKS, **PISHI_BLOCKS}
+_GENERIC: dict[str, dict] = {**EXTENSION_BLOCKS, **GTM_BLOCKS}
+_MERGED: dict[str, dict] = {**_GENERIC, **PISHI_BLOCKS}
+
+
+def gtm_namespaces() -> set[str]:
+    """The namespaces ``gtm`` adds, so a build can refuse them by target."""
+    return {entry["namespace"] for entry in GTM_BLOCKS.values()}
 
 
 def pishi_namespace_conflicts() -> list[tuple[str, str, str]]:
@@ -59,7 +67,7 @@ def pishi_namespace_conflicts() -> list[tuple[str, str, str]]:
     one and the player the other. The caller reports these as errors.
     """
     ours = {entry["namespace"]: extension for extension, entry in PISHI_BLOCKS.items()}
-    theirs = {entry["namespace"]: extension for extension, entry in EXTENSION_BLOCKS.items()}
+    theirs = {entry["namespace"]: extension for extension, entry in _GENERIC.items()}
     clashes = []
     for namespace, extension in sorted(ours.items()):
         other = theirs.get(namespace)
@@ -432,12 +440,7 @@ def known_namespaces(features=()) -> set[str]:
     return {entry["namespace"] for entry in catalogue(features).values()}
 
 
-def known_members(namespace: str | None = None) -> set[str]:
-    """Every member name an extension namespace accepts.
-
-    This is what the syntax highlighters colour: the friendly aliases *and* the
-    extension's own block names, so a project written in either style lights up.
-    """
+def _members_of(tables, namespace: str | None = None) -> set[str]:
     names: set[str] = set()
     for (ns, method), alias in ALIASES.items():
         if namespace is None or ns == namespace:
@@ -448,13 +451,38 @@ def known_members(namespace: str | None = None) -> set[str]:
             names.add(method)
             for alias in table.values():
                 names.add(alias.opcode)
-    for entry in EXTENSION_BLOCKS.values():
+    for entry in tables:
         if namespace is not None and entry["namespace"] != namespace:
             continue
         for opcode in entry["blocks"]:
             names.add(opcode)
             names.add(_camel(opcode))
     return {name for name in names if name}
+
+
+def known_members(namespace: str | None = None) -> set[str]:
+    """Every member name an extension namespace accepts.
+
+    This is what the syntax highlighters colour: the friendly aliases *and* the
+    extension's own block names, so a project written in either style lights up.
+    """
+    return _members_of(catalogue().values(), namespace)
+
+
+#: Every extension a highlighter should know, whether or not a *build* may use
+#: it: `pishiSupport` gates what the compiler resolves, not what a file looks
+#: like while you are writing it.
+HIGHLIGHT_BLOCKS: dict[str, dict] = {**EXTENSION_BLOCKS, **GTM_BLOCKS, **PISHI_BLOCKS}
+
+
+def highlight_namespaces() -> set[str]:
+    """Every namespace the grammars colour, including the feature-gated ones."""
+    return {entry["namespace"] for entry in HIGHLIGHT_BLOCKS.values()}
+
+
+def highlight_members(namespace: str | None = None) -> set[str]:
+    """Every member name the grammars colour, including the feature-gated ones."""
+    return _members_of(HIGHLIGHT_BLOCKS.values(), namespace)
 
 
 def _camel(snake: str) -> str:

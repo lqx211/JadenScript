@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from jswc.extension_blocks import MICROBIT_CONSTANTS  # noqa: E402
-from jswc.extensions import known_members, known_namespaces  # noqa: E402
+from jswc.extensions import highlight_members, highlight_namespaces  # noqa: E402
 from jswc.keywords import (  # noqa: E402
     ALL_KEYWORDS,
     ASSET_COMMENT_KEYS,
@@ -485,25 +485,31 @@ def build_grammar() -> dict:
                     {
                         # ``WebSocket.closingCode`` and ``Pointerlock.setPointerLock``:
                         # a known member of a known extension namespace, with or
-                        # without a call's parentheses.
-                        "comment": "A known extension member: WebSocket.closingCode, Pointerlock.setPointerLock",
-                        "match": r"(\b(?:"
-                        + "|".join(sorted(known_namespaces()))
-                        + r")\s*\.\s*)((?:"
+                        # without a call's parentheses. `gtm.load(…)` is here for
+                        # the same reason as `Arduino.high(13)` -- the pishi names
+                        # are coloured whether or not the build enables them.
+                        "comment": "A known extension member: WebSocket.closingCode, Pointerlock.setPointerLock, gtm.load",
+                        # Capture 2 is the bare namespace, so the name ends up a
+                        # token of its own (coloured like capture 1's dot) and
+                        # `microbit.displayText` reads as namespace + member.
+                        "match": r"((\b(?:"
+                        + "|".join(sorted(highlight_namespaces()))
+                        + r"))\s*\.\s*)((?:"
                         + "|".join(sorted(
-                            (name for name in known_members() if "_" not in name),
+                            (name for name in highlight_members() if "_" not in name),
                             key=lambda name: (-len(name), name),   # total order: the
                         ))                                        # set has no order
                         + r")\b)",
                         "captures": {
                             "1": {"name": "support.class.builtin.jsw"},
-                            "2": {"name": "support.function.extension.jsw"},
+                            "2": {"name": "support.class.builtin.jsw"},
+                            "3": {"name": "support.function.extension.jsw"},
                         },
                     },
                     {
                         "comment": "Known runtime namespace: Motion, Pen, Music, microbit, ...",
                         "name": "support.class.builtin.jsw",
-                        "match": _word_re(BUILTIN_NAMESPACES | known_namespaces())
+                        "match": _word_re(BUILTIN_NAMESPACES | highlight_namespaces())
                         + r"(?=\s*\.)",
                     },
                     {

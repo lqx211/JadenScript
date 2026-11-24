@@ -181,6 +181,8 @@ userspace/i386/  an 80386 PC that runs inside TurboWarp: BIOS, setup utility,
                  (docs/I386.md)
 userspace/rv64/  the same idea for RISC-V: bios.S, a console, a disk, a shell
                  (docs/RV64.md)
+userspace/school/  gtm: Teachable Machine models from a share link, as a
+                 TurboWarp extension (docs/GTM.md)
 docs/            format notes, roadmap, generated opcode reference
 examples/        hello.jsw, minimal.jsw, demo.jsw, assets_demo.jsw, rules_demo.jsw
                  + assets/, hello/, rules_data/
@@ -221,6 +223,9 @@ python3 -m unittest tests.test_i386
   and the long list of bugs each of those found.
 * [`docs/RV64.md`](./docs/RV64.md) — the RISC-V machine, and the parts of the
   language it had to grow first (bit fields, unsigned compares, packed memory).
+* [`docs/GTM.md`](./docs/GTM.md) — `gtm.*`: Teachable Machine models straight
+  from their share link, the two preprocessing rules that fail silently, and
+  why the extension has to run unsandboxed.
 * [`docs/ROADMAP.md`](./docs/ROADMAP.md) — the work cut into small,
   independently shippable pieces.
 

@@ -7,7 +7,10 @@
 
 set nocompatible
 let s:root = fnamemodify(expand('<sfile>:p'), ':h:h')
-execute 'set runtimepath+=' . fnameescape(s:root . '/nvim')
+" Only this plugin and the stock runtime: a copy of the plugin in
+" ~/.config/nvim would otherwise be sourced alongside this one, and whichever
+" file defined a group last would decide what is being checked.
+execute 'set runtimepath=' . fnameescape(s:root . '/nvim') . ',' . $VIMRUNTIME
 filetype on
 set filetype=jsw
 syntax on
@@ -29,6 +32,10 @@ let s:lines = [
       \ '        while (1) { call Player.main(); } // proccode draw %s at 1,2',
       \ '    }',
       \ '}',
+      \ '        gtm.load("x");',
+      \ '        _s = gtm.status;',
+      \ '        Facemesh.getX(1);',
+      \ '        _l = GoogleTeachableMachine.getImageLabel;',
       \ ]
 
 " (line, snippet, expected group)
@@ -69,6 +76,12 @@ let s:expect = [
       \ [14, 'main(', 'jswFunctionCall'],
       \ [13, 'notes', 'jswMember'],
       \ [14, 'proccode', 'jswAnnotationWord'],
+      \ [17, 'gtm', 'jswNamespace'],
+      \ [17, 'load(', 'jswFunctionCall'],
+      \ [18, 'status', 'jswExtensionMember'],
+      \ [19, 'Facemesh', 'jswNamespace'],
+      \ [19, 'getX(', 'jswFunctionCall'],
+      \ [20, 'getImageLabel', 'jswExtensionMember'],
       \ ]
 
 call setline(1, s:lines)

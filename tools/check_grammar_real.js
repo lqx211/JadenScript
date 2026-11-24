@@ -74,9 +74,19 @@ const EXPECT = [
   ['        x = items[2];', 'items', 'variable.other.jsw'],
   // micro:bit: the namespace, and a menu value written as a constant
   ['        microbit.displayText("hi");', 'microbit', 'support.class.builtin.jsw'],
-  ['        microbit.displayText("hi");', 'displayText', 'entity.name.function.call.jsw'],
+  ['        microbit.displayText("hi");', 'displayText', 'support.function.extension.jsw'],
   ['        microbit.isButtonPressed(microbit.buttonA);', 'buttonA', 'constant.language.microbit.jsw'],
   ['        Looks.say(microbit.tiltAngle(microbit.front));', 'front', 'constant.language.microbit.jsw'],
+  // gtm: a lowercase extension namespace, and its members
+  ['        gtm.load("https://teachablemachine.withgoogle.com/models/x/");', 'gtm', 'support.class.builtin.jsw'],
+  ['        gtm.load("https://teachablemachine.withgoogle.com/models/x/");', 'load', 'support.function.extension.jsw'],
+  ['        if (gtm.isLabel("Cat")) { }', 'isLabel', 'support.function.extension.jsw'],
+  ['        _c = gtm.confidence("Cat");', 'confidence', 'support.function.extension.jsw'],
+  // pishi: coloured even though a build has to enable the feature
+  ['        Arduino.digitalWrite(13);', 'Arduino', 'support.class.builtin.jsw'],
+  ['        Arduino.digitalWrite(13);', 'digitalWrite', 'support.function.extension.jsw'],
+  ['        _p = Facemesh.getX(1);', 'getX', 'support.function.extension.jsw'],
+  ['        GoogleTeachableMachine.setImageModelUrl("x");', 'setImageModelUrl', 'support.function.extension.jsw'],
   ['    public void playNote(n) {', 'playNote', 'entity.name.function.jsw'],
   ['        if (x) { y = 1; }', 'if', 'keyword.control.jsw'],
   ['    public c_en = "hi";', 'c_en', 'variable.other.readwrite.jsw'],

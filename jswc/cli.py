@@ -11,6 +11,7 @@ from pathlib import Path
 
 from . import __version__, include, lints, ui
 from .codegen import DEFAULT_OBF_FLATTEN, DEFAULT_OBF_POOLS, Codegen
+from .gtm_blocks import GTM_EXTENSION
 from .lexer import tokenize
 from .parser import Parser
 from .sb3 import write_project_json, write_sb3
@@ -324,6 +325,9 @@ def cmd_build(args: argparse.Namespace) -> int:
     name = source_path.name
 
     with ui.Spinner(f"Compiling {ui.accent(name)}") as spinner:
+        #: A diagnostic that has to stop the build even without --strict: the
+        #: project would load and half-work, which is worse than not building.
+        fatal = False
         parser, program = _parse_source(loaded, lenient=not args.strict)
         t_parse = time.perf_counter()
         codegen = Codegen(
@@ -348,6 +352,16 @@ def cmd_build(args: argparse.Namespace) -> int:
             vm_crypt=args.vm_crypt,
         )
         project = codegen.compile()
+        if "SCRATCH" in defines and GTM_EXTENSION in project.extensions:
+            # Not a warning: a Scratch build can neither ship the extension nor
+            # reach the camera the blocks exist for, so the project would load
+            # with every `gtm_*` block undefined.
+            fatal = True
+            codegen.diagnostics.append(
+                "0:0: E0080 gtm is a TurboWarp-only extension (it needs an "
+                "unsandboxed player for the camera and WebGL); drop the gtm calls "
+                "for a scratch build, or build without --target scratch"
+            )
         t_codegen = time.perf_counter()
         issues = validate(project, corrupt=codegen.corrupt_block_pos)
         t_validate = time.perf_counter()
@@ -368,12 +382,14 @@ def cmd_build(args: argparse.Namespace) -> int:
         _err(ui.format_diagnostic(issue, None, name))
         errors += 1
 
-    failed = bool(issues)
+    failed = bool(issues) or fatal
     if codegen.diagnostics and args.strict:
         failed = True
         _err(ui.failure("strict mode: diagnostics are treated as errors"))
     elif issues:
         _err(ui.failure("the generated project is structurally invalid"))
+    elif fatal:
+        _err(ui.failure("this build cannot carry the blocks it uses; nothing written"))
 
     if failed:
         _err(_tally(errors, warnings, info))

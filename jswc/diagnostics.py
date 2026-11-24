@@ -349,6 +349,12 @@ MESSAGES: tuple[Message, ...] = (
             "``size=big`` is not a number, ``show=yes`` is not 0 or 1, and "
             "``rotation=spin`` is not ``all``/``leftright``/``none``."),
 
+    Message("E0080", "error", "gtm needs a TurboWarp build",
+            "``gtm.*`` is the Teachable Machine extension: it has to run "
+            "unsandboxed to reach the camera and WebGL, and Scratch cannot load a "
+            "custom extension at all. A ``--target scratch`` build that calls it "
+            "would load with every ``gtm_`` block undefined."),
+
     Message("W0030", "warning", "vmProtect skipped for vanillaScratch",
             "``vmProtect`` is a deliberate slowdown, so a build that targets "
             "scratch.mit.edu keeps its ordinary blocks; drop ``vanillaScratch`` "

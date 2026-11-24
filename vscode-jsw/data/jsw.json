@@ -2933,6 +2933,146 @@
     ]
    ]
   },
+  "gtm": {
+   "members": [
+    [
+     "cameraActive",
+     {
+      "kind": "reporter",
+      "detail": "cameraActive()",
+      "doc": "boolean"
+     }
+    ],
+    [
+     "classify",
+     {
+      "kind": "reporter",
+      "detail": "classify()",
+      "doc": "reporter"
+     }
+    ],
+    [
+     "classifyImage",
+     {
+      "kind": "reporter",
+      "detail": "classifyImage(image)",
+      "doc": "reporter"
+     }
+    ],
+    [
+     "confidence",
+     {
+      "kind": "reporter",
+      "detail": "confidence(label)",
+      "doc": "reporter"
+     }
+    ],
+    [
+     "isLabel",
+     {
+      "kind": "reporter",
+      "detail": "isLabel(label)",
+      "doc": "boolean"
+     }
+    ],
+    [
+     "labelAt",
+     {
+      "kind": "reporter",
+      "detail": "labelAt(index)",
+      "doc": "reporter"
+     }
+    ],
+    [
+     "labels",
+     {
+      "kind": "reporter",
+      "detail": "labels()",
+      "doc": "reporter"
+     }
+    ],
+    [
+     "lastError",
+     {
+      "kind": "reporter",
+      "detail": "lastError()",
+      "doc": "reporter"
+     }
+    ],
+    [
+     "load",
+     {
+      "kind": "command",
+      "detail": "load(url)",
+      "doc": "command"
+     }
+    ],
+    [
+     "modelName",
+     {
+      "kind": "reporter",
+      "detail": "modelName()",
+      "doc": "reporter"
+     }
+    ],
+    [
+     "predictions",
+     {
+      "kind": "reporter",
+      "detail": "predictions()",
+      "doc": "reporter"
+     }
+    ],
+    [
+     "setThreshold",
+     {
+      "kind": "command",
+      "detail": "setThreshold(value)",
+      "doc": "command"
+     }
+    ],
+    [
+     "startCamera",
+     {
+      "kind": "command",
+      "detail": "startCamera()",
+      "doc": "command"
+     }
+    ],
+    [
+     "status",
+     {
+      "kind": "reporter",
+      "detail": "status()",
+      "doc": "reporter"
+     }
+    ],
+    [
+     "stopCamera",
+     {
+      "kind": "command",
+      "detail": "stopCamera()",
+      "doc": "command"
+     }
+    ],
+    [
+     "threshold",
+     {
+      "kind": "reporter",
+      "detail": "threshold()",
+      "doc": "reporter"
+     }
+    ],
+    [
+     "unload",
+     {
+      "kind": "command",
+      "detail": "unload()",
+      "doc": "command"
+     }
+    ]
+   ]
+  },
   "microbit": {
    "members": [
     [

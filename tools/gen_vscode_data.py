@@ -24,6 +24,7 @@ sys.path.insert(0, str(ROOT))
 from jswc import opcodes as O  # noqa: E402
 from jswc.extension_blocks import MICROBIT_CONSTANTS  # noqa: E402
 from jswc.extensions import ALIASES, EXTENSION_BLOCKS  # noqa: E402
+from jswc.gtm_blocks import GTM_BLOCKS  # noqa: E402
 from jswc.keycodes import CONTROL_CODES, MORE_KEYS, SUPPORTED_NAMES  # noqa: E402
 from jswc.keywords import (  # noqa: E402
     BUILTIN_NAMESPACES,
@@ -36,6 +37,10 @@ from jswc.keywords import (  # noqa: E402
 )
 
 DATA_PATH = ROOT / "vscode-jsw" / "data" / "jsw.json"
+
+#: Every extension the editor should suggest, in the order it is written down.
+#: ``gtm`` is hand-written; the rest are generated from the reference projects.
+_ALL_EXTENSIONS = (*EXTENSION_BLOCKS.values(), *GTM_BLOCKS.values())
 
 # Argument-type names for the hover/completion detail line.
 PRIM_NAMES = {
@@ -299,7 +304,7 @@ def _namespaces() -> dict:
 
     # opcode -> kind, so an alias can say whether it is a statement or a value.
     kind_of: dict[str, str] = {}
-    for meta in EXTENSION_BLOCKS.values():
+    for meta in _ALL_EXTENSIONS:
         for block_name, block in meta["blocks"].items():
             kind_of[block_name] = "command" if block["type"] == "COMMAND" else "reporter"
 
@@ -311,7 +316,7 @@ def _namespaces() -> dict:
     alias_opcodes: dict[str, set[str]] = {}
     for (namespace, _method), alias in ALIASES.items():
         alias_opcodes.setdefault(namespace, set()).add(alias.opcode)
-    for meta in EXTENSION_BLOCKS.values():
+    for meta in _ALL_EXTENSIONS:
         namespace = meta["namespace"]
         covered = alias_opcodes.get(namespace, set())
         members = entry(namespace)["members"]

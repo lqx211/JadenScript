@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "tools"))
 
-from jswc.extensions import known_members, known_namespaces  # noqa: E402
+from jswc.extensions import highlight_members, highlight_namespaces  # noqa: E402
 from jswc.keywords import (  # noqa: E402
     BUILTIN_NAMESPACES,
     KEYWORDS,
@@ -67,13 +67,13 @@ ANNOTATION_WORDS = (
     "warp", "main thread", "grouped", "at", "Sprite:", "Stage:",
 )
 
-NS_NAMES = sorted(set(BUILTIN_NAMESPACES) | set(known_namespaces()) | {"microbit", "Comments", "MoreEvents", "WebSocket", "sound", "pen"})
+NS_NAMES = sorted(set(BUILTIN_NAMESPACES) | set(highlight_namespaces()) | {"microbit", "Comments", "MoreEvents", "WebSocket", "sound", "pen"})
 #: Extension members are highlighted by name so ``WebSocket.closingCode`` (a
 #: property, no parentheses) looks the same as ``WebSocket.sendMessage(…)``.
 #: the spellings people write: friendly aliases and camelCase block names.
 #: The snake_case block names are accepted by the compiler but never highlighted,
 #: they would only add noise.
-EXTENSION_MEMBERS = sorted(name for name in known_members() if "_" not in name)
+EXTENSION_MEMBERS = sorted(name for name in highlight_members() if "_" not in name)
 
 
 def _words(words) -> str:
@@ -84,6 +84,43 @@ def _alternation(words) -> str:
     # a total order: longest first so a prefix cannot win, the name to break ties
     ordered = sorted(words, key=lambda word: (-len(word), word))
     return r"\|".join(word.replace(" ", r"\ ") for word in ordered)
+
+
+#: Vim refuses a ``:syn match`` pattern past roughly a kilobyte (``E53``, then
+#: ``E475``), and the extension member list is well past that now that the
+#: pishi blocks are in it. Each chunk is a separate rule with the same
+#: namespace alternation, so the group is unchanged from the outside.
+PATTERN_BUDGET = 480
+
+
+def _alternation_chunks(words, budget: int = PATTERN_BUDGET) -> list[str]:
+    ordered = sorted(words, key=lambda word: (-len(word), word))
+    chunks: list[list[str]] = [[]]
+    used = 0
+    for word in ordered:
+        escaped = word.replace(" ", r"\ ")
+        cost = len(escaped) + 3          # the ``\|`` separator and slack
+        if chunks[-1] and used + cost > budget:
+            chunks.append([])
+            used = 0
+        chunks[-1].append(escaped)
+        used += cost
+    return [r"\|".join(chunk) for chunk in chunks if chunk]
+
+
+def _extension_member_rule(chunk: str) -> str:
+    r"""One ``jswExtensionMember`` rule for a chunk of member names.
+
+    ``\@<=`` matters twice over: the member only counts after a known namespace
+    (so ``Pen.status`` stays a plain member), and starting the match *after* the
+    dot is what lets it win over ``jswMember`` -- the namespace itself is a
+    keyword, and a keyword beats any match that starts on it (``:syn-priority``).
+    """
+    return (
+        "syn match jswExtensionMember /"
+        + r"\%(\%(" + _alternation(highlight_namespaces()) + r"\)\.\)\@<="
+        + r"\%(" + chunk + r"\)\>/"
+    )
 
 
 def _annotation_pattern(words) -> str:
@@ -169,8 +206,7 @@ def syntax_file() -> str:
         '" A call is the name before the parenthesis, a class is the name after',
         '" ``class`` (the region keeps the keyword itself a declaration).',
         r"syn match jswMember /\.\zs[A-Za-z_$][A-Za-z0-9_$]*/",
-        "syn match jswExtensionMember /\\%(" + _alternation(known_namespaces())
-        + r")\.\zs\%(" + _alternation(EXTENSION_MEMBERS) + r")\>/",
+        *[_extension_member_rule(chunk) for chunk in _alternation_chunks(EXTENSION_MEMBERS)],
         r"syn match jswFunctionCall /\<[A-Za-z_$][A-Za-z0-9_$]*\ze\s*(/",
         r"syn region jswClassName matchgroup=jswDeclaration start=/\<class\s\+/ end=/[^A-Za-z0-9_$]/me=e-1 oneline",
         "",
