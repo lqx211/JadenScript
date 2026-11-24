@@ -24,6 +24,8 @@ syn match jswOperator /\V**\|..\|==\|!=\|<=\|>=\|&&\|||\|+=\|-=\|*=\|\/=\|%=\|++
 syn match jswDelimiter /[(){}\[\];,]/
 " A trailing backslash joins the next line; the lexer swallows both.
 syn match jswContinuation /\\$/
+" ``?`` is not a language operator: the ternary is ``a if c else b`` (E0087).
+syn match jswNoTernary /?/
 
 " -- comments and strings ----------------------------------------
 syn match jswAnnotationWord /\%(\<receiver\ at\>\|\<main\ thread\>\|\<proccode\>\|\<monitor\>\|\<comment\>\|\<grouped\>\|\<watch\>\|\<Sprite:\|\<warp\>\|\<Stage:\|\<hook:\|\<at\>\)/ contained
@@ -109,6 +111,7 @@ hi def link jswHole Special
 hi def link jswOperator Operator
 hi def link jswDelimiter Delimiter
 hi def link jswContinuation SpecialChar
+hi def link jswNoTernary Error
 hi def link jswComment Comment
 hi def link jswAnnotationWord SpecialComment
 hi def link jswTodo Todo

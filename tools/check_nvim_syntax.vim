@@ -42,6 +42,7 @@ let s:lines = [
       \ '    cloud score = 0;',
       \ '        l.delete(1);',
       \ '        for i in 1..10 { }',
+      \ '        x = (a ? b : c);',
       \ ]
 
 " (line, snippet, expected group)
@@ -96,6 +97,7 @@ let s:expect = [
       \ [24, 'score', 'jswIdentifier'],
       \ [25, 'delete(', 'jswFunctionCall'],
       \ [26, 'in', 'jswRepeat'],
+      \ [27, '?', 'jswNoTernary'],
       \ ]
 
 call setline(1, s:lines)
