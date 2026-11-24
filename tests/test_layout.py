@@ -198,8 +198,8 @@ class PlacementTests(unittest.TestCase):
         body = "".join("        Looks.show();\n" for _ in range(20))
         _, project = compile_source(
             "class a {\n"
-            "    public void long() {\n" + body + "    }\n"
-            "    public void after() { Looks.hide(); }\n"
+            "    void long() {\n" + body + "    }\n"
+            "    void after() { Looks.hide(); }\n"
             "}"
         )
         target = next(t for t in project.targets if t.name == "a")

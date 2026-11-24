@@ -1036,7 +1036,12 @@ class Decompiler:
         except ValueError:
             argument_names = []
         display = self._proc_display_name(sprite, proccode)
-        if self.broadcast_links.get((sprite["name"], proccode)) is not None:
+        # ``public`` is a broadcast in the language, so the header may only
+        # claim it when the receiver hat is written back too: a public function
+        # with parameters is E0086, and one whose position was lost would lose
+        # its hat on the next compile.
+        linked = self.broadcast_links.get((sprite["name"], proccode)) is not None
+        if linked and self.broadcast_positions.get((sprite["name"], proccode)):
             header = f"public void {display}"
         else:
             header = f"private void {display}"

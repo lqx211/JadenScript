@@ -15,10 +15,10 @@ class core {
     public void greenFlag(){
         helloWorld();
     }
-    public void _print(n){
+    private void _print(n){
         Looks.say(n);
     }
-    public void _strinit(x){
+    private void _strinit(x){
         strings.push(s0);
         strings.push(s1);
         lv = x;

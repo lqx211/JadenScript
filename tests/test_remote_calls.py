@@ -97,8 +97,11 @@ class CallTests(unittest.TestCase):
         )
         codegen, project = compile_source(source)
         self.assertEqual([], [d for d in codegen.diagnostics if "E00" in d])
-        self.assertEqual([], hat_options(project, "object"))
+        # Every public function is a broadcast of its own name, but the call is
+        # not one: there is no sprite boundary to cross.
+        self.assertEqual(["go", "mu"], sorted(hat_options(project, "object")))
         self.assertNotIn("event_broadcastandwait", opcodes(project, "object"))
+        self.assertNotIn("object.mu", hat_options(project, "object"))
 
     def test_namespaced_names_builds_the_same_call(self):
         _, plain = build("object.mu();")

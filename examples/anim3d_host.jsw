@@ -1119,7 +1119,7 @@ class D3 {
      * `case _` is linear, so an unknown id degrades to a straight line instead
      * of a wrong curve.
      */
-    public void easeBy(id, p) { // warp
+    private void easeBy(id, p) { // warp
         _e = p;
         if (_e < 0) {
             _e = 0;
@@ -1186,7 +1186,7 @@ class D3 {
     }
 
     /* Stable pseudo-random in [0,1) for an integer key — the same key, same value. */
-    public void hash01(n) { // warp
+    private void hash01(n) { // warp
         D3.ease = (n * 12.9898 + 78.233);
         D3.ease = (sin(D3.ease) * 43758.5453) % 1;
         if (D3.ease < 0) {
@@ -1234,7 +1234,7 @@ class D3 {
     }
 
     /* Append one vertex; `nv` counts them so edges can name the last two. */
-    public void v3(x, y, z) { // warp
+    private void v3(x, y, z) { // warp
         D3.pos.set(_v, x);
         D3.pos.set(_v + 1, y);
         D3.pos.set(_v + 2, z);
@@ -1242,7 +1242,7 @@ class D3 {
         D3.nv += 1;
     }
 
-    public void e2(a, b) { // warp
+    private void e2(a, b) { // warp
         D3.idx.set(_e, a);
         D3.idx.set(_e + 1, b);
         _e += 2;
@@ -1811,7 +1811,7 @@ class D3 {
      * the lower case glyph for letters; Scratch compares strings without case,
      * so a glyph cannot work that out for itself.
      */
-    public void textAt(str, x, y, sc, up) { // warp
+    private void textAt(str, x, y, sc, up) { // warp
         _sc = sc * D3.textScale;
         _n = lengthOf(str);
         _i = 1;
@@ -1942,7 +1942,7 @@ class D3 {
         }
     }
 
-    public void pad2(n) { // warp
+    private void pad2(n) { // warp
         D3.out2 = "0" + n;
         if (n >= 10) { D3.out2 = "" + n; }
         if (n < 10) { D3.out2 = join("0", n); }

@@ -449,7 +449,7 @@ class core { // Sprite: core (-196,121) size=100 direction=90 show=1
         call Player.updateDebugMenu();
         Music.restForBeats(1/(2**Tick.wait));
     }
-    public void Events.keyPressed(k){ // grouped
+    private void Events.keyPressed(k){ // grouped
         switch(k){ 
             case "p": // hook: when [p] key pressed
                 Player.panic();

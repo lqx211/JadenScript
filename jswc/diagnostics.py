@@ -400,6 +400,13 @@ MESSAGES: tuple[Message, ...] = (
             "arguments. Leave the function parameterless and pass the values "
             "through a global variable or list the other sprite reads."),
 
+    Message("E0086", "error", "a public function cannot take arguments",
+            "``public`` means broadcast: the function is the thing another "
+            "sprite can trigger, and a broadcast carries no arguments. A "
+            "function that needs parameters is a My Block, which is what a "
+            "function without ``public`` compiles to; it stays callable inside "
+            "its own class, with arguments."),
+
     Message("W0033", "warning", "the loop changes the list it is walking",
             "A ``for … in <list>`` loop reads ``item (i) of`` the list as it "
             "goes; deleting or inserting inside the body shifts the rest of the "

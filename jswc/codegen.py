@@ -139,6 +139,21 @@ _CONSOLE_STATEMENTS: dict[str, tuple[str, str | None]] = {
 }
 _STATE_FORMATS = {"jsa", "jsl", "jsv"}
 
+#: Reporters whose output is a Boolean already, so a Boolean slot takes them
+#: unchanged. Everything else in a condition -- a variable, ``item 1 of``,
+#: ``a + b``, a string parameter -- is a String or Number reporter, and
+#: scratch-blocks *refuses* that connection ("Input CONDITION expected
+#: Boolean, found String") and then drops the whole script from the editor's
+#: workspace, with no visible error in the project.
+BOOLEAN_REPORTERS = frozenset({
+    "operator_lt", "operator_gt", "operator_equals",
+    "operator_and", "operator_or", "operator_not", "operator_contains",
+    "sensing_touchingobject", "sensing_touchingcolor",
+    "sensing_coloristouchingcolor", "sensing_keypressed", "sensing_mousedown",
+    "data_listcontainsitem",
+    "argument_reporter_boolean",
+})
+
 # Dropdowns whose value is a *number*; anything else names an object, so a
 # computed value there is resolved at runtime (an "eval").
 _NUMERIC_MENUS = {"note", "music_menu_INSTRUMENT", "music_menu_DRUM"}
@@ -1716,20 +1731,27 @@ class Codegen:
 
         self._emit_procedure(fn)
 
-        remote = self.remote_calls.get((self.class_name, fn.proccode))
-        if remote is not None:
-            self._emit_broadcast_receiver(target, fn, message=remote)
-            return
+        if fn.visibility == "public" and fn.params and _RECEIVER_AT_RE.search(annotation) is None:
+            # A public function is a broadcast, and a broadcast carries no
+            # arguments: there is no block that could run it from another
+            # sprite, so this declaration can only mean a My Block.
+            self.diag(
+                fn,
+                "E0086",
+                f"public function {fn.proccode!r} takes {len(fn.params)} "
+                f"argument(s); a public function is a broadcast and carries none "
+                f"— declare it without 'public' for a My Block",
+            )
 
-        # A ``// receiver at`` annotation means the project had a
-        # ``when I receive`` hat whose body was merged into this procedure, so
-        # it needs the hat back even when the name is a single part.
-        if (
-            fn.visibility == "public"
-            and not fn.params
-            and (len(fn.name) > 1 or self.namespaced or _RECEIVER_AT_RE.search(annotation))
-        ):
-            self._emit_broadcast_receiver(target, fn)
+        # A public function *is* a broadcast: that is the rule in syntax.md,
+        # and it is the only way another sprite can reach it. The custom block
+        # above is how the sprite calls it on itself, so both halves exist.
+        # A call from another class listens on the qualified name instead, so
+        # that two sprites may both have a method called ``mu``.
+        if fn.visibility == "public" and not fn.params:
+            self._emit_broadcast_receiver(
+                target, fn, message=self.remote_calls.get((self.class_name, fn.proccode))
+            )
 
     @staticmethod
     def _microbit_hat(annotation: str) -> tuple[str, str, str, str] | None:
@@ -3804,6 +3826,10 @@ class Codegen:
             # function declared plainly (``public void mu()``).
             member = self.class_qualified.get((full, call.name))
             if member is None:
+                if fire_and_forget:
+                    # ``call D3.afterFrame();`` -- a hook in a sprite that is
+                    # not part of this build. Anything else would be a typo.
+                    return [self._broadcast(qname, wait=False)]
                 self.diag(call, "E0038", f"sprite {full!r} has no function {call.name!r}")
                 return []
             if member.visibility != "public":
@@ -4248,7 +4274,16 @@ class Codegen:
             block.set_input("OPERAND2", Lit(O.TEXT, "0" if truthy else "1"))
             ref: object = Ref(block)
         elif isinstance(value, Ref):
-            ref = Ref(value.block)
+            if value.block.opcode in BOOLEAN_REPORTERS:
+                ref = Ref(value.block)
+            else:
+                # `<not <(x) = 0>>` is the VM's own truthiness test and the only
+                # shape a Boolean slot accepts: ``Cast.compare`` reads
+                # ``true``/``false`` as 1/0 and empty text as 0, so a variable,
+                # a list item or an arithmetic reporter reads the same way it
+                # would inside `if` in the source.
+                ref = self._truthiness(value.block, negate=negate)
+                negate = False
         else:
             ref = value
         if negate:
@@ -4256,6 +4291,16 @@ class Codegen:
             block.set_input("OPERAND", ref)
             return Ref(block)
         return ref
+
+    def _truthiness(self, block: Block, negate: bool = False) -> object:
+        equals = self._new("operator_equals")
+        equals.set_input("OPERAND1", self._as_input(Ref(block), O.TEXT))
+        equals.set_input("OPERAND2", Lit(O.MATH_NUM, "0"))
+        if negate:
+            return Ref(equals)
+        test = self._new("operator_not")
+        test.set_input("OPERAND", Ref(equals))
+        return Ref(test)
 
     def _seconds(self, args: list[A.Expr]) -> object:
         if not args:

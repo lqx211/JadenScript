@@ -80,22 +80,30 @@ class something {
 ## Public, private and temp object definition
 
 ### Functions
-In JadenScript, private functions equals to Custom Blocks
-in TurboWarp, and public functions equal to Broadcasts in
-TurboWarp (Therefore, public functions must be void, and private functions can be void or return a value. Returning
-a value requires TurboWarp's Custom Reporters extension).
+
+There are exactly two kinds, and the keyword picks which Scratch block you get:
+
+| Declaration | Scratch | Reachable from | Arguments |
+| --- | --- | --- | --- |
+| `public void f()` | a `when I receive "f"` hat + a My Block | its own class **and any other class** | none — `E0086` |
+| `void f(a, b)` (no `public`) | a My Block only | its own class only | as many as it likes |
 
 ```jsw
 class helloworld {
-    public void broadcast_1() { // Broadcasts "broadcast_1"
+    public void broadcast_1() { // Broadcast + My Block "broadcast_1"
         // do something
     }
 
-    private void custom_block_1() { // Custom Block 
-        // do something
+    void custom_block_1(x) { // My Block "custom_block_1 %s", private to this class
+        // do something with x
     }
 }
 ```
+
+`public` is a broadcast, so it follows the broadcast rules: no arguments
+(`E0086`) and no return value. A `return` inside any function is still
+unsupported and reports a warning. `void f(a, b)` inherits the parameters as
+My Block arguments, which is what a helper normally wants.
 
 #### Calling a function that lives in another class
 
@@ -1257,6 +1265,28 @@ Hexadecimal, binary and octal text is written in that spelling (`0x100000000`)
 and converted to decimal on the way into the project, because that is what the
 VM stores. A round trip therefore *normalises* `0x…` to plain decimal — the
 value is identical, the spelling is not.
+
+## Conditions are true/false slots, and `jswc` fills them
+
+`if`, `while`, `repeat until`, `and`, `or` and `not` take a **Boolean** in
+Scratch, not a value. `scratch-blocks` checks that on load: a variable, a list
+item or `a + b` in a condition is refused ("Input CONDITION expected Boolean,
+found String") and the whole script is dropped from the editor's workspace —
+the project still runs, but that stack is invisible and uneditable.
+
+A condition in JadenScript is an expression, so anything that is not already a
+Boolean gets wrapped in the VM's own truthiness test:
+
+```jsw
+while (active) { }            // while <not <(active) = 0>>
+if (count + 1) { }            // if <not <((count) + 1) = 0>>
+if (a > b) { }                // if <(a) > (b)>  — already Boolean
+```
+
+That reads a number the way Scratch's `Cast.compare` does: `true`/`false` are
+1/0, empty text is 0, and any other text is not 0. The one divergence from
+`Cast.toBoolean` is the literal text `"false"`, which the VM reads as false and
+`<… = 0>` reads as true — write `(flag = "false")` if that spelling matters.
 
 ## Comparing text (a VM trap, not a language rule)
 

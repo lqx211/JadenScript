@@ -311,7 +311,7 @@ class Display {
      * tile dirty, and the glass cleared. The text and graphics planes keep
      * their own geometry, so switching back is just another set.
      */
-    public void dispSetMode(mode) { // warp
+    private void dispSetMode(mode) { // warp
         X.dispGfxW = 320;
         X.dispGfxH = 200;
         if (mode == 2) {
