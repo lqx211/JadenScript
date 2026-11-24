@@ -3551,7 +3551,7 @@ class Cpu {
      * A Scratch string has no character arithmetic, so a byte becomes a letter
      * by its position in the printable run: `letterOf` counts from one, and
      * 0x20 is the first of the ninety-five. */
-    public void serialTake(n) { // warp
+    void serialTake(n) { // warp
         _st = "";
         _sn = 0;
         while (X.serial.length() > 0 && _sn < n) {

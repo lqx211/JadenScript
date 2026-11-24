@@ -376,7 +376,7 @@ private void dRegOp(i) { // warp
 /* The line itself: the instruction at `at`, as text in `X.dbgDis`, and its
    length in `D.n`. The caller says where, because a halted core is standing on
    the instruction that stopped it and its own `ip` has already moved on. */
-public void disasm(at) { // warp
+void disasm(at) { // warp
     _dqAt = at;
     _dqI = at;
     _dqOs = 16;
