@@ -1,6 +1,6 @@
 PY ?= python3
 
-.PHONY: help test hello demo assets rules sample npdemo np5 np5-release np5-bank np5-piano np5-song np5-voices np5-meta serve i386-boot i386-memz np5-font np5-hex np5-probe np-scratch scratch-audit scratch-slim decompile roundtrip grammar vscode-data check vscode-ext nvim-syntax nvim-check anim3d anim3d-show anim3d-embed tmreal rv64 rv64-oracle rv64-disk rv64-bios rv64-timer rv64-font rv64-glyph rv64-cprobe rv64-smode rv64-opensbi rv64-opensbi-sb3 rv64-opensbi-boot pen-dot pen-map clean
+.PHONY: help install uninstall test hello demo assets rules sample npdemo np5 np5-release np5-bank np5-piano np5-song np5-voices np5-meta serve i386-boot i386-memz np5-font np5-hex np5-probe np-scratch scratch-audit scratch-slim decompile roundtrip grammar vscode-data check vscode-ext nvim-syntax nvim-check anim3d anim3d-show anim3d-embed tmreal rv64 rv64-oracle rv64-disk rv64-bios rv64-timer rv64-font rv64-glyph rv64-cprobe rv64-smode rv64-opensbi rv64-opensbi-sb3 rv64-opensbi-boot pen-dot pen-map clean
 
 # TurboWarp loads a build with
 #   https://turbowarp.org/?project_url=http://localhost:8000/build/<x>/<x>.sb3
@@ -11,6 +11,8 @@ serve:
 	$(PY) tools/serve.py --port 8000
 
 help:
+	@echo "make install  - install the jswc command (./install.sh; needs no sudo)"
+	@echo "make uninstall- remove that command and its private venv"
 	@echo "make test     - run the unit test suite"
 	@echo "make hello    - compile examples/hello.jsw to build/hello.sb3"
 	@echo "make demo     - compile examples/demo.jsw to build/demo.sb3"
@@ -497,6 +499,15 @@ vscode-ext:
 
 check:
 	$(PY) -m jswc check sample.jsw
+
+# The command, not the checkout: `./install.sh --check` says what it would do.
+# A private venv keeps PEP 668 ("externally managed") out of the way, and the
+# editable install means an edit under jswc/ is live on the next run.
+install:
+	./install.sh
+
+uninstall:
+	./install.sh --uninstall
 
 clean:
 	rm -rf build __pycache__ jswc/__pycache__ tests/__pycache__

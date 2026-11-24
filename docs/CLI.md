@@ -3,9 +3,14 @@
 Everything you can do with JadenScript goes through one entry point:
 
 ```bash
-python3 -m jswc <command> [options]     # from a checkout
-jswc <command> [options]                # after `pip install -e .`
+python3 -m jswc <command> [options]     # from a checkout, no install
+jswc <command> [options]                # after ./install.sh (or pip install -e .)
 ```
+
+`./install.sh` (or `make install`) is the supported way to get the command:
+a private venv plus a launcher in `~/.local/bin`, no sudo, no writes into the
+system Python. `./install.sh --check` describes what it would do without
+changing anything, and `./install.sh --uninstall` removes it.
 
 Run `jswc` with no arguments to print the help screen, `jswc --version` for the
 build number, and `jswc <command> -h` for the options of a single command.

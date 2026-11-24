@@ -45,11 +45,21 @@ python3 -m jswc ast examples/demo.jsw
 Open `build/demo.sb3` in [TurboWarp](https://turbowarp.org/) to inspect the
 generated blocks.
 
-Optional install:
+Install the `jswc` command:
 
 ```bash
-pip install -e .      # provides the `jswc` command
+./install.sh          # or: make install
 ```
+
+It creates a private venv under `~/.local/share/jswc` and links the `jswc`
+launcher into `~/.local/bin` — no sudo, nothing written into the system Python,
+and (because the install is editable) an edit under `jswc/` is live on the next
+run. `pipx` is used instead when it is installed. `./install.sh --check` prints
+what it would do and changes nothing; `./install.sh --uninstall` undoes it;
+`./install.sh --venv` installs into the checkout's own `.venv`.
+
+`pip install -e .` still works if you would rather manage the environment
+yourself.
 
 ## CLI
 
