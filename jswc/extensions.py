@@ -67,7 +67,12 @@ def pishi_namespace_conflicts() -> list[tuple[str, str, str]]:
     one and the player the other. The caller reports these as errors.
     """
     ours = {entry["namespace"]: extension for extension, entry in PISHI_BLOCKS.items()}
-    theirs = {entry["namespace"]: extension for extension, entry in _GENERIC.items()}
+    # Built here rather than read from the import-time `_GENERIC`: the clash is
+    # between *whatever the tables hold now* (a test patching EXTENSION_BLOCKS
+    # is checking this function, and an extension registered by a plugin has to
+    # be considered too).
+    others = {**EXTENSION_BLOCKS, **GTM_BLOCKS}
+    theirs = {entry["namespace"]: extension for extension, entry in others.items()}
     clashes = []
     for namespace, extension in sorted(ours.items()):
         other = theirs.get(namespace)
