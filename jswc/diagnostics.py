@@ -394,6 +394,12 @@ MESSAGES: tuple[Message, ...] = (
             "custom extension at all, so a ``--target scratch`` build would "
             "contain blocks that never resolve."),
 
+    Message("E0085", "error", "a call into another sprite carries no arguments",
+            "Scratch custom blocks belong to one sprite, so ``object.mu(2)`` "
+            "from another class becomes a broadcast, and a broadcast has no "
+            "arguments. Leave the function parameterless and pass the values "
+            "through a global variable or list the other sprite reads."),
+
     Message("W0033", "warning", "the loop changes the list it is walking",
             "A ``for … in <list>`` loop reads ``item (i) of`` the list as it "
             "goes; deleting or inserting inside the body shifts the rest of the "

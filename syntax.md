@@ -97,6 +97,46 @@ class helloworld {
 }
 ```
 
+#### Calling a function that lives in another class
+
+A Scratch custom block belongs to one sprite, so `object.mu()` from another
+class cannot be a custom-block call: it is a broadcast, and the target sprite
+needs a hat that listens for it. Write the call the obvious way and both sides
+are generated — `object` gets `when I receive "object.mu"` in front of its
+`mu` block, and the caller gets `broadcast "object.mu" and wait`:
+
+```jsw
+class model { // the Stage
+    public void greenFlag() {
+        object.mu();   // broadcast "object.mu" and wait
+        call object.ml(); // broadcast "object.ml", no waiting
+    }
+}
+
+class object {
+    public void mu() { // receives "object.mu", then moves
+        Motion.y += 10;
+    }
+}
+```
+
+Rules that fall out of the broadcast:
+
+* It has to be **public** — a private function is `E0041`, because no hat
+  exists for it.
+* It has to be **parameterless** — a broadcast carries no arguments, so
+  `object.mu(2)` is `E0085`. Send values through a global variable or a list
+  the other sprite reads.
+* Which class is declared first does not matter; the lookup is by
+  `(sprite, function)`, not by position in the file.
+* A dotted call from *inside* the same class (`object.mu()` while writing
+  `class object`) is still a plain custom-block call — there is no sprite
+  boundary to cross.
+* `#enable_feature<namespacedNames>` is irrelevant here. It renames global
+  variables and broadcasts, but a function's qualified name is only dotted
+  when it is *declared* dotted (`public void object.mu()`), which stays
+  supported for decompiled projects.
+
 ### Variables
 In JadenScript, variables can also be defined as public,
 private and temp (which functions can't define as temp).

@@ -398,6 +398,11 @@ class Codegen:
         #: receiver has no custom block behind it, so calling it can only mean
         #: "broadcast": ``M();`` waits for the receivers, ``call M();`` does not.
         self.receiver_by_name: dict[str, str] = {}
+        #: ``(class, method)`` of a public, parameterless function that another
+        #: class calls by name -> the broadcast that reaches it. Scratch has no
+        #: cross-sprite call, so the target needs a receiver hat next to its
+        #: custom block before ``object.mu()`` can mean anything.
+        self.remote_calls: dict[tuple[str, str], str] = {}
         self.list_names: set[str] = set()
         self._arg_id_cache: dict[tuple[str, str], list[str]] = {}
 
@@ -512,8 +517,42 @@ class Codegen:
         # List inference lives in vars.py so namespaces are excluded once,
         # for both the planner and the generator.
         self.list_names = collect_list_names(self.program)
+        self._collect_remote_calls()
         self._collect_receivers()
         self._collect_metadata()
+
+    def _collect_remote_calls(self) -> None:
+        """Find ``object.mu()`` style calls that cross a class boundary.
+
+        A call inside a sprite can be a ``procedures_call``; a call into
+        another sprite cannot, because Scratch custom blocks are per-sprite.
+        The nearest thing is a broadcast, and a broadcast only runs something
+        when the target sprite has a hat listening for it — so every such call
+        site also asks ``_emit_func`` to put a receiver hat behind the target.
+        """
+        for cls in self.program.classes:
+            for f in cls.funcs:
+                for node in A.walk(f.body):
+                    if not isinstance(node, A.Call) or not isinstance(node.receiver, A.Name):
+                        continue
+                    owner = ".".join(node.receiver.parts)
+                    if owner == cls.name or owner not in self.class_by_name:
+                        continue
+                    target = self.class_qualified.get((owner, node.name))
+                    # Private, parameterised and mis-called targets are
+                    # reported by ``_command_call``; only the broadcastable
+                    # ones get a hat.
+                    if target is None or target.visibility != "public" or target.params:
+                        continue
+                    if node.args:
+                        # A broadcast carries no arguments, so this call cannot
+                        # mean anything; ``_command_call`` says so.
+                        continue
+                    if len(target.name) > 1:
+                        # Declared dotted (``public void object.mu()``) already
+                        # gets a receiver from ``_emit_func``.
+                        continue
+                    self.remote_calls[(owner, node.name)] = f"{owner}.{node.name}"
 
     def _collect_receivers(self) -> None:
         """Register the call name of every ``// hook: broadcast`` hat.
@@ -551,6 +590,10 @@ class Codegen:
                 for key in names:
                     if key and key not in procedures:
                         self.receiver_by_name.setdefault(key, message)
+        for (owner, method), message in self.remote_calls.items():
+            call_name = f"{owner}.{method}"
+            if call_name not in procedures:
+                self.receiver_by_name.setdefault(call_name, message)
 
     def _declared_namespace(self, cls: A.ClassDecl) -> str:
         """The ``namespace=`` / ``ns=`` a class declares, or ``""``."""
@@ -1673,6 +1716,11 @@ class Codegen:
 
         self._emit_procedure(fn)
 
+        remote = self.remote_calls.get((self.class_name, fn.proccode))
+        if remote is not None:
+            self._emit_broadcast_receiver(target, fn, message=remote)
+            return
+
         # A ``// receiver at`` annotation means the project had a
         # ``when I receive`` hat whose body was merged into this procedure, so
         # it needs the hat back even when the name is a single part.
@@ -1745,9 +1793,11 @@ class Codegen:
             head.parent = definition.id
             definition.next = head.id
 
-    def _emit_broadcast_receiver(self, target: Target, fn: A.FuncDecl) -> None:
+    def _emit_broadcast_receiver(
+        self, target: Target, fn: A.FuncDecl, message: str | None = None
+    ) -> None:
         receiver = _RECEIVER_AT_RE.search(fn.annotation or "")
-        message = receiver.group(3) if receiver is not None else None
+        message = (receiver.group(3) if receiver is not None else None) or message
         if message:
             name = message
         elif len(fn.name) > 1:
@@ -3749,6 +3799,34 @@ class Codegen:
                 return [self._broadcast(qname, wait=not fire_and_forget)]
             self.diag(call, "E0041", f"{qname} is private to sprite {owner!r}")
             return []
+        if full in self.class_by_name:
+            # ``object.mu()`` spelled the way the class is declared, with the
+            # function declared plainly (``public void mu()``).
+            member = self.class_qualified.get((full, call.name))
+            if member is None:
+                self.diag(call, "E0038", f"sprite {full!r} has no function {call.name!r}")
+                return []
+            if member.visibility != "public":
+                self.diag(call, "E0041", f"{qname} is private to sprite {full!r}")
+                return []
+            if full == self.class_name:
+                return [self._procedure_call(member, call.args)]
+            if len(call.args) != len(member.params):
+                self.diag(
+                    call,
+                    "E0076",
+                    f"{qname} takes {len(member.params)} argument(s), not {len(call.args)}",
+                )
+                return []
+            if member.params:
+                self.diag(
+                    call,
+                    "E0085",
+                    f"{qname} takes parameters, and a call into another sprite "
+                    f"is a broadcast, which carries none",
+                )
+                return []
+            return [self._broadcast(qname, wait=not fire_and_forget)]
         if fire_and_forget:
             # Unknown but qualified target: assume it is a broadcast hook.
             return [self._broadcast(qname, wait=False)]
