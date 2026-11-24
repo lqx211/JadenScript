@@ -25,7 +25,8 @@ from pathlib import Path
 from tests.helpers import blocks_of, compile_source, opcodes
 
 from jswc import cli, extensions
-from jswc.gtm_blocks import GTM_BLOCKS, GTM_EXTENSION
+from jswc.gtm_blocks import GTM_BLOCKS, GTM_EXTENSION, GTM_URL
+from jswc.opcodes import EXTENSION_URLS, TRUSTED_EXTENSION_PREFIXES
 
 ROOT = Path(__file__).resolve().parent.parent
 CHECK = ROOT / "tools" / "check_gtm.js"
@@ -71,6 +72,21 @@ class CompileTests(unittest.TestCase):
         )
         self.assertIn("gtm", project.extensions)
         self.assertIn("gtm_load", opcodes(project, "a"))
+
+    def test_the_project_carries_the_extension_url(self):
+        # Without this entry the `.sb3` names an extension the player has no way
+        # to fetch, and TurboWarp says "invalid extension gtm".
+        _, project = compile_source('class a { void f(){ gtm.load("x"); } }')
+        self.assertEqual(project.extension_urls.get(GTM_EXTENSION), GTM_URL)
+
+    def test_the_url_is_one_the_player_runs_unsandboxed(self):
+        # A URL outside these prefixes is loaded sandboxed, where there is no
+        # camera and no WebGL -- or blocked behind a permission prompt.
+        self.assertEqual(EXTENSION_URLS[GTM_EXTENSION], GTM_URL)
+        self.assertTrue(
+            GTM_URL.startswith(TRUSTED_EXTENSION_PREFIXES),
+            f"{GTM_URL} is not under {TRUSTED_EXTENSION_PREFIXES}",
+        )
 
     def test_arguments_reach_the_block_in_order(self):
         _, project = compile_source('class a { void f(){ gtm.setThreshold(0.8); } }')

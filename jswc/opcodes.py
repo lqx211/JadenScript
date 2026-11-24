@@ -384,6 +384,10 @@ EXTENSION_URLS: dict[str, str] = {
     "rv64mem": "http://localhost:8000/tools/rv64mem.js",
     # and the 80386's, for the same reason: 128 MiB is not a Scratch list.
     "i386mem": "http://localhost:8000/tools/i386mem.js",
+    # Teachable Machine inference. The prefix is not only about the prompt here:
+    # the extension has to run *unsandboxed* to reach the camera and WebGL, and
+    # TurboWarp only trusts those two prefixes that far.
+    "gtm": "http://localhost:8000/userspace/school/gtm.js",
 }
 
 #: Extension URL prefixes TurboWarp loads without a permission prompt.

@@ -132,16 +132,25 @@ regenerates `vscode-jsw/data/jsw.json` from the same table.
 ### The `extensionURLs` entry
 
 `.sb3` cannot hold JavaScript, so the project carries the extension's **URL** in
-`extensionURLs`, filled from `EXTENSION_URLS` in `jswc/opcodes.py`. That is the
-one line the compiler still needs:
+`extensionURLs`. The compiler fills it from `EXTENSION_URLS` in
+`jswc/opcodes.py`, next to the two memory extensions:
 
 ```python
 "gtm": "http://localhost:8000/userspace/school/gtm.js",
 ```
 
-Until it is there a compiled project contains the `gtm_*` blocks but no URL for
-them, so the player shows them as unknown. Loading the extension by URL in the
-editor (above) is unaffected — that path does not go through the project file.
+Two consequences worth knowing:
+
+* a build that uses `gtm.*` now loads the extension itself, so opening the
+  `.sb3` is enough — nothing to paste into the editor;
+* the URL is resolved **when the project opens**, so `make serve` has to be
+  running, and the path is relative to the repository root. Rename or move
+  `userspace/school/gtm.js` and the constant has to follow (the test
+  `tests/test_gtm.py::test_the_url_is_one_the_player_runs_unsandboxed` checks
+  the prefix, not the file, so a move still has to be done in both places).
+
+`"invalid extension gtm"` in TurboWarp means exactly this entry is missing: the
+project names the extension in `extensions` but carries no URL for it.
 
 ## Distributing it
 

@@ -1,0 +1,9 @@
+stage {}
+
+class detector {
+    public void greenFlag() {   // hook: green flag
+        gtm.load("https://teachablemachine.withgoogle.com/models/AbCdEf123_/");
+        gtm.startCamera();
+        Looks.say(gtm.status());
+    }
+}
