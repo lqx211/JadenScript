@@ -17,6 +17,7 @@ Lowering rules worth knowing about (all verified against the reference
 from __future__ import annotations
 
 import collections
+import copy
 import functools
 
 import dataclasses
@@ -35,8 +36,11 @@ from . import layout, lints
 from .obfuscate import corrupt_block_positions, obfuscate_project
 from .vmprotect import protect_project
 from .extension_blocks import MICROBIT_CONSTANTS
+from .keysim_blocks import KEYSIM_EXTENSION, KEYSIM_KEYS, KEYSIM_KEY_LABELS
 from . import extensions
-from .extensions import ARITY_ALIASES, known_namespaces, resolve
+from .extensions import (
+    ARITY_ALIASES, alias_arity, known_namespaces, resolve, suggest_alias,
+)
 from .keywords import BUILTIN_NAMESPACES, FEATURES, STATE_ALIASES
 from .tokens import CompileError
 from .vars import VarPlan, collect_list_names, plan_variables
@@ -419,6 +423,8 @@ class Codegen:
         #: Temp (``_name``) loop variables whose loop is currently open: a
         #: nested loop reusing one would clobber the outer counter.
         self._active_loops: list[str] = []
+        #: ``for … in <list>`` needs a counter; each loop gets its own name.
+        self._for_in_count = 0
         #: ``Temp.setRuntimeVariable("x", …)`` lowers to the stage variable
         #: ``x`` instead of the extension's own store. Disabled for a project
         #: that also deletes or enumerates them, where the two differ.
@@ -1937,6 +1943,8 @@ class Codegen:
             return self._emit_for(stmt)
         if isinstance(stmt, A.RangeFor):
             return self._emit_range_for(stmt)
+        if isinstance(stmt, A.ForIn):
+            return self._emit_for_in(stmt)
         if isinstance(stmt, A.SwitchStmt):
             return self._emit_switch(stmt)
         if isinstance(stmt, A.ReturnStmt):
@@ -2410,6 +2418,119 @@ class Codegen:
         finally:
             if active:
                 self._active_loops.pop()
+
+    def _emit_for_in(self, stmt: A.ForIn) -> list[Block]:
+        """``for v in list`` walks the items, ``for l in a, b`` walks the lists.
+
+        Both forms need a list: ``for v in 5`` has nothing to walk, and saying
+        so now is better than emitting a loop that reads an empty variable.
+        """
+        names: list[str] = []
+        for item in stmt.items:
+            if not isinstance(item, A.Name):
+                self.diag(item, "E0083", "a for-each walks a list name, not an expression")
+                return []
+            name = ".".join(item.parts)
+            if not self._is_list(name):
+                self.diag(
+                    item,
+                    "E0083",
+                    f"{name!r} is not a declared list, so there is nothing to walk; "
+                    "write `for i in 1..n` to count",
+                )
+                return []
+            names.append(name)
+            # The loop itself uses the list, so the generated `length` and
+            # `item` reporters have to resolve like a written `notes.length()`.
+            self.list_names.add(name)
+        if len(names) > 1:
+            return self._emit_for_in_lists(stmt, names)
+        return self._emit_for_in_items(stmt, names[0])
+
+    def _is_list(self, name: str) -> bool:
+        """Whether ``name`` is a declared (or already used) list.
+
+        ``collect_list_names`` only sees lists used with a list *method*; a
+        for-each is the other way to use one, so the plan's declarations count
+        too, including another sprite's ``Piano.notes``.
+        """
+        if name in self.list_names:
+            return True
+        if self.plan is None:
+            return False
+        if name in self.plan.lists:
+            return True
+        if name in self.plan.class_lists.get(self.class_name, {}):
+            return True
+        owner, _, member = name.partition(".")
+        return bool(owner) and member in self.plan.class_lists.get(owner, {})
+
+    def _emit_for_in_items(self, stmt: A.ForIn, name: str) -> list[Block]:
+        """``for v in notes`` -> an index and one item read per turn.
+
+        Scratch has no for-each block, so the loop is an index into the list.
+        The index is a generated ``_``-prefixed name: a thread (temp) variable
+        when the project uses them, a sprite variable otherwise.
+        """
+        self._warn_list_walk(stmt, name)
+        index = A.Name(line=stmt.line, col=stmt.col, parts=(self._for_in_index(),))
+        listed = A.Name(line=stmt.line, col=stmt.col, parts=tuple(name.split(".")))
+        start = A.Assign(
+            line=stmt.line, col=stmt.col, target=index, op="=",
+            value=A.NumberLit(line=stmt.line, col=stmt.col, raw="1"),
+        )
+        take = A.Assign(
+            line=stmt.line, col=stmt.col,
+            target=A.Name(line=stmt.line, col=stmt.col, parts=stmt.var), op="=",
+            value=A.Call(line=stmt.line, col=stmt.col, receiver=listed, name="get",
+                         args=[A.Name(line=stmt.line, col=stmt.col, parts=index.parts)]),
+        )
+        step = A.Assign(
+            line=stmt.line, col=stmt.col, target=index, op="+=",
+            value=A.NumberLit(line=stmt.line, col=stmt.col, raw="1"),
+        )
+        loop = A.RepeatStmt(
+            line=stmt.line, col=stmt.col,
+            count=A.Call(line=stmt.line, col=stmt.col, receiver=listed, name="length"),
+            body=[take, *stmt.body, step],
+        )
+        return self._emit_body([start, loop])
+
+    def _emit_for_in_lists(self, stmt: A.ForIn, names: list[str]) -> list[Block]:
+        """``for l in a, b`` -> the body once per list, with ``l`` standing for it.
+
+        Scratch cannot hold a list in a variable, so there is no loop to emit:
+        the body is copied for each name and the loop variable is substituted
+        for that name, which is what makes ``v.delete(1)`` act on each list.
+        """
+        blocks: list[Block] = []
+        for name in names:
+            body = copy.deepcopy(stmt.body)
+            for node in A.walk(body):
+                if isinstance(node, A.Name) and node.parts == stmt.var:
+                    node.parts = tuple(name.split("."))
+            blocks.extend(self._emit_body(body))
+        return blocks
+
+    def _for_in_index(self) -> str:
+        self._for_in_count += 1
+        return f"_forItem{self._for_in_count}"
+
+    def _warn_list_walk(self, stmt: A.ForIn, name: str) -> None:
+        """Deleting from a list while walking its items shifts the rest of it."""
+        for node in A.walk(list(stmt.body)):
+            if not isinstance(node, A.Call) or not isinstance(node.receiver, A.Name):
+                continue
+            if ".".join(node.receiver.parts) != name:
+                continue
+            if node.name in O.LIST_COMMANDS:
+                self.diag(
+                    node,
+                    "W0033",
+                    f"{name}.{node.name}() changes the list this loop is walking; "
+                    "the index keeps going but the items move, so items are "
+                    "skipped or read twice",
+                )
 
     def _is_temp_name(self, name: str) -> bool:
         definition = self._class_definition(name)
@@ -3562,6 +3683,18 @@ class Codegen:
                 f"{full}.{call.name} takes {forms} arguments, not {len(call.args)}",
             )
             return []
+        arity = alias_arity(full, call.name)
+        if arity is not None and resolve(full, call.name, len(call.args), self.features) is None:
+            low, high = arity
+            takes = f"{low}" if low == high else f"{low} or {high}"
+            spelled = suggest_alias(full, call.name, len(call.args))
+            hint = f"; {full}.{spelled} takes {len(call.args)}" if spelled else ""
+            self.diag(
+                call,
+                "E0076",
+                f"{full}.{call.name} takes {takes} argument(s), not {len(call.args)}{hint}",
+            )
+            return []
         if full in known_namespaces(self.features) and resolve(full, call.name, len(call.args), self.features) is None:
             self.diag(call, "E0040", f"{qname} is not a block of the {full} extension")
             return []
@@ -3663,7 +3796,12 @@ class Codegen:
                 if args:
                     provided.pop(0)
             elif name in extension.values:
-                value: object = Lit(O.TEXT, str(extension.values[name]))
+                # Pinned by the alias. A number argument gets a number box: the
+                # VM coerces a text one, but the block would read ``"0.1"``.
+                pinned = str(extension.values[name])
+                value: object = Lit(
+                    O.MATH_NUM if arg_type == "NUMBER" else O.TEXT, pinned
+                )
             elif provided:
                 node = provided.pop(0)
                 value = self._eval(node)
@@ -3684,6 +3822,8 @@ class Codegen:
                 # normalised instead of silently pointing at another variable.
                 if isinstance(value, Lit) and value.value and not str(value.value).startswith("_"):
                     value = Lit(O.TEXT, "_" + str(value.value))
+            if menu == "KEYS" and extension.extension == KEYSIM_EXTENSION and isinstance(value, Lit):
+                value = Lit(O.TEXT, self._key_sim_key(value.value, node))
             if menu:
                 menu_block = self._new(f"{extension.extension}_menu_{menu}")
                 menu_block.shadow = True
@@ -3702,6 +3842,28 @@ class Codegen:
                 f"{extension.method} takes {len(extension.args)} argument(s)",
             )
         return block
+
+    def _key_sim_key(self, value: str, arg: A.Expr | None) -> str:
+        """The dropdown value of a literal key, or a warning if there is none.
+
+        ``press (space)`` in the extension's own dropdown stores ``" "``, and
+        the value a project compares against is ``KeyboardEvent.key``: a
+        spelled-out name has to be translated or the block never fires.
+        """
+        text = value if isinstance(value, str) else str(value)
+        if text in KEYSIM_KEYS:
+            return text
+        label = KEYSIM_KEY_LABELS.get(text.strip().lower())
+        if label is not None:
+            return label
+        self.diag(
+            arg,
+            "W0034",
+            f"{text!r} is not a key Key Simulation knows, so the block can never "
+            f"fire; write one of the dropdown's names (\"space\", \"up arrow\", "
+            f"\"enter\"…) or the character itself",
+        )
+        return text
 
     def _matrix_value(self, node: A.Expr | None) -> Lit:
         """The 5x5 display matrix as the 25-character string the VM wants.
@@ -4142,7 +4304,7 @@ def _break_statements(body):
     for stmt in body:
         if isinstance(stmt, A.BreakStmt):
             yield stmt
-        elif isinstance(stmt, (A.WhileStmt, A.ForStmt, A.RangeFor, A.RepeatStmt)):
+        elif isinstance(stmt, (A.WhileStmt, A.ForStmt, A.RangeFor, A.RepeatStmt, A.ForIn)):
             continue
         else:
             for child in _child_bodies(stmt):
@@ -4157,7 +4319,7 @@ def _child_bodies(stmt) -> list[list[A.Stmt]]:
     if isinstance(stmt, A.SwitchStmt):
         bodies = [case.body for case in stmt.cases]
         return bodies + ([stmt.default] if stmt.default else [])
-    if isinstance(stmt, (A.WhileStmt, A.RepeatStmt, A.ForStmt, A.RangeFor)):
+    if isinstance(stmt, (A.WhileStmt, A.RepeatStmt, A.ForStmt, A.RangeFor, A.ForIn)):
         return [stmt.body]
     return []
 
@@ -4168,7 +4330,7 @@ def _writes_to(body, var: tuple[str, ...]):
         if isinstance(stmt, A.Assign) and stmt.target is not None:
             if stmt.target.parts == var:
                 yield stmt, stmt.op
-        if isinstance(stmt, (A.ForStmt, A.RangeFor)):
+        if isinstance(stmt, (A.ForStmt, A.RangeFor, A.ForIn)):
             # A nested loop with the same counter rewrites it too.
             counter = getattr(stmt, "var", None)
             if counter == var:

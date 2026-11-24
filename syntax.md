@@ -475,10 +475,56 @@ WebSocket.isConnected();
 Known extensions: `JSON` (skyhigh173JSON), `Timer` (lmsTimers),
 `console` (sipcconsole), `Runtime` (runtimeoptions), `Util` (utilities),
 `Temp` (lmsTempVars2), `Comments` (lmscomments), `MoreEvents` (lmsMoreEvents),
-`WebSocket` (gsaWebsocket), `Pointerlock` (pointerlock).
+`WebSocket` (gsaWebsocket), `Pointerlock` (pointerlock), `gtm` (the Teachable
+Machine extension in `userspace/school/gtm.js`) and `keySim` (Key Simulation).
 
 The extension id (and its `extensionURLs` entry) is added to the project
 automatically the first time one of its blocks is emitted.
+
+### `keySim` — pressing keys and clicking for the player
+
+Key Simulation (`cubesterKeySimulation`, from
+<https://extensions.turbowarp.org/CubesterYT/KeySimulation>) puts input *into*
+the player: the pressed key is one the project did not receive from anyone, and
+`key pressed?`, `when key pressed`, `mouse down?`, `mouse x`/`mouse y` and
+`when this sprite clicked` all see it.
+
+```jsw
+keySim.press("space", 0.2);        // press it for 0.2 s, then carry on
+keySim.pressAndWait("enter", 1);   // … and wait the second out
+keySim.hold("shift");              // down until released
+keySim.release("shift");
+keySim.clickLeft(-100, 20);        // 0.1 s by default
+keySim.clickMiddle(0, 0, 0.5);     // … or as long as you say
+keySim.clickRight(40, 40);
+keySim.holdRight(1, 2);            // at x=1, y=2
+keySim.releaseRight();             // the release block takes no coordinates
+keySim.moveTo(0, 0);               // just the pointer, no click
+```
+
+The buttons fold the extension's `BUTTON` dropdown into the name; the general
+forms take it as an argument for a computed one:
+
+```jsw
+keySim.click(0, -100, 20, 0.1, "without waiting");
+keySim.holdButton(2, 1, 2);
+keySim.releaseButton(1);
+```
+
+**Key names.** The dropdown stores what `KeyboardEvent.key` reports, so a
+literal is spelled the way the dropdown spells it and translated on the way
+out: `"space"` becomes `" "`, `"up arrow"` becomes `"ArrowUp"`, and a single
+character stays itself. A literal the extension does not know is `W0034` — it
+would compile to a block that can never fire. A computed key is passed through
+untouched (the dropdown accepts a reporter).
+
+```jsw
+keySim.press("spce", 0.2);   // W0034: not a key Key Simulation knows
+```
+
+Every block here waits out its own duration in real time, so `--warp` does not
+make `press … for 2 seconds` return early. A `--target scratch` build is
+refused (`E0084`): Scratch cannot load a custom extension at all.
 
 ### Reporters with no arguments are properties
 
@@ -1830,6 +1876,70 @@ recognised the same way through `lmsTempVars2_setThreadVariable` /
 
 Expression bounds are parenthesised on the way out so the result re-parses:
 `for i in 0..(n + 1)`.
+
+### Walking a list: `for v in <list>` and `for l in a, b`
+
+Two forms, and the thing after `in` decides which:
+
+```jsw
+for note in notes { total += note; }        // the loop variable takes each ITEM
+for l in lu, ll, lr { l.clear(); }          // the body runs once per LIST
+```
+
+**Items.** `for v in <list>` reads `item (i) of <list>` for every index, so `v`
+is a value. There is no for-each block in Scratch, so it lowers to an index:
+
+```jsw
+for v in notes { body }      // ⇒
+_forItem1 = 1;               //    set _forItem1 to 1
+repeat (length of notes) {   //    repeat (length of notes)
+    v = notes.get(_forItem1); //      set v to (item _forItem1 of notes)
+    body                     //      body
+    _forItem1 += 1;          //      change _forItem1 by 1
+}
+```
+
+The count is read once, before the loop, so a body that grows or shrinks the
+list cannot make the loop run forever. It *can* still make it skip items —
+deleting inside the body shifts the rest of the list under the index — so that
+is `W0033`:
+
+```jsw
+for v in notes { notes.delete(1); }   // W0033: the index keeps going, the items move
+```
+
+`_forItem1` is generated, one per loop (so nested loops are fine), and follows
+the usual `_`-prefix rule: a temp (thread) variable with `useTempVariables`, a
+sprite variable otherwise.
+
+**Lists.** `for l in a, b, c` binds the loop variable to each **list** in turn,
+which is what makes `l.length()`, `l.delete(1)` and `l.append(x)` act on the
+list itself. Scratch cannot hold a list in a variable, so there is nothing to
+loop over: the body is **unrolled**, one copy per name with the loop variable
+replaced by that name.
+
+```jsw
+for l in lu, ll { l.clear(); }   // ⇒  delete all of lu
+                                  //     delete all of ll
+```
+
+Consequences worth knowing, because they are the cost of unrolling: the body is
+duplicated in the project (three lists, three copies), and reading the loop
+variable *after* the loop has nothing behind it — there is no variable, only
+the copies.
+
+**Which names count as lists.** A name is a list when the project declared it
+(`private notes = [];`, `public notes = [];`) or already used it with a list
+method. Anything else is `E0083`:
+
+```jsw
+for v in 3 { … }             // E0083: '3' is not a declared list …
+for v in missing { … }       // E0083: … write `for i in 1..n` to count
+```
+
+**Decompiling.** These lower to ordinary `set`/`repeat`/`item of` blocks, so
+they come back as the block shapes they are, not as `for … in <list>`. The
+counting form above is the one the decompiler recognises back.
 
 ## 6. Expressions
 

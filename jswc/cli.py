@@ -12,6 +12,7 @@ from pathlib import Path
 from . import __version__, html, include, lints, ui
 from .codegen import DEFAULT_OBF_FLATTEN, DEFAULT_OBF_POOLS, Codegen
 from .gtm_blocks import GTM_EXTENSION
+from .keysim_blocks import KEYSIM_EXTENSION
 from .lexer import tokenize
 from .parser import Parser
 from .sb3 import build_project_dict, sb3_bytes, write_project_json, write_sb3
@@ -363,6 +364,13 @@ def cmd_build(args: argparse.Namespace) -> int:
                 "0:0: E0080 gtm is a TurboWarp-only extension (it needs an "
                 "unsandboxed player for the camera and WebGL); drop the gtm calls "
                 "for a scratch build, or build without --target scratch"
+            )
+        if "SCRATCH" in defines and KEYSIM_EXTENSION in project.extensions:
+            fatal = True
+            codegen.diagnostics.append(
+                "0:0: E0084 keySim is a TurboWarp extension; Scratch cannot load a "
+                "custom extension, so drop the keySim calls for a scratch build, "
+                "or build without --target scratch"
             )
         t_codegen = time.perf_counter()
         issues = validate(project, corrupt=codegen.corrupt_block_pos)

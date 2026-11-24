@@ -3079,6 +3079,146 @@
     ]
    ]
   },
+  "keySim": {
+   "members": [
+    [
+     "click",
+     {
+      "kind": "command",
+      "detail": "click(BUTTON, X, Y, SECONDS, AND_WAIT)",
+      "doc": "clickMouse"
+     }
+    ],
+    [
+     "clickLeft",
+     {
+      "kind": "command",
+      "detail": "clickLeft(X, Y)",
+      "doc": "clickMouse"
+     }
+    ],
+    [
+     "clickMiddle",
+     {
+      "kind": "command",
+      "detail": "clickMiddle(X, Y)",
+      "doc": "clickMouse"
+     }
+    ],
+    [
+     "clickRight",
+     {
+      "kind": "command",
+      "detail": "clickRight(X, Y)",
+      "doc": "clickMouse"
+     }
+    ],
+    [
+     "hold",
+     {
+      "kind": "command",
+      "detail": "hold(KEY)",
+      "doc": "holdKey"
+     }
+    ],
+    [
+     "holdButton",
+     {
+      "kind": "command",
+      "detail": "holdButton(BUTTON, X, Y)",
+      "doc": "holdMouse"
+     }
+    ],
+    [
+     "holdLeft",
+     {
+      "kind": "command",
+      "detail": "holdLeft(X, Y)",
+      "doc": "holdMouse"
+     }
+    ],
+    [
+     "holdMiddle",
+     {
+      "kind": "command",
+      "detail": "holdMiddle(X, Y)",
+      "doc": "holdMouse"
+     }
+    ],
+    [
+     "holdRight",
+     {
+      "kind": "command",
+      "detail": "holdRight(X, Y)",
+      "doc": "holdMouse"
+     }
+    ],
+    [
+     "moveTo",
+     {
+      "kind": "command",
+      "detail": "moveTo(X, Y)",
+      "doc": "moveMouse"
+     }
+    ],
+    [
+     "press",
+     {
+      "kind": "command",
+      "detail": "press(KEY, SECONDS)",
+      "doc": "pressKey"
+     }
+    ],
+    [
+     "pressAndWait",
+     {
+      "kind": "command",
+      "detail": "pressAndWait(KEY, SECONDS)",
+      "doc": "pressKey"
+     }
+    ],
+    [
+     "release",
+     {
+      "kind": "command",
+      "detail": "release(KEY)",
+      "doc": "releaseKey"
+     }
+    ],
+    [
+     "releaseButton",
+     {
+      "kind": "command",
+      "detail": "releaseButton(BUTTON)",
+      "doc": "releaseMouse"
+     }
+    ],
+    [
+     "releaseLeft",
+     {
+      "kind": "command",
+      "detail": "releaseLeft()",
+      "doc": "releaseMouse"
+     }
+    ],
+    [
+     "releaseMiddle",
+     {
+      "kind": "command",
+      "detail": "releaseMiddle()",
+      "doc": "releaseMouse"
+     }
+    ],
+    [
+     "releaseRight",
+     {
+      "kind": "command",
+      "detail": "releaseRight()",
+      "doc": "releaseMouse"
+     }
+    ]
+   ]
+  },
   "microbit": {
    "members": [
     [

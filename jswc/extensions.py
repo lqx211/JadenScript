@@ -29,6 +29,7 @@ from dataclasses import dataclass, field
 
 from .extension_blocks import EXTENSION_BLOCKS
 from .gtm_blocks import GTM_BLOCKS
+from .keysim_blocks import KEYSIM_BLOCKS
 from .opcodes import BOOLEAN, COLOR, MATH_NUM, TEXT
 from .pishi_blocks import PISHI_BLOCKS
 
@@ -50,8 +51,13 @@ def catalogue(features=()) -> dict[str, dict]:
     return _MERGED
 
 
-_GENERIC: dict[str, dict] = {**EXTENSION_BLOCKS, **GTM_BLOCKS}
+_GENERIC: dict[str, dict] = {**EXTENSION_BLOCKS, **GTM_BLOCKS, **KEYSIM_BLOCKS}
 _MERGED: dict[str, dict] = {**_GENERIC, **PISHI_BLOCKS}
+
+
+def keysim_namespaces() -> set[str]:
+    """The namespaces Key Simulation adds, so a build can refuse them too."""
+    return {entry["namespace"] for entry in KEYSIM_BLOCKS.values()}
 
 
 def gtm_namespaces() -> set[str]:
@@ -71,7 +77,7 @@ def pishi_namespace_conflicts() -> list[tuple[str, str, str]]:
     # between *whatever the tables hold now* (a test patching EXTENSION_BLOCKS
     # is checking this function, and an extension registered by a plugin has to
     # be considered too).
-    others = {**EXTENSION_BLOCKS, **GTM_BLOCKS}
+    others = {**EXTENSION_BLOCKS, **GTM_BLOCKS, **KEYSIM_BLOCKS}
     theirs = {entry["namespace"]: extension for extension, entry in others.items()}
     clashes = []
     for namespace, extension in sorted(ours.items()):
@@ -113,6 +119,10 @@ class Alias:
     opcode: str
     params: tuple[str, ...] = ()
     fixed: dict[str, str] = field(default_factory=dict)
+    #: arguments that may be left off the end of the call. A call that supplies
+    #: one un-pins the matching entry of ``fixed``, so `clickLeft(x, y)` and
+    #: `clickLeft(x, y, 0.5)` are the same alias with a different duration.
+    optional: tuple[str, ...] = ()
     #: the spelling the decompiler writes back; legacy names stay accepted but
     #: do not win when several aliases share one opcode
     canonical: bool = True
@@ -123,9 +133,10 @@ ALIASES: dict[tuple[str, str], Alias] = {}
 
 
 def _alias(namespace: str, method: str, opcode: str, params=(), *, canonical=True,
-           **fixed) -> None:
+           optional=(), **fixed) -> None:
     ALIASES[(namespace, method)] = Alias(
-        namespace, method, opcode, tuple(params), fixed, canonical
+        namespace, method, opcode, tuple(params), fixed,
+        optional=tuple(optional), canonical=canonical,
     )
 
 
@@ -230,6 +241,30 @@ _alias("TurboWarp", "secondaryButtonDown", "getButtonIsDown", MOUSE_BUTTON="2")
 _alias("TurboWarp", "getLastKeyPressed", "getLastKeyPressed", canonical=False)
 _alias("TurboWarp", "getButtonIsDown", "getButtonIsDown", ["MOUSE_BUTTON"], canonical=False)
 
+# -- Key Simulation (cubesterKeySimulation) --------------------------------
+# The extension's own spelling is one block per shape -- `press key for`,
+# `click mouse button at` -- and it takes a menu for the button. These aliases
+# are the same blocks with the button folded into the name, which is how the
+# call reads: `keySim.clickLeft(-240, 0)`.
+_alias("keySim", "press", "pressKey", ["KEY", "SECONDS"], AND_WAIT="without waiting")
+_alias("keySim", "pressAndWait", "pressKey", ["KEY", "SECONDS"], AND_WAIT="and wait")
+_alias("keySim", "hold", "holdKey", ["KEY"])
+_alias("keySim", "release", "releaseKey", ["KEY"])
+_alias("keySim", "moveTo", "moveMouse", ["X", "Y"])
+# The general forms take the button as an argument, for a computed one.
+_alias("keySim", "click", "clickMouse", ["BUTTON", "X", "Y", "SECONDS", "AND_WAIT"])
+_alias("keySim", "holdButton", "holdMouse", ["BUTTON", "X", "Y"])
+_alias("keySim", "releaseButton", "releaseMouse", ["BUTTON"])
+BUTTON_NAMES = {"Left": "0", "Middle": "1", "Right": "2"}
+for _name, _value in BUTTON_NAMES.items():
+    # `clickLeft(x, y)` clicks for 0.1 s; the third argument is the duration.
+    _alias("keySim", f"click{_name}", "clickMouse", ["X", "Y"],
+           optional=["SECONDS"], BUTTON=_value, SECONDS="0.1",
+           AND_WAIT="without waiting")
+    _alias("keySim", f"hold{_name}", "holdMouse", ["X", "Y"], BUTTON=_value)
+    _alias("keySim", f"release{_name}", "releaseMouse", (), BUTTON=_value)
+del _name, _value
+
 # -- Pointerlock (pointerlock) ----------------------------------------------
 # `setPointerLock(n)` takes 0/1 or an expression; `isPointerLocked` is the
 # boolean, spelled as a property.
@@ -328,6 +363,16 @@ def resolve(namespace: str, method: str, arg_count: int | None = None,
         )
     alias = ALIASES.get((namespace, method))
     if alias is not None:
+        values = dict(alias.fixed)
+        if arg_count is not None:
+            extra = arg_count - len(alias.params)
+            if extra < 0 or extra > len(alias.optional):
+                # An alias names one block with one argument list: `isArray(x,
+                # y)` is not a shorter `isArray`, it is a call nobody can serve.
+                return None
+            for name in alias.optional[:extra]:
+                # Given on the call, so the pin must not swallow the argument.
+                values.pop(name, None)
         entry = table.get(_extension_of(alias.opcode, namespace), {})
         spec = entry.get("blocks", {}).get(alias.opcode)
         if spec is None:
@@ -337,7 +382,7 @@ def resolve(namespace: str, method: str, arg_count: int | None = None,
             opcode=alias.opcode,
             kind=spec["type"],
             args=tuple(tuple(a) for a in spec["args"]),
-            values=dict(alias.fixed),
+            values=values,
             method=method,
         )
 
@@ -361,9 +406,39 @@ def resolve(namespace: str, method: str, arg_count: int | None = None,
     return None
 
 
+def alias_arity(namespace: str, method: str) -> tuple[int, int] | None:
+    """The argument counts an alias accepts, or ``None`` if it is not an alias."""
+    alias = ALIASES.get((namespace, method))
+    if alias is None:
+        return None
+    return len(alias.params), len(alias.params) + len(alias.optional)
+
+
+def suggest_alias(namespace: str, method: str, arg_count: int) -> str | None:
+    """Another spelling of ``method`` that takes exactly ``arg_count`` arguments.
+
+    ``keySim.clickMiddle(x, y, seconds)`` is ``clickMiddleFor``: the shorter
+    name is the fixed-duration form, and saying so is more use than "not a
+    block of the keySim extension".
+    """
+    for (ns, candidate), alias in ALIASES.items():
+        if ns != namespace or candidate == method:
+            continue
+        if candidate.startswith(method) and len(alias.params) == arg_count:
+            return candidate
+    return None
+
+
 def _extension_of(opcode: str, namespace: str) -> str:
+    """The extension an alias's opcode belongs to, if this namespace has one.
+
+    Aliases are registered for the always-available extensions only, so the
+    lookup is against :data:`_GENERIC` -- a namespace that is also an extension
+    id (``gtm``, ``keySim``) must resolve to the id, or its blocks would be
+    looked up under the namespace instead.
+    """
     extension_id = extension_for_namespace(namespace)
-    if extension_id is not None and opcode in EXTENSION_BLOCKS[extension_id]["blocks"]:
+    if extension_id is not None and opcode in _GENERIC[extension_id]["blocks"]:
         return extension_id
     return namespace
 
@@ -422,13 +497,21 @@ def reverse(full_opcode: str, values: dict[str, object] | None = None,
 
     matching.sort(key=score)
     for method, alias in matching[:1]:
+        # An optional argument whose pin the block does not carry was given at
+        # the call: write it back instead of letting the pin swallow it
+        # (`clickMiddle(0, 0, 0.5)` must not come back as `clickMiddle(0, 0)`).
+        chosen = dict(alias.fixed)
+        if values is not None:
+            for name in alias.optional:
+                if name in chosen and str(values.get(name, "")).lower() != str(chosen[name]).lower():
+                    del chosen[name]
         if True:
             return namespace, method, ExtensionCall(
                 extension=extension_id,
                 opcode=opcode,
                 kind=spec["type"],
                 args=tuple(tuple(a) for a in spec["args"]),
-                values=dict(alias.fixed),
+                values=chosen,
                 method=method,
             )
     return namespace, opcode, ExtensionCall(
@@ -477,7 +560,9 @@ def known_members(namespace: str | None = None) -> set[str]:
 #: Every extension a highlighter should know, whether or not a *build* may use
 #: it: `pishiSupport` gates what the compiler resolves, not what a file looks
 #: like while you are writing it.
-HIGHLIGHT_BLOCKS: dict[str, dict] = {**EXTENSION_BLOCKS, **GTM_BLOCKS, **PISHI_BLOCKS}
+HIGHLIGHT_BLOCKS: dict[str, dict] = {
+    **EXTENSION_BLOCKS, **GTM_BLOCKS, **KEYSIM_BLOCKS, **PISHI_BLOCKS
+}
 
 
 def highlight_namespaces() -> set[str]:

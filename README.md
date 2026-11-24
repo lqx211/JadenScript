@@ -180,6 +180,8 @@ jswc/            compiler package
   decompile.py   sb3 → JadenScript
   extensions.py  community-extension call resolution (aliases + generic)
   extension_blocks.py  generated block metadata (132 blocks, 9 extensions)
+  gtm_blocks.py  gtm: the Teachable Machine extension's blocks
+  keysim_blocks.py  keySim: the Key Simulation extension's blocks
   validator.py   structural validation
   cli.py         command line
 tests/           unittest suite (no third-party dependencies)
@@ -237,6 +239,9 @@ python3 -m unittest tests.test_i386
 * [`docs/GTM.md`](./docs/GTM.md) — `gtm.*`: Teachable Machine models straight
   from their share link, the two preprocessing rules that fail silently, and
   why the extension has to run unsandboxed.
+* [`syntax.md`](./syntax.md) — the language: `for v in <list>` walks the items,
+  `for l in a, b` walks the lists, and `keySim.*` presses keys and clicks for
+  the player.
 * [`docs/ROADMAP.md`](./docs/ROADMAP.md) — the work cut into small,
   independently shippable pieces.
 

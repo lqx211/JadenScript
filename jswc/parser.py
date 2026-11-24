@@ -494,6 +494,44 @@ class Parser:
             k += 2
         return self.at_keyword("in", k=k)
 
+    def _at_foreach_items(self) -> bool:
+        """``for v in a`` / ``for v in a, b`` / ``for v in a.b { ``, versus a range.
+
+        The two forms differ after ``in``: a range has a bound (a number, or a
+        ``(``-group) and then ``..``; the for-each has a name and then ``,`` or
+        ``{``.
+        """
+        k = 0
+        if not self.at(Kind.IDENT, k=k):
+            return False
+        k += 1
+        while self.at_punct(".", k=k) and self._at_member_name(k=k + 1):
+            k += 2
+        return self.at_punct(",", k=k) or self.at_punct("{", k=k)
+
+    def parse_foreach_items(self, kw: Token, parts: list[str]) -> A.ForIn:
+        """``for v in a, b { … }`` — the item list of a for-each."""
+        items: list[A.Expr] = [self.parse_name_path()]
+        while self.at_punct(","):
+            self.advance()
+            items.append(self.parse_name_path())
+        body = self.parse_block()
+        return A.ForIn(
+            line=kw.line, col=kw.col, var=tuple(parts), items=items, body=body
+        )
+
+    def parse_name_path(self) -> A.Name:
+        """A dotted name: ``i``, ``Player.score``, ``Song.list``."""
+        first = self.expect_name()
+        parts = [first.value]
+        while self.at_punct(".") and self._at_member_name(k=1):
+            self.advance()
+            parts.append(self.advance().value)
+        node = A.Name(line=first.line, col=first.col, parts=tuple(parts))
+        # ``a.length`` reads as a property, so keep the call parens optional
+        # for the places that expect an expression.
+        return node
+
     def parse_range_for(self, kw: Token) -> A.RangeFor:
         """``for i in 1..10 { … }`` — an inclusive ascending counter."""
         bracketed = False
@@ -506,6 +544,10 @@ class Parser:
             self.advance()
             parts.append(self.advance().value)
         self.expect_keyword("in")
+        if self._at_foreach_items():
+            if bracketed:
+                self.expect_punct(")")
+            return self.parse_foreach_items(kw, parts)
         start, stop = self.parse_range()
         if bracketed:
             self.expect_punct(")")

@@ -25,6 +25,7 @@ from jswc import opcodes as O  # noqa: E402
 from jswc.extension_blocks import MICROBIT_CONSTANTS  # noqa: E402
 from jswc.extensions import ALIASES, EXTENSION_BLOCKS  # noqa: E402
 from jswc.gtm_blocks import GTM_BLOCKS  # noqa: E402
+from jswc.keysim_blocks import KEYSIM_BLOCKS  # noqa: E402
 from jswc.keycodes import CONTROL_CODES, MORE_KEYS, SUPPORTED_NAMES  # noqa: E402
 from jswc.keywords import (  # noqa: E402
     BUILTIN_NAMESPACES,
@@ -40,7 +41,8 @@ DATA_PATH = ROOT / "vscode-jsw" / "data" / "jsw.json"
 
 #: Every extension the editor should suggest, in the order it is written down.
 #: ``gtm`` is hand-written; the rest are generated from the reference projects.
-_ALL_EXTENSIONS = (*EXTENSION_BLOCKS.values(), *GTM_BLOCKS.values())
+_ALL_EXTENSIONS = (*EXTENSION_BLOCKS.values(), *GTM_BLOCKS.values(),
+                   *KEYSIM_BLOCKS.values())
 
 # Argument-type names for the hover/completion detail line.
 PRIM_NAMES = {

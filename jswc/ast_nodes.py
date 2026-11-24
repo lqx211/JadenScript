@@ -115,6 +115,24 @@ class Call(Expr):
     args: list[Expr] = field(default_factory=list)
 
 
+def walk(node) -> "Iterator[Node]":
+    """Every node under ``node``, depth first, through lists, tuples and dicts.
+
+    ``IfStmt.elifs`` is a list of ``(condition, body)`` tuples, so a walk that
+    only follows one level of list misses the code inside an ``elif`` arm.
+    """
+    stack = [node]
+    while stack:
+        current = stack.pop()
+        if isinstance(current, (list, tuple)):
+            stack.extend(current)
+        elif isinstance(current, dict):
+            stack.extend(current.values())
+        elif isinstance(current, Node):
+            yield current
+            stack.extend(getattr(current, name) for name in current.__dataclass_fields__)
+
+
 # --------------------------------------------------------------------------
 # Statements
 # --------------------------------------------------------------------------
@@ -180,6 +198,26 @@ class RangeFor(Stmt):
     var: tuple[str, ...] = ()
     start: Expr | None = None
     stop: Expr | None = None
+    body: list[Stmt] = field(default_factory=list)
+
+
+@dataclass
+class ForIn(Stmt):
+    """``for item in notes { … }`` and ``for notes in a, b { … }``.
+
+    Two forms with two meanings, chosen by what is written after ``in``:
+
+    * one name that is a list -- the loop variable takes each **item** of it,
+      lowered to ``set i = 1; repeat (length of list) { set v = item i of list;
+      …; i += 1 }`` with a hidden counter;
+    * a comma-separated list of list names -- the body runs once per list with
+      the loop variable standing for that **list**, so ``v.append(x)`` and
+      ``v.delete(1)`` work on each in turn. Scratch cannot hold a list in a
+      variable, so this is unrolled: one copy of the body per name.
+    """
+
+    var: tuple[str, ...] = ()
+    items: list[Expr] = field(default_factory=list)
     body: list[Stmt] = field(default_factory=list)
 
 

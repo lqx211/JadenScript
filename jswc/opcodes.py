@@ -388,6 +388,10 @@ EXTENSION_URLS: dict[str, str] = {
     # the extension has to run *unsandboxed* to reach the camera and WebGL, and
     # TurboWarp only trusts those two prefixes that far.
     "gtm": "http://localhost:8000/userspace/school/gtm.js",
+    # Key Simulation, straight from the gallery: it is TurboWarp's own host, so
+    # a project that presses keys runs on any machine with no project server --
+    # and it needs no camera, so the sandbox is not the issue this time.
+    "cubesterKeySimulation": "https://extensions.turbowarp.org/CubesterYT/KeySimulation.js",
 }
 
 #: Extension URL prefixes TurboWarp loads without a permission prompt.

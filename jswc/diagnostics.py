@@ -383,6 +383,29 @@ MESSAGES: tuple[Message, ...] = (
             "(``cloudOptions.limit``); the rest are loaded as ordinary stage "
             "variables and the difference is invisible in the editor."),
 
+    Message("E0083", "error", "for … in needs a list",
+            "The form without a range walks a list, so the thing after ``in`` "
+            "has to be the name of a declared list: ``for item in notes { … }`` "
+            "reads every item, ``for notes in a, b { … }`` runs the body once "
+            "per list. A range (``for i in 1..10``) is the counting form."),
+
+    Message("E0084", "error", "keySim needs a TurboWarp build",
+            "``keySim.*`` is the Key Simulation extension. Scratch cannot load a "
+            "custom extension at all, so a ``--target scratch`` build would "
+            "contain blocks that never resolve."),
+
+    Message("W0033", "warning", "the loop changes the list it is walking",
+            "A ``for … in <list>`` loop reads ``item (i) of`` the list as it "
+            "goes; deleting or inserting inside the body shifts the rest of the "
+            "list under the loop, so items are skipped or read twice. Copy the "
+            "list, or walk it backwards by index."),
+
+    Message("W0034", "warning", "key name the keySim extension does not know",
+            "The dropdown stores what ``KeyboardEvent.key`` reports, so "
+            "``\"space\"`` is the single character ``\" \"`` and the arrow keys "
+            "are ``\"ArrowUp\"`` and friends. An unknown name compiles to a "
+            "block that can never fire."),
+
     Message("E9999", "error", "unclassified",
             "No catalogue entry matched; please report the message verbatim."),
 )

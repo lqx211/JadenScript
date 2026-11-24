@@ -15,6 +15,10 @@ from dataclasses import dataclass, field
 
 from . import opcodes as O
 from .extension_blocks import MICROBIT_CONSTANT_NAMES
+from .keysim_blocks import KEYSIM_KEY_LABELS
+
+#: The reverse of the keySim key table: the dropdown value back to its name.
+_KEYSIM_LABEL_OF: dict[str, str] = {v: k for k, v in KEYSIM_KEY_LABELS.items()}
 from . import extensions as extension_tables
 from .extensions import reverse as reverse_extension
 from .keywords import ALL_KEYWORDS
@@ -1836,7 +1840,16 @@ class Decompiler:
                 constant = (
                     MICROBIT_CONSTANT_NAMES.get(value) if namespace == "microbit" else None
                 )
-                if constant is not None:
+                label = (
+                    _KEYSIM_LABEL_OF.get(str(value))
+                    if namespace == "keySim" and menu == "KEYS"
+                    else None
+                )
+                if label is not None:
+                    # The dropdown says "space" and stores `" "`: write the name
+                    # a reader recognises, which compiles back to the value.
+                    args.append(_quote(label))
+                elif constant is not None:
                     # ``microbit.buttonA`` reads better than ``"A"``, and it is
                     # the same value the compiler turns back into the menu.
                     args.append(f"microbit.{constant}")

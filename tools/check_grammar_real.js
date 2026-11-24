@@ -81,6 +81,11 @@ const EXPECT = [
   ['        gtm.load("https://teachablemachine.withgoogle.com/models/x/");', 'gtm', 'support.class.builtin.jsw'],
   ['        gtm.load("https://teachablemachine.withgoogle.com/models/x/");', 'load', 'support.function.extension.jsw'],
   ['        if (gtm.isLabel("Cat")) { }', 'isLabel', 'support.function.extension.jsw'],  ['        _c = gtm.confidence("Cat");', 'confidence', 'support.function.extension.jsw'],
+  // keySim: an extension whose block names are verbs
+  ['        keySim.press("space", 0.2);', 'keySim', 'support.class.builtin.jsw'],
+  ['        keySim.press("space", 0.2);', 'press', 'support.function.extension.jsw'],
+  ['        keySim.clickLeft(-100, 20);', 'clickLeft', 'support.function.extension.jsw'],
+  ['        keySim.moveTo(0, 0);', 'moveTo', 'support.function.extension.jsw'],
   // pishi: coloured even though a build has to enable the feature
   ['        Arduino.digitalWrite(13);', 'Arduino', 'support.class.builtin.jsw'],
   ['        Arduino.digitalWrite(13);', 'digitalWrite', 'support.function.extension.jsw'],

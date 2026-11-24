@@ -36,6 +36,9 @@ let s:lines = [
       \ '        _s = gtm.status;',
       \ '        Facemesh.getX(1);',
       \ '        _l = GoogleTeachableMachine.getImageLabel;',
+      \ '        keySim.press("space", 0.2);',
+      \ '        keySim.clickLeft(-100, 20);',
+      \ '        keySim.holdRight(1, 2);',
       \ '    cloud score = 0;',
       \ ]
 
@@ -83,8 +86,12 @@ let s:expect = [
       \ [19, 'Facemesh', 'jswNamespace'],
       \ [19, 'getX(', 'jswFunctionCall'],
       \ [20, 'getImageLabel', 'jswExtensionMember'],
-      \ [21, 'cloud', 'jswModifier'],
-      \ [21, 'score', 'jswIdentifier'],
+      \ [21, 'keySim', 'jswNamespace'],
+      \ [21, 'press(', 'jswFunctionCall'],
+      \ [22, 'clickLeft(', 'jswFunctionCall'],
+      \ [23, 'holdRight(', 'jswFunctionCall'],
+      \ [24, 'cloud', 'jswModifier'],
+      \ [24, 'score', 'jswIdentifier'],
       \ ]
 
 call setline(1, s:lines)
