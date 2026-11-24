@@ -85,10 +85,12 @@ class ProtectedBuildTests(unittest.TestCase):
             features={"commentMetadata", "vmProtect"},
         )
         calls = _proccodes(blocks_of(project, "core"))
-        self.assertEqual(calls.count("__vm_start %s %s"), 1)
+        # One program per hat: the green flag plus the two broadcasts a public
+        # function is (`doPrint`, `helloWorld`), and one per custom block.
+        self.assertEqual(calls.count("__vm_start %s %s"), 3)
         self.assertEqual(calls.count("__vm_proc_start %s %s %s %s"), 4)
         self.assertIn(
-            "I0004 vmProtect virtualised 5 program(s)",
+            "I0004 vmProtect virtualised 7 program(s)",
             "\n".join(codegen.diagnostics),
         )
 
