@@ -53,9 +53,16 @@ function makeScratch(unsandboxed) {
 /* A context with just enough DOM for the module body: two 2d contexts, and a
    <script> that fires onerror instead of fetching TensorFlow.js. That makes
    "the link parsed" observable -- it gets as far as trying to load tf.js. */
-function makeContext(Scratch, { failScripts = true } = {}) {
+function makeContext(
+  Scratch,
+  { failScripts = true, metadata = { labels: ['a'], packageName: '@teachablemachine/image' } } = {}
+) {
   const context = {
     Scratch,
+    // The real thing would fetch metadata.json first; answering it locally is
+    // what lets the link-parsing checks reach the *library* step, which is the
+    // one the failing <script> makes observable.
+    fetch: async () => ({ ok: true, json: async () => metadata }),
     console,
     setTimeout,
     clearTimeout,
@@ -188,6 +195,20 @@ async function main() {
     'a model.json URL is accepted',
     /TensorFlow\.js/.test(extension.lastError()),
     extension.lastError()
+  );
+
+  // A pose project must take a different branch: the pose runtime, on tfjs 1.x.
+  const poseScratch = makeScratch(true);
+  const poseContext = makeContext(poseScratch.Scratch, {
+    metadata: { labels: ['up', 'down'], packageName: '@teachablemachine/pose' },
+  });
+  load(poseContext);
+  const poseExtension = poseScratch.registered[0];
+  await poseExtension.load({ URL: 'AbCdEf123_' });
+  check(
+    'a pose model pins tfjs 1.x',
+    /TensorFlow\.js 1\.3\.1/.test(poseExtension.lastError()),
+    poseExtension.lastError()
   );
 
   // -- the prediction arithmetic -----------------------------------------

@@ -2,7 +2,7 @@ stage {}
 
 class detector {
     public void greenFlag() {   // hook: green flag
-        gtm.load("https://teachablemachine.withgoogle.com/models/AbCdEf123_/");
+        gtm.load("https://teachablemachine.withgoogle.com/models/rUfcLK4_k/");
         gtm.startCamera();
         Looks.say(gtm.status());
     }

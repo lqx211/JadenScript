@@ -65,6 +65,39 @@ which is why they are in one place in `gtm.js` and not spread over the blocks.
 
 Labels are compared case-insensitively and trimmed, so `cat` finds `Cat`.
 
+## Pose projects
+
+An **Image** project and a **Pose** project are not the same kind of model, and
+the difference is not cosmetic:
+
+| | Image / Audio | Pose |
+| --- | --- | --- |
+| classifier input | `[1, 224, 224, 3]` pixels, scaled by 127 | `[1, 14739]` posenet heatmaps + offsets |
+| needs | tfjs layers-model | tfjs **1.3.1** + `@teachablemachine/pose@0.8.3` |
+| extra download | — | posenet MobileNet ≈ 13 MB |
+
+`metadata.json` says which: `"packageName": "@teachablemachine/pose"` (older
+exports only carry `modelSettings.posenet`). The extension branches on it, so
+`gtm.load(...)` is the same call either way. Feeding pixels to a pose classifier
+is a shape error, which is what the branch avoids.
+
+The pose runtime is Teachable Machine's own, because the letterbox resize, the
+channel order and the heatmap/offset concatenation all have to match training —
+re-implementing that from `baseModel.predict` is how you get a model that loads,
+runs, and is quietly wrong. It needs tfjs 1.x for `tf.fromPixels` (which 1.7.4
+already dropped), so a pose project pins **1.3.1** while an image project keeps
+**4.22.0**; the extension aliases `tf.browser.fromPixels` onto the old name when
+the pinned build lacks it.
+
+Pose projects cost about 13 MB more at load, once. `gtm.classify`,
+`gtm.classifyImage`, `gtm.confidence` and `gtm.isLabel` behave exactly as they
+do for an image model — verified against a real `up/left/right/stop` model:
+`stop` at 0.972 with the four probabilities summing to 1.000000.
+
+What is **not** exposed yet: the keypoints themselves. `estimatePose` returns
+them, so `gtm.posePoint("leftWrist")` would be a small addition to the same
+branch, but no block does it today.
+
 ## Running it
 
 The extension must run **unsandboxed**: the camera is in the page and

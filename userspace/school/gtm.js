@@ -45,31 +45,59 @@
      layers-model, and tfjs loads across versions, but only known versions get
      tested with the WebGL backend this runs on. Bump it deliberately. */
   const TF_VERSION = '4.22.0';
-  const TF_URL = `https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@${TF_VERSION}/dist/tf.min.js`;
+
+  /* Pose projects are a different animal: the model does not take pixels at all,
+     it takes posenet's heatmap + offset tensors (14739 floats for a 17-keypoint
+     model), so the extension cannot classify without the pose estimator. That
+     estimator is Teachable Machine's own runtime -- the version the exported
+     project uses -- rather than a hand-rolled `baseModel.predict`, because the
+     letterbox resize and the channel order have to match training exactly.
+     The pairing is the one Teachable Machine's own docs give -- pose@0.8.3 on
+     tfjs@1.3.1, the last tfjs that still exports `tf.fromPixels` -- while an
+     image project keeps 4.x. */
+  const TM_POSE_VERSION = '0.8.3';
+  const TM_POSE_URL =
+    `https://cdn.jsdelivr.net/npm/@teachablemachine/pose@${TM_POSE_VERSION}/` +
+    'dist/teachablemachine-pose.min.js';
+  const POSE_TF_VERSION = '1.3.1';
 
   const SHARE = 'https://teachablemachine.withgoogle.com/models/';
   const FILE_NAMES = /(model\.json|model\.weights\.bin|metadata\.json)$/i;
 
-  /* -- TensorFlow.js, fetched once ---------------------------------------- */
+  /* A pose project is marked in `metadata.json`; the extra shape check is for
+     the older exports that only carry `modelSettings.posenet`. */
+  function isPose(metadata) {
+    if (!metadata) return false;
+    if (metadata.packageName === '@teachablemachine/pose') return true;
+    return Boolean(metadata.modelSettings && metadata.modelSettings.posenet);
+  }
 
-  let tfPromise = null;
+  /* -- the two libraries, fetched once ------------------------------------ */
 
-  function loadTF() {
-    if (tfPromise) return tfPromise;
-    tfPromise = new Promise((resolve, reject) => {
-      const tf = globalThis.tf;
-      if (tf) return resolve(tf);
+  function injectScript(src, globalName, what, force) {
+    return new Promise((resolve, reject) => {
+      const existing = globalThis[globalName];
+      if (existing && !force) return resolve(existing);
       const script = document.createElement('script');
-      script.src = TF_URL;
+      script.src = src;
       script.async = true;
       script.onload = () => {
-        if (globalThis.tf) resolve(globalThis.tf);
-        else reject(new Error('gtm: TensorFlow.js loaded but defined nothing'));
+        if (globalThis[globalName]) resolve(globalThis[globalName]);
+        else reject(new Error(`gtm: ${what} loaded but defined no ${globalName}`));
       };
-      script.onerror = () =>
-        reject(new Error(`gtm: could not fetch TensorFlow.js from ${TF_URL}`));
+      script.onerror = () => reject(new Error(`gtm: could not fetch ${what} from ${src}`));
       document.head.appendChild(script);
-    }).then(async (tf) => {
+    });
+  }
+
+  const tfPromises = new Map();
+
+  /* `tf.version.tfjs` is the only way to tell which build is already on the
+     page, and the two branches need different ones. */
+  function loadTF(version = TF_VERSION) {
+    const current = globalThis.tf;
+    const loaded = current && current.version && current.version.tfjs;
+    const ready = async (tf) => {
       try {
         await tf.setBackend('webgl');
       } catch (error) {
@@ -77,11 +105,15 @@
       }
       await tf.ready();
       return tf;
-    });
-    tfPromise.catch(() => {
-      tfPromise = null;
-    });
-    return tfPromise;
+    };
+    if (loaded === version) return ready(current);
+    if (!tfPromises.has(version)) {
+      const url = `https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@${version}/dist/tf.min.js`;
+      const promise = injectScript(url, 'tf', `TensorFlow.js ${version}`, true).then(ready);
+      tfPromises.set(version, promise);
+      promise.catch(() => tfPromises.delete(version));
+    }
+    return tfPromises.get(version);
   }
 
   /* -- the share link ----------------------------------------------------- */
@@ -142,6 +174,7 @@
   class GTM {
     constructor() {
       this.model = null;
+      this.poseModel = null;
       this.metadata = null;
       this.state = 'idle';
       this.error = '';
@@ -293,7 +326,6 @@
       this.error = '';
       this.progress = 0;
       try {
-        const tf = await loadTF();
         const response = await fetch(base + 'metadata.json');
         if (!response.ok) {
           throw new Error(
@@ -304,13 +336,32 @@
         if (!metadata || !Array.isArray(metadata.labels) || !metadata.labels.length) {
           throw new Error('gtm: metadata.json has no labels; that is not a Teachable Machine model');
         }
-        const model = await tf.loadLayersModel(base + 'model.json', {
-          onProgress: (fraction) => {
-            this.progress = fraction;
-          },
-        });
-        this.dispose();
-        this.model = model;
+        if (isPose(metadata)) {
+          // Metadata first, then the libraries: which tf.js is correct depends
+          // on the branch, and the pose one needs 1.x.
+          const tf = await loadTF(POSE_TF_VERSION);
+          // The pose runtime was built against a tfjs that still exported
+          // `tf.fromPixels`; 1.7.4 no longer does, and `tf.browser.fromPixels`
+          // is the same function under the name it now uses.
+          if (!tf.fromPixels && tf.browser && tf.browser.fromPixels) {
+            tf.fromPixels = tf.browser.fromPixels.bind(tf.browser);
+          }
+          const tmPose = await injectScript(TM_POSE_URL, 'tmPose', 'the pose runtime');
+          this.progress = 1;
+          // The pose library loads the classifier *and* posenet itself.
+          const poseModel = await tmPose.load(base + 'model.json', base + 'metadata.json');
+          this.dispose();
+          this.poseModel = poseModel;
+        } else {
+          const tf = await loadTF();
+          const model = await tf.loadLayersModel(base + 'model.json', {
+            onProgress: (fraction) => {
+              this.progress = fraction;
+            },
+          });
+          this.dispose();
+          this.model = model;
+        }
         this.metadata = metadata;
         this.labelList = metadata.labels.slice();
         this.loadedFrom = base;
@@ -328,6 +379,10 @@
       if (this.model) {
         this.model.dispose();
         this.model = null;
+      }
+      if (this.poseModel) {
+        this.poseModel.dispose();
+        this.poseModel = null;
       }
       this.metadata = null;
       this.labelList = [];
@@ -426,7 +481,7 @@
     /* -- inference --------------------------------------------------------- */
 
     async run(source) {
-      if (!this.model || !this.metadata) {
+      if ((!this.model && !this.poseModel) || !this.metadata) {
         this.error = 'gtm: load a model first';
         return null;
       }
@@ -437,24 +492,10 @@
       if (this.busy) return this.last;
       this.busy = true;
       try {
-        const tf = await loadTF();
-        const size = this.metadata.imageSize || 224;
-        const canvas = squareOf(source, size);
-        if (!canvas) {
-          this.error = 'gtm: the image has no pixels yet';
-          return null;
-        }
-        const scaledUp = tf.tidy(() => {
-          let input = tf.browser.fromPixels(canvas).toFloat();
-          if (this.metadata.grayscale) input = grayscale(tf, input);
-          return this.model.predict(input.div(127).sub(1).expandDims(0));
-        });
-        const values = await scaledUp.data();
-        scaledUp.dispose();
-        const predictions = [];
-        for (let i = 0; i < values.length && i < this.labelList.length; i += 1) {
-          predictions.push({ label: this.labelList[i], confidence: values[i] });
-        }
+        const predictions = this.poseModel
+          ? await this._runPose(source)
+          : await this._runImage(source);
+        if (!predictions) return null;
         predictions.sort((a, b) => b.confidence - a.confidence);
         this.last = predictions;
         this.error = '';
@@ -465,6 +506,41 @@
       } finally {
         this.busy = false;
       }
+    }
+
+    /* Pose projects classify posenet's own output, not pixels: the estimator
+       resizes, pads and hands back heatmaps + offsets (14739 floats), and the
+       classifier is a two-layer dense net over that. Passing the image itself
+       would be a shape error, which is why the metadata decides the branch. */
+    async _runPose(source) {
+      const { posenetOutput } = await this.poseModel.estimatePose(source);
+      const classes = await this.poseModel.predict(posenetOutput);
+      return classes.map((entry) => ({
+        label: entry.className,
+        confidence: entry.probability,
+      }));
+    }
+
+    async _runImage(source) {
+      const tf = await loadTF();
+      const size = this.metadata.imageSize || 224;
+      const canvas = squareOf(source, size);
+      if (!canvas) {
+        this.error = 'gtm: the image has no pixels yet';
+        return null;
+      }
+      const scaledUp = tf.tidy(() => {
+        let input = tf.browser.fromPixels(canvas).toFloat();
+        if (this.metadata.grayscale) input = grayscale(tf, input);
+        return this.model.predict(input.div(127).sub(1).expandDims(0));
+      });
+      const values = await scaledUp.data();
+      scaledUp.dispose();
+      const predictions = [];
+      for (let i = 0; i < values.length && i < this.labelList.length; i += 1) {
+        predictions.push({ label: this.labelList[i], confidence: values[i] });
+      }
+      return predictions;
     }
 
     async classify() {
