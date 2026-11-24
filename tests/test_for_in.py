@@ -141,6 +141,28 @@ class DiagnosticTests(unittest.TestCase):
             any("W0025" in d for d in codegen.diagnostics), codegen.diagnostics
         )
 
+    def test_a_nested_loop_reusing_a_temp_variable_is_refused(self):
+        source = (
+            "#enable_feature<useTempVariables>;\n"
+            "class a { private n = []; void f(){ for _v in n { for _v in n { x = 1; } } } }"
+        )
+        codegen, _ = compile_source(
+            source, features={"commentMetadata", "useTempVariables"}
+        )
+        self.assertTrue(
+            any("E0074" in d for d in codegen.diagnostics), codegen.diagnostics
+        )
+
+    def test_two_loops_one_after_the_other_may_share_the_variable(self):
+        source = (
+            "#enable_feature<useTempVariables>;\n"
+            "class a { private n = []; void f(){ for _v in n { x = 1; } for _v in n { y = 2; } } }"
+        )
+        codegen, _ = compile_source(
+            source, features={"commentMetadata", "useTempVariables"}
+        )
+        self.assertFalse([d for d in codegen.diagnostics if "E0074" in d])
+
     def test_a_range_is_still_a_range(self):
         _, project = compile_("for i in 1..10 { x = i; }")
         self.assertIn("control_for_each", opcodes(project, "a"))

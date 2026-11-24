@@ -2444,6 +2444,8 @@ class Codegen:
             # `item` reporters have to resolve like a written `notes.length()`.
             self.list_names.add(name)
         if len(names) > 1:
+            # The loop variable stands for a list here and is substituted away,
+            # so there is no counter to clobber.
             return self._emit_for_in_lists(stmt, names)
         return self._emit_for_in_items(stmt, names[0])
 
@@ -2473,6 +2475,15 @@ class Codegen:
         when the project uses them, a sprite variable otherwise.
         """
         self._warn_list_walk(stmt, name)
+        loop_name = ".".join(stmt.var)
+        temp = self._is_temp_name(loop_name)
+        if temp and loop_name.startswith("_") and loop_name in self._active_loops:
+            self.diag(
+                stmt,
+                "E0074",
+                f"temp loop variable {loop_name!r} is already live in an enclosing loop; "
+                "the inner loop would overwrite the outer one",
+            )
         index = A.Name(line=stmt.line, col=stmt.col, parts=(self._for_in_index(),))
         listed = A.Name(line=stmt.line, col=stmt.col, parts=tuple(name.split(".")))
         start = A.Assign(
@@ -2494,7 +2505,13 @@ class Codegen:
             count=A.Call(line=stmt.line, col=stmt.col, receiver=listed, name="length"),
             body=[take, *stmt.body, step],
         )
-        return self._emit_body([start, loop])
+        if temp and loop_name.startswith("_"):
+            self._active_loops.append(loop_name)
+        try:
+            return self._emit_body([start, loop])
+        finally:
+            if temp and loop_name.startswith("_"):
+                self._active_loops.pop()
 
     def _emit_for_in_lists(self, stmt: A.ForIn, names: list[str]) -> list[Block]:
         """``for l in a, b`` -> the body once per list, with ``l`` standing for it.
