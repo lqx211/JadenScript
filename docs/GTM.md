@@ -65,34 +65,51 @@ which is why they are in one place in `gtm.js` and not spread over the blocks.
 
 Labels are compared case-insensitively and trimmed, so `cat` finds `Cat`.
 
-## Pose projects
+## Pose projects, and what decides the branch
 
 An **Image** project and a **Pose** project are not the same kind of model, and
 the difference is not cosmetic:
 
-| | Image / Audio | Pose |
-| --- | --- | --- |
-| classifier input | `[1, 224, 224, 3]` pixels, scaled by 127 | `[1, 14739]` posenet heatmaps + offsets |
-| needs | tfjs layers-model | tfjs **1.3.1** + `@teachablemachine/pose@0.8.3` |
-| extra download | — | posenet MobileNet ≈ 13 MB |
+| | Image | Pose | Audio |
+| --- | --- | --- | --- |
+| classifier input | `[1, 224, 224, 3]` pixels, scaled by 127 | `[1, 14739]` posenet heatmaps + offsets | `[1, N]` spectrogram |
+| extra library | — | `@teachablemachine/pose@0.8.3` | not supported |
+| extra download | — | posenet MobileNet ≈ 13 MB | — |
 
-`metadata.json` says which: `"packageName": "@teachablemachine/pose"` (older
-exports only carry `modelSettings.posenet`). The extension branches on it, so
-`gtm.load(...)` is the same call either way. Feeding pixels to a pose classifier
-is a shape error, which is what the branch avoids.
+**The model topology decides, not `metadata.json`.** The metadata is a hint
+(`"packageName": "@teachablemachine/pose"`, or `modelSettings.posenet` on older
+exports), but an export can omit it, and the failure mode is confusing:
+
+```
+Error: Expected dense_Dense5_input to have 2 dimensions
+       but got array with shape [1,224,224,3]
+```
+
+That is a rank-2 classifier being handed a picture. `gtm.load` now reads
+`batch_input_shape` out of `model.json` before choosing:
+
+* rank 4 → image;
+* rank 2 whose width is a posenet output (4131 / 14739 / 55473, i.e. 9×9, 17×17
+  or 33×33 grid × 51) → pose, even when the metadata says nothing;
+* any other rank 2 → **Audio**, which this extension cannot feed, so it says so
+  by name and width instead of letting TensorFlow.js complain about dimensions.
 
 The pose runtime is Teachable Machine's own, because the letterbox resize, the
 channel order and the heatmap/offset concatenation all have to match training —
 re-implementing that from `baseModel.predict` is how you get a model that loads,
-runs, and is quietly wrong. It needs tfjs 1.x for `tf.fromPixels` (which 1.7.4
-already dropped), so a pose project pins **1.3.1** while an image project keeps
-**4.22.0**; the extension aliases `tf.browser.fromPixels` onto the old name when
-the pinned build lacks it.
+runs, and is quietly wrong.
+
+There is **one** tfjs on the page: **1.3.1**, the version TM's own snippets use
+and the last build that still exports `tf.fromPixels`, which the pose runtime
+calls. Two copies is the case that breaks — a page that loaded a pose model and
+then an image model left the second one dead with `t is not a function` — so the
+pin is deliberately shared (a layers-model from any TM version loads on it).
 
 Pose projects cost about 13 MB more at load, once. `gtm.classify`,
 `gtm.classifyImage`, `gtm.confidence` and `gtm.isLabel` behave exactly as they
 do for an image model — verified against a real `up/left/right/stop` model:
-`stop` at 0.972 with the four probabilities summing to 1.000000.
+`stop` at 0.972 with the four probabilities summing to 1.000000, and an image
+model loading and classifying correctly after it in the same page.
 
 What is **not** exposed yet: the keypoints themselves. `estimatePose` returns
 them, so `gtm.posePoint("leftWrist")` would be a small addition to the same
