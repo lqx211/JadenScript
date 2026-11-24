@@ -1,0 +1,508 @@
+public v31 = 1;
+public v36 = 16;
+public v27 = 1;
+public v34 = 0;
+public v47 = 23;
+public v16 = 0;
+public v39 = 13;
+public v52 = 0;
+public v38 = 4982.500000002812;
+public v46 = "18";
+public v1 = 45;
+public v48 = -10000;
+public v37 = 28;
+public v4 = 1;
+public v44 = 10000;
+public v19 = 200;
+public v5 = 95;
+public v9 = 16;
+public v22 = 23;
+public v6 = 300;
+public v11 = 0;
+public v14 = 50;
+public v49 = 0;
+public v17 = 100;
+public v30 = 90;
+public v20 = -1;
+public v15 = 0;
+public v3 = 34;
+public v26 = ["note894", "sector voice", "tempo844", "30.595", "kernel239", "380493c3a5b9", "lngmx", "sample tick", "voice343", "eAYpfnZs", "inf", "mixer pen", "frame_reset", "channel892", "-148.410", "hfSnr", "EEVsanKON", "costume765", "pPKmkfiY", "033f4d89502a", "loop channel", "-60.818", "-43.921", "KGUgkS", "-inf", "bank note"];
+public v7 = ["144.309", "frame reset", "clone_reset", "patch_stage", "57730", "FymwI", "LKXtRBn", "-21.669", "176.064", "tempo950", "-155.145", "patch sector", "tempo_sample", "hJojUpKYk", "3769d43ec46fb7c9", "a74e47c85a86cb04"];
+public v23 = ["frame_sprite", "17162", "voice channel", "e1d600b4f0b33a23fe72ce2e", "note clone", "47228118", "buffer_reset", "bank405", "patch429", "costume_tempo", "-162.043", "-74.936", "lBHW", "25", "-70.571", "stage855", "108.958", "scene371", "9235", "buffer243", "664291", "121.189", "frame130"];
+
+metadata note Stage at 50,50 350x170: "Configuration for https://turbowarp.org/\nYou can move, resize, and minimize this comment, but don't edit it by hand. This comment can be deleted to remove the stored settings.\n{\"framerate\":60,\"runtimeOptions\":{\"maxClones\":Infinity,\"miscLimits\":true,\"fencing\":true},\"interpolation\":false,\"turbo\":false,\"hq\":true} // _twconfig_";
+metadata watch Stage.translate_getViewerLanguage id="translate_getViewerLanguage" mode=default at 57,75 0x0 hidden;
+metadata default Stage.v36 at 0,0 0x0 shown;
+metadata default Stage.v31 at 223,11 0x0 hidden;
+metadata default Stage.v47 at 0,20 0x0 shown;
+metadata default Stage.v9 at 0,42 0x0 shown;
+metadata slider Stage.v38 at 0,266 0x0 hidden range 0..10000 discrete;
+metadata slider Stage.v16 at 0,66 0x0 shown range 0..3 discrete;
+
+stage: costume=0, volume=100, layer=0, tempo=60, video="on", videoTransparency=50;
+stage {
+    import "assets/cd21514d0531fdffb22204e0ec5ed84a.svg" as backdrop1; // costume centerx=240 centery=180 res=1
+
+    metadata p5 pos 0,0;
+    private void p5(CW1Kcy) { // proccode p5 %b
+        v36 = 2;
+        repeat (5) {
+            v47 += 1;
+        }
+        repeat (7) {
+            v39 += 1;
+        }
+        if (!CW1Kcy) {
+            v38 += 1;
+        }
+        if (38 > 10) {
+            v37 = 0;
+        } else {
+            v37 += 2;
+        }
+        if (!CW1Kcy) {
+            v39 += 1;
+        }
+    }
+
+    metadata p0 pos 0,1200;
+    private void p0(OIy7or) {
+        if (10 > 2) {
+            v44 = 0;
+        } else {
+            v44 += 2;
+        }
+        v27 = OIy7or;
+        if (46 > 39) {
+            v1 = 0;
+        } else {
+            v1 += 2;
+        }
+        if (37 > 17) {
+            v20 = 0;
+        } else {
+            v20 += 2;
+        }
+        v52 = OIy7or;
+    }
+}
+
+s0: name="s0", x=0, y=0, size=100, direction=90, show=0, costume=1, volume=100, layer=1, rotation="all", draggable=0;
+class s0 {
+    import "assets/9afd0771ed382f76af90fa2493c4ec17.png" as "1"; // costume centerx=15 centery=14 res=2
+    import "assets/f5e250886e3bafbbd9bc2398a5e321c5.png" as "2"; // costume centerx=480 centery=360 res=2
+    import "assets/899287dbddd49eddc48cee748dbfa1cc.wav" as "For You - Jake Chudnow"; // sound rate=22050 samples=1929385
+    private v18 = 0;
+    private v12 = 0;
+    private v32 = "18";
+    private v21 = 0;
+    private v53 = 0;
+    private v40 = 0;
+    private v33 = 0;
+    private v0 = 0;
+    private v43 = 0;
+    private v50 = 0;
+    private v41 = 0;
+    private v42 = 0;
+    private v2 = 0;
+    private v29 = 0;
+    private v28 = 0;
+    private v51 = 0;
+    private v10 = 0;
+    private v35 = 0;
+    private v25 = 0;
+
+    metadata greenFlag pos 83,-168;
+    public void greenFlag() {
+        v42 = 9;
+        if (9 == v42) {
+            v46 = v32;
+            v42 = 10;
+        }
+        if (10 == v42) {
+            Control.broadcastAndWait("c2");
+            v42 = 2;
+        }
+        if (18 == v42) {
+            repeat (5) {
+                v25 += 1;
+            }
+        }
+        if (v42 == 2) {
+            while (1) {
+                v31 += 0.50;
+            }
+        }
+    }
+
+    metadata greenFlag pos 826,-150;
+    public void greenFlag() {
+        v21 = 10;
+        if (v21 == 10) {
+            Sound.volume = v17;
+            v21 = 2;
+        }
+        if (v21 == 2) {
+            Sound.playSound("For You - Jake Chudnow");
+            v21 = 3;
+        }
+        if (3 == v21) {
+            while (1) {
+                Sound.playSoundUntilDone("For You - Jake Chudnow");
+            }
+        }
+        if (18 == v21) {
+            v0 += 1;
+        }
+    }
+
+    metadata whenCloned pos 2088,22;
+    public void whenCloned() {
+        v33 = 22;
+        if (v33 == 22) {
+            Looks.switchCostume("1");
+            v33 = 15;
+        }
+        if (91 == v33) {
+            v2 += 1;
+        }
+        if (15 == v33) {
+            Pen.penUp();
+            v33 = 89;
+        }
+        if (v33 == 89) {
+            v40 = Operators.random(v48, v44);
+            v33 = 37;
+        }
+        if (v33 == 37) {
+            v35 = Operators.random(v48, v44);
+            v33 = 9;
+        }
+        if (9 == v33) {
+            v53 = Operators.random(v19, v14);
+            v33 = 24;
+        }
+        if (90 == v33) {
+            v2 += 1;
+        }
+        if (v33 == 24) {
+            Pen.setPenSize(v1 / v53);
+            v33 = 62;
+        }
+        if (62 == v33) {
+            Motion.setXY(v40 / v53, v35 / v53);
+            v33 = 57;
+        }
+        if (v33 == 57) {
+            Pen.setPenColor("#ffffff");
+            v33 = 61;
+        }
+        if (v33 == 61) {
+            Pen.penDown();
+            v33 = 23;
+        }
+        if (v33 == 23) {
+            Looks.show();
+            v33 = 68;
+        }
+        if (v33 == 68) {
+            Looks.setEffect("ghost", v30);
+            v33 = 54;
+        }
+        if (v33 == 54) {
+            v12 = v20;
+            v33 = 82;
+        }
+        if (v33 == 82) {
+            v28 = v52;
+            v33 = 53;
+        }
+        if (53 == v33) {
+            while (!(v28 > v6 || (v53 < v27 || Sensing.touching("_edge_")))) {
+                Pen.setPenSize(v22 / v53);
+                Motion.setXY(v40 / v53, v35 / v53);
+                if (Sensing.mouseDown()) {
+                    v53 -= 0.7;
+                }
+                if (Sensing.keyPressed("space")) {
+                    v18 += (Sensing.mouseX() * v22 - v40) / (Operators.math("abs", v39 - v53) * v37);
+                    v51 += (Sensing.mouseY() * v22 - v35) / (Operators.math("abs", v39 - v53) * v37);
+                    v12 += (v39 - v12) / (Operators.math("abs", v39 - v53) * v37);
+                    v18 = v18 * 0.97;
+                    v51 = v51 * 0.97;
+                    v12 = v12 * 0.97;
+                }
+                v53 += v12;
+                v40 += v18;
+                v35 += v51;
+                v28 += v27;
+            }
+            v33 = 19;
+        }
+        if (92 == v33) {
+            if (15 > 24) {
+                v2 = 0;
+            } else {
+                v2 += 2;
+            }
+        }
+        if (v33 == 19) {
+            Control.deleteThisClone();
+        }
+    }
+
+    metadata greenFlag pos 118,146;
+    public void greenFlag() {
+        while (1) {
+            v38 += 0.1;
+        }
+    }
+
+    metadata greenFlag pos -358,218;
+    public void greenFlag() {
+        v43 = 11;
+        if (18 == v43) {
+            v10 -= 1;
+        }
+        if (11 == v43) {
+            v47 = v26.get(25);
+            v43 = 7;
+        }
+        if (7 == v43) {
+            v9 = v26.get(11);
+            v43 = 13;
+        }
+        if (v43 == 13) {
+            while (1) {
+                Control.wait(1);
+                v36 = v31;
+                v31 = v52;
+                if (v36 > v47) {
+                    v47 = v36;
+                }
+                if (v36 < v9) {
+                    v9 = v36;
+                }
+            }
+        }
+    }
+
+    metadata greenFlag pos 1022,248;
+    public void greenFlag() {
+        while (1) {
+            if (Sensing.keyPressed("space")) {
+                v38 -= 0.25;
+            }
+        }
+    }
+
+    metadata greenFlag pos 682,470;
+    public void greenFlag() {
+        while (1) {
+            if (Sensing.mouseDown()) {
+                v38 += 0.50;
+            }
+        }
+    }
+
+    metadata greenFlag pos 241,542;
+    public void greenFlag() {
+        v29 = 40;
+        if (48 == v29) {
+            repeat (9) {
+                v41 += 1;
+            }
+        }
+        if (40 == v29) {
+            Sensing.resetTimer();
+            v29 = 29;
+        }
+        if (49 == v29) {
+            v41 -= 1;
+        }
+        if (v29 == 50) {
+            if (25 > 26) {
+                v41 = 0;
+            } else {
+                v41 += 2;
+            }
+        }
+        if (29 == v29) {
+            Pen.setPenColor("#ffffff");
+            v29 = 27;
+        }
+        if (v29 == 27) {
+            Pen.eraseAll();
+            v29 = 1;
+        }
+        if (1 == v29) {
+            Pen.penUp();
+            v29 = 19;
+        }
+        if (v29 == 19) {
+            Looks.switchCostume("2");
+            v29 = 44;
+        }
+        if (44 == v29) {
+            Looks.hide();
+            v29 = 47;
+        }
+        if (v29 == 47) {
+            Motion.setXY(v52, v52);
+            v29 = 42;
+        }
+        if (42 == v29) {
+            while (1) {
+                Control.createClone("_myself_");
+                Control.createClone("_myself_");
+                Motion.setXY(v52, v52);
+                if (Sensing.mouseDown()) {
+                    Looks.setEffect("ghost", v5);
+                } else {
+                    Looks.setEffect("ghost", v3);
+                }
+                Pen.stamp();
+            }
+        }
+    }
+
+    metadata p2 pos 0,942;
+    private void p2(aTBivN) { // proccode p2 %b
+        v17 -= 1;
+        v7.add(join(92, 39));
+        if (!aTBivN) {
+            v16 += 1;
+        }
+        repeat (6) {
+            v5 += 1;
+        }
+        if (!aTBivN) {
+            v49 += 1;
+        }
+        repeat (5) {
+            v15 += 1;
+        }
+        if (!aTBivN) {
+            v16 += 1;
+        }
+    }
+
+    metadata p4 pos 0,2542;
+    private void p4(HIRWxH) {
+        v5 -= 1;
+        v53 = HIRWxH;
+        repeat (7) {
+            v36 += 1;
+        }
+    }
+
+    loose { // at 337,138
+        // data_setvariableto
+                v38 = v52;
+    }
+}
+
+s1: name="s1", x=0, y=0, size=100, direction=90, show=1, costume=0, volume=100, layer=2, rotation="all", draggable=0;
+class s1 {
+    import "assets/983caf443c13d0eff9378c8e493caab9.png" as Instructions; // costume centerx=358 centery=38 res=2
+    import "assets/0a9b8cc2b49d481d99d145ab24849b7c.wav" as "Warp.mp3"; // sound rate=44100 samples=56384
+    import "assets/9f51e205da0b64ea76d3a1e260d31b93.wav" as "WarpOver.mp3"; // sound rate=44100 samples=43904
+    private v24 = "";
+    private v8 = 0;
+    private v45 = "18";
+    private v13 = 0;
+
+    metadata c0 pos 1052,22;
+    public void c0() { // hook: broadcast c0
+        Looks.hide();
+    }
+
+    metadata greenFlag pos -22,281;
+    public void greenFlag() {
+        v13 = 16;
+        if (16 == v13) {
+            Control.wait(2);
+            v13 = 49;
+        }
+        if (49 == v13) {
+            Looks.setEffect("ghost", v17);
+            v13 = 44;
+        }
+        if (v13 == 44) {
+            Looks.hide();
+            v13 = 37;
+        }
+        if (v13 == 37) {
+            Looks.goToFront();
+            v13 = 46;
+        }
+        if (v13 == 54) {
+            if (19 > 40) {
+                v8 = 0;
+            } else {
+                v8 += 2;
+            }
+        }
+        if (46 == v13) {
+            Looks.show();
+            v13 = 8;
+        }
+        if (8 == v13) {
+            repeat (4) {
+                Control.wait(0.03);
+            }
+            v13 = 52;
+        }
+        if (v13 == 52) {
+            Control.wait(4);
+            v13 = 28;
+        }
+        if (28 == v13) {
+            repeat (4) {
+                Control.wait(0.03);
+            }
+            v13 = 12;
+        }
+        if (12 == v13) {
+            Looks.hide();
+        }
+    }
+
+    metadata greenFlag pos 323,986;
+    public void greenFlag() {
+    }
+
+    metadata p1 pos 0,1786;
+    private void p1(NAvRsu) {
+        v39 += 1;
+        v22 = 1;
+    }
+
+    metadata p3 pos 0,3786;
+    private void p3(Bbi2Vz, o0O6JO, ch6gc4) { // proccode p3 %s %b %b
+        if (8 > 11) {
+            v31 = 0;
+        } else {
+            v31 += 2;
+        }
+        v39 = Bbi2Vz;
+        repeat (7) {
+            v47 += 1;
+        }
+        v30 = Bbi2Vz;
+        if (33 > 7) {
+            v3 = 0;
+        } else {
+            v3 += 2;
+        }
+        if (!ch6gc4) {
+            v27 += 1;
+        }
+        v7.add(join(87, 72));
+    }
+
+    loose { // at -70,233
+        // sound_setvolumeto
+                Sound.volume = v17;
+    }
+}

@@ -1,0 +1,35 @@
+class trash {
+    public t0 = [];
+    public t1 = [];
+    public t2 = [];
+    public t3 = 14;
+    public t4 = 1952;
+    public t5 = 105391;
+    public t6 = -2147483648;
+    public t7 = 2147483647;
+    public void p0(pp0,pp1,pp2,pp3){
+        if (pp0==pp1 && pp2==pp3) { 
+            while (pp0!=pp1 && pp3!=pp3){
+                switch v15 {
+                    case 0 {v21 = 9;} 
+                    case 1 {v19 = 16;}
+                    case 2 {v119 = 2;}
+                    case 3 {v166 = -1;}
+                }
+            }
+        }
+    }
+    public void trash0(tt) {
+        Looks.changeSize(v102);
+        Looks.clearGraphicEffects(v114);
+        Looks.goToBack(v115);
+        Looks.say(v10);
+        Looks.show();
+        Control.clone();
+        Control.createClone();
+        Control.wait(v15);
+    }
+    public void greenFlag(){
+        p0(v2,v10,v51,v38);
+    }
+}

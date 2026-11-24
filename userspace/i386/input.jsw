@@ -94,16 +94,18 @@ class Input {
         }
     }
 
-    /* One make code into the controller's output buffer, extended prefix and
-     * all: the same three bytes whether this is the press or a repeat. */
+    /* One make code into the controller's queue, extended prefix and all: the same
+     * three bytes whether this is the press or a repeat. The queue is what port
+     * 0x60 hands out, so nothing here guesses which byte the guest is asking for.
+     */
     private void keySend(index) { // warp
         _code = K.codes.get(index) + 0;
         if (K.ext.get(index) == 1) {
             K.fifo.add(224);               // the 0xE0 of a set-1 extended key
         }
         K.fifo.add(_code);
-        X.port60 = _code;
-        X.port64 = 1;
+        X.port60 = _code;                  // what the monitor shows: the last one
+        X.port64 = 1;                      // the controller's output buffer is full
         K.sent = K.sent + 1;
         K.last = K.names.get(index);
     }

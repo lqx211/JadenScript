@@ -83,6 +83,35 @@ def meow_disk() -> bytes:
     return disk
 
 
+def sector_disk(path: Path) -> bytes:
+    """A staged disk whose sector 0 is any 512-byte boot sector on disk.
+
+    This is how a sector that was written somewhere else gets booted without
+    being copied into the repository: the only things the machine insists on are
+    512 bytes and 0xAA55 at the end.
+    """
+    blob = path.read_bytes()
+    if len(blob) > SECTOR:
+        raise SystemExit(f"{path.name} is {len(blob)} bytes; a boot sector is at most 512")
+    if blob[510:512] != b"\x55\xaa":
+        raise SystemExit(f"{path.name} does not end with 0xAA55, so int 19h would not jump to it")
+    return blob.ljust(DISK_SECTORS * SECTOR, b"\0")
+
+
+def raw_disk(path: Path) -> bytes:
+    """A whole disk image: sector 0 is the boot sector and the rest is whatever
+    the sector reads back with int 13h. This is the shape a sample's bootkit
+    comes in -- code in sector 0, payload in the sectors after it -- so it is
+    also the shape a disk has to be staged in to boot one."""
+    blob = path.read_bytes()
+    if len(blob) > DISK_SECTORS * SECTOR:
+        raise SystemExit(f"{path.name} is {len(blob):,} bytes; the staged disk holds "
+                         f"{DISK_SECTORS * SECTOR:,}")
+    if blob[510:512] != b"\x55\xaa":
+        raise SystemExit(f"{path.name} does not end sector 0 with 0xAA55")
+    return blob.ljust(DISK_SECTORS * SECTOR, b"\0")
+
+
 def boot_disk(blob: bytes) -> bytes:
     """A staged disk whose sector 0 is the sector under test.
 
@@ -143,9 +172,21 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--steps", type=int, default=200_000)
     parser.add_argument("--meow", action="store_true",
                         help="stage the cat sector as the boot sector")
+    parser.add_argument("--boot", metavar="SECTOR",
+                        help="stage this 512-byte sector as the boot sector")
+    parser.add_argument("--disk", metavar="IMAGE",
+                        help="stage this raw disk image (sector 0 boots, the rest is readable)")
     args = parser.parse_args(argv)
 
-    image = build(meow_disk() if args.meow else None)
+    if args.disk:
+        staged = raw_disk(Path(args.disk).expanduser())
+        image = build(staged)
+    elif args.boot:
+        staged = sector_disk(Path(args.boot).expanduser())
+        image = build(staged)
+    else:
+        staged = meow_disk() if args.meow else None
+        image = build(staged)
     print(f"image {len(image):,} bytes: bios {BIOS.name}, "
           f"disk {DISK_SECTORS} sectors at {DISK_AT:#07x}")
     if args.out:
@@ -154,7 +195,7 @@ def main(argv: list[str]) -> int:
     OUT.parent.mkdir(parents=True, exist_ok=True)
     OUT.write_text(json.dumps(list(image)), encoding="utf-8")
     SRC.write_text("i386: bios.elf + mbr.elf\n", encoding="utf-8")
-    emit_jsw(meow_disk() if args.meow else None)
+    emit_jsw(staged)
     if args.check:
         return check(image, args.steps)
     return 0

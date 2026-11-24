@@ -1,0 +1,741 @@
+// Paste a song into a running project.
+//
+// A published Scratch project cannot read a file, so the only way in is text the
+// user hands over at run time: `ask` shows an input box, and what is typed into
+// it is the song. The format is a **Base64 MIDI file** -- 4 characters carry 3
+// bytes, all of them ASCII, so a copy and paste cannot mangle it.
+//
+// An empty answer means "play the one that is built in": those lists were
+// compiled with the project and are already the event stream, so this script
+// only has to leave them alone.
+//
+// The parse is three passes, and that is what makes it possible in blocks at
+// all -- none of them re-reads data that changed under it:
+//
+//   1. text  -> bytes              `Load.data`, one byte per item
+//   2. bytes -> MIDI events        `Load.b*`, eleven parallel lists, in file
+//                                  order (which a MIDI interleaves by track)
+//   3. events -> one index per tick  a counting sort, because `dispatch` walks
+//                                  the stream in tick order
+//
+// Every step is `// warp`: a pass over a file must not be interrupted by a
+// frame, or the clock would read half-filled lists.
+//
+// The scale is the same one that bounds a built project -- 300 clones, and a
+// file a person is willing to paste. A few thousand notes parses in about a
+// second; a black MIDI with millions of notes is a build, not a paste.
+
+loader: x=0, y=0, size=100, direction=90, show=0;
+class loader {
+    private _i;
+    private _n;
+    private _want;                     // 1 the built-in, 2 a paste
+    private _x;
+    private _ch;
+    private _v;
+    private _b0;
+    private _b1;
+    private _b2;
+    private _b3;
+    private _byte;
+    private _run;
+    private _type;
+    private _chan;
+    private _len;
+    private _tick;
+    private _end;
+    private _kind;
+    private _a;
+    private _b;
+    private _id;
+    private _at;
+    private _put;
+    private _track;
+    private _ctrl;
+    private _semis;
+    private _sprite;
+    private _slot;
+    private _packed;
+    private _bank;
+    private _program;
+    private _on;
+    private _mc;                       // the table cell a text byte lands on
+    private _tend;                     // the end of a text meta, which is not a track's end
+
+    // -- 1. text -> bytes -------------------------------------------------
+
+    // Two hex digits are one byte, which is twice the text of Base64 and the
+    // only encoding this can use: Scratch compares list items and strings
+    // *case-insensitively* -- "item # of (a)" finds the "A" slot -- so Base64's
+    // 26 upper and 26 lower pairs would collapse into one another. Hex has no
+    // such pair: A and a are the same value, and the folded alphabet below gives
+    // the right one either way.
+    private void hexDigit() { // warp
+        _x = Hex.digits.indexOf(_ch) - 1;
+        if (_x >= 16) {
+            _x -= 16;
+        }
+    }
+
+    private void decode() { // warp
+        Load.error = 0;
+        Load.bytes = 0;
+        Load.data = [];
+        _i = 1;
+        _n = Operators.length(Load.text);
+        while (_i <= _n && Load.error == 0) {
+            _ch = Operators.letterOf(_i, Load.text);
+            hexDigit();
+            if (_x < 0 || _x > 15) {
+                // Anything that is not a hex digit is a separator, and skipping
+                // it is also what makes a wrapped paste work. It has to be
+                // tested this way round: `_ch == " "` is *true* for "0", because
+                // Scratch compares a string to a string by trying numbers first
+                // and both "0" and " " are 0. Matching the alphabet instead is
+                // immune to that, and a hex dump is a third zeros.
+                _i += 1;
+            } else {
+                _b0 = _x;
+                _i += 1;
+                _v = 1;
+                while (_v == 1) {
+                    if (_i > _n) {
+                        Load.error = 2;              // an odd number of digits
+                        _v = 0;
+                    } else {
+                        _ch = Operators.letterOf(_i, Load.text);
+                        hexDigit();
+                        if (_x < 0 || _x > 15) {
+                            _i += 1;
+                        } else {
+                            Load.data.add(_b0 * 16 + _x);
+                            Load.bytes += 1;
+                            _i += 1;
+                            _v = 0;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // -- 2. bytes -> events -----------------------------------------------
+
+    // Reading the *last* byte leaves the cursor one past the end, which is
+    // correct; only a read beyond that is the end of the file.
+    private void byte() { // warp
+        _byte = Load.data.get(Load.pos) + 0;
+        Load.pos += 1;
+        if (Load.pos > Load.bytes + 1) {
+            Load.pos = 1;
+            Load.error = 3;
+        }
+    }
+
+    private void be32() { // warp
+        _x = 0;
+        repeat (4) {
+            byte();
+            _x = _x * 256 + _byte;
+        }
+    }
+
+    private void be16() { // warp
+        _x = 0;
+        repeat (2) {
+            byte();
+            _x = _x * 256 + _byte;
+        }
+    }
+
+    // Variable-length quantity: seven bits a byte, the high bit means "more".
+    private void vlq() { // warp
+        _x = 0;
+        _v = 1;
+        while (_v == 1) {
+            byte();
+            _x = _x * 128 + (_byte % 128);
+            if (_byte < 128) {
+                _v = 0;
+            }
+        }
+    }
+
+    // `_len` bytes as text, into `Load.name`. One character per byte through the
+    // printable table, which is the only way to turn a code into a glyph in this
+    // language -- there is no `chr`.
+    private void textBytes() { // warp
+        Load.name = "";
+        // Its own end, not `_end`: `chunk` holds the track's end in `_end` while
+        // it walks the events, and a text meta that reused it would end the
+        // track early -- which read as "the file has no notes".
+        _tend = Load.pos + _len;
+        while (Load.pos < _tend && Load.error == 0) {
+            byte();
+            if (_byte < 32 || _byte > 126) {
+                _mc = 1;                             // the table's first cell: space
+            } else {
+                _mc = _byte - 31;
+            }
+            Load.name = join(Load.name, Char.text.get(_mc));
+        }
+        if (Load.pos > _tend) {
+            Load.pos = _tend;
+        }
+    }
+
+    // The sample a note plays: the bank's own table, indexed by (kit, program,
+    // note) -- the same lookup the build-time converter does, which a project
+    // parsing after load cannot do for itself.
+    private void pianoLookup() { // warp
+        _program = Load.prog.get(_chan + 1) + 0;
+        _bank = 0;
+        if (_chan == 9) {
+            _bank = 1;                           // channel 10 is the drum kit
+        }
+        _at = (_bank * 128 + _program) * 128 + _a + 1;
+        _packed = Bank.voice.get(_at) + 0;
+        // -1 is "this preset has no sample for this note at all" -- a drum kit
+        // outside its range. Slot 0 is a real sample, so 0 cannot say that, and
+        // a fake index would play the wrong sound at the wrong pitch.
+        _sprite = -1;
+        _slot = 0;
+        _semis = 0;
+        if (_packed >= 0) {
+            _sprite = Operators.math("floor", _packed / 100000);
+            _slot = _packed % 100000;
+        }
+        // Read now: the caller reuses `_at` for the pending-voice table, and a
+        // correction taken from *that* index is a sample it does not belong to.
+        if (_packed >= 0) {
+            _semis = Bank.semis.get(_at) + 0;
+        }
+    }
+
+    // One event at the cursor. `_kind` is what the player will see, or -1 for
+    // something the player does not model and only has to skip.
+    private void event() { // warp
+        vlq();
+        _tick += _x;
+        byte();
+        _kind = -1;
+        _a = 0;
+        _b = 0;
+        if (_byte >= 128) {
+            _run = _byte;
+        } else {
+            Load.pos -= 1;                       // running status: reuse the last
+            _byte = _run;
+        }
+        _type = Operators.math("floor", _byte / 16);
+        _chan = _byte % 16;
+        if (_type == 8) {
+            byte();
+            _a = _byte;
+            byte();
+            _kind = 1;
+        } elif (_type == 9) {
+            byte();
+            _a = _byte;
+            byte();
+            if (_byte > 0) {
+                _kind = 0;
+                _b = _byte;
+            } else {
+                _kind = 1;                       // velocity 0 is a note off
+            }
+        } elif (_type == 10) {
+            byte();
+            byte();
+        } elif (_type == 11) {
+            // The controller picks the kind; the *value* is what the player
+            // reads, because `Mix.vol` and `Mix.pan` are set straight from it.
+            byte();
+            _ctrl = _byte;
+            byte();
+            _a = _byte;
+            if (_ctrl == 7) {
+                _kind = 4;
+            } elif (_ctrl == 10) {
+                _kind = 5;
+            } elif (_ctrl == 64) {
+                _kind = 7;
+            } elif (_ctrl == 11) {
+                _kind = 9;
+            }
+        } elif (_type == 12) {
+            byte();
+            _a = _byte;
+            _kind = 2;
+        } elif (_type == 13) {
+            byte();
+        } elif (_type == 14) {
+            byte();
+            _b = _byte;
+            byte();
+            _a = (_byte * 128 + _b) - 8192;
+            _kind = 3;
+        } else {
+            if (_byte == 255) {                  // meta
+                byte();
+                _type = _byte;
+                vlq();
+                _len = _x;
+                if (_type == 81) {
+                    be16();
+                    _b = _x;
+                    byte();
+                    _b = _b * 256 + _byte;       // microseconds per beat
+                    _a = Operators.round(60000000 / _b);
+                    _kind = 6;
+                    if (Load.tempo == 0) {
+                        Load.tempo = _a;
+                    }
+                    _chan = -1;                  // tempo belongs to no channel
+                    _b = 0;
+                } elif (_type == 3 || _type == 5) {
+                    // A sequence name or a lyric -- the two strings the debug
+                    // block shows. They are plain ASCII, and the pen font wants
+                    // characters, so each byte goes through `Char.text` (the
+                    // printable set in code order). A control byte or a byte
+                    // past the table becomes a space rather than ending the
+                    // string: a file with a stray 0x0A in a lyric is common.
+                    textBytes();
+                    if (_type == 3) {
+                        // The first name wins, and only while nothing has
+                        // claimed the title: the conductor track writes the
+                        // song's name, the other tracks write their own. Into a
+                        // buffer and not into `Song.title` -- `Load.name` is
+                        // reused by the next text meta, so a lyric would end up
+                        // as the title.
+                        if (Load.named == 0) {
+                            Load.tname = Load.name;
+                            Load.named = 1;
+                        }
+                    } else {
+                        // Into the loader's own pair, not the player's lists:
+                        // a paste that turns out to be broken must leave the
+                        // song that is playing (and its lyrics) alone, and
+                        // `commitMeta` is what moves them across once the whole
+                        // parse has succeeded.
+                        Load.lysTick.add(Operators.round(_tick * Load.scale));
+                        Load.lysText.add(Load.name);
+                    }
+                } else {
+                    Load.pos += _len;
+                }
+            } else {
+                vlq();
+                Load.pos += _x;
+            }
+        }
+        if (Load.error != 0) {
+            _kind = -1;
+        }
+        if (_kind == 0) {
+            // A voice id off the free list. The note-off has to find the same
+            // clone, and two notes that overlap must not share an id, so ids are
+            // handed out and returned rather than derived.
+            _id = -1;
+            if (Load.free.length() > 0) {
+                _id = Load.free.get(1) + 0;
+                Load.free.delete(1);
+                pianoLookup();
+                if (_sprite < 0) {
+                    // The preset has no sample for this note. Hand the voice
+                    // back and emit nothing: a dropped note-on takes its
+                    // note-off with it (the pending table never sees it), which
+                    // is exactly what the free list running dry already does.
+                    Load.free.add(_id);
+                } else {
+                    _at = _chan * 128 + _a + 1;
+                    Load.pendV.set(_at, _id + 1);
+                    Load.pendA.set(_at, Load.bk.length() + 1);
+                    Load.ba.add(Operators.round(_tick * Load.scale));
+                    Load.bk.add(0);
+                    Load.bc.add(_chan);
+                    Load.bn.add(_a);
+                    Load.bg.add(_b);
+                    Load.bv.add(_id);
+                    Load.bl.add(0);
+                    Load.bs.add(_sprite);
+                    Load.bo.add(_slot);
+                    Load.bm.add(_semis);
+                    Load.notes += 1;
+                }
+            }
+        } elif (_kind == 1) {
+            _at = _chan * 128 + _a + 1;
+            _v = Load.pendV.get(_at) + 0;
+            if (_v > 0) {
+                _id = _v - 1;
+                Load.pendV.set(_at, 0);
+                if (_id >= 0) {
+                    Load.free.add(_id);
+                }
+                _on = Load.pendA.get(_at) + 0;
+                if (_on > 0) {
+                    // A note never lasts nothing: the keyboard fades a lit key by
+                // dividing by this, and a zero-length line is not drawable
+                _len = Operators.round(_tick * Load.scale) - (Load.ba.get(_on) + 0);
+                if (_len < 1) {
+                    _len = 1;
+                }
+                Load.bl.set(_on, _len);
+                }
+                Load.ba.add(Operators.round(_tick * Load.scale));
+                Load.bk.add(1);
+                Load.bc.add(_chan);
+                Load.bn.add(_a);
+                Load.bg.add(0);
+                Load.bv.add(_id);
+                Load.bl.add(0);
+                    Load.bs.add(0);
+                Load.bo.add(0);
+                Load.bm.add(0);
+            }
+        } elif (_kind == 2) {
+            Load.prog.set(_chan + 1, _a);
+            Load.ba.add(Operators.round(_tick * Load.scale));
+            Load.bk.add(2);
+            Load.bc.add(_chan);
+            Load.bn.add(_a);
+            Load.bg.add(0);
+            Load.bv.add(0);
+            Load.bl.add(0);
+            Load.bs.add(0);
+            Load.bo.add(0);
+            Load.bm.add(0);
+        } elif (_kind > 2) {
+            Load.ba.add(Operators.round(_tick * Load.scale));
+            Load.bk.add(_kind);
+            Load.bc.add(_chan);
+            Load.bn.add(_a);
+            Load.bg.add(_b);
+            Load.bv.add(0);
+            Load.bl.add(0);
+            Load.bs.add(0);
+            Load.bo.add(0);
+            Load.bm.add(0);
+        }
+    }
+
+    private void chunk() { // warp
+        be32();
+        _len = _x;
+        _run = 0;
+        _tick = 0;
+        _end = Load.pos + _len;
+        while (Load.pos < _end && Load.error == 0) {
+            event();
+        }
+        Load.pos = _end;
+    }
+
+    private void parse() { // warp
+        Load.error = 0;
+        Load.pos = 1;
+        Load.notes = 0;
+        Load.ba = [];
+        Load.bk = [];
+        Load.bc = [];
+        Load.bn = [];
+        Load.bg = [];
+        Load.bv = [];
+        Load.bl = [];
+        Load.bs = [];
+        Load.bo = [];
+        Load.bm = [];
+        Load.free = [];
+        Load.prog = [];
+        Load.pendV = [];
+        Load.pendA = [];
+        _i = 0;
+        while (_i < 2048) {
+            Load.pendV.add(0);
+            Load.pendA.add(0);
+            _i += 1;
+        }
+        _i = 0;
+        while (_i < 16) {
+            Load.prog.add(0);
+            _i += 1;
+        }
+        _i = 0;
+        while (_i < Player.maxVoices) {
+            Load.free.add(_i);
+            _i += 1;
+        }
+        _track = 0;
+        Load.tempo = 0;
+        Load.name = "";
+        Load.tname = "";
+        Load.named = 0;
+        Load.lysTick = [];
+        Load.lysText = [];
+        be32();                                  // 'MThd'
+        if (_x != 1297377380) {
+            Load.error = 4;                      // not a MIDI file
+        } else {
+            be32();
+            be16();
+            be16();
+            be16();
+            Load.ppq = _x;
+            if (Load.ppq <= 0) {
+                Load.error = 5;
+            } else {
+                Load.scale = 16 / Load.ppq;      // 1/16-beat ticks per MIDI tick
+            }
+        }
+        while (Load.pos < Load.bytes - 3 && Load.error == 0) {
+            _x = Load.data.get(Load.pos + 3) + 0;
+            // a chunk id is four bytes; 'MTrk' is the only one with events
+            if (_x == 107 && Load.data.get(Load.pos + 2) + 0 == 114 &&
+                Load.data.get(Load.pos + 1) + 0 == 84 && Load.data.get(Load.pos) + 0 == 77) {
+                Load.pos += 4;
+                _track += 1;
+                chunk();
+            } else {
+                Load.pos += 4;
+                be32();
+                _len = _x;
+                Load.pos += _len;
+            }
+        }
+    }
+
+    // -- 3. events -> one list per tick ------------------------------------
+
+    // Counting sort. `dispatch` walks the stream in tick order, and a MIDI file
+    // interleaves its tracks, so file order is not playable order. One pass
+    // counts each tick, one turns the counts into start offsets, one places --
+    // linear, where sorting the buffer itself would not be.
+    private void byTick() { // warp
+        Load.ticks = 0;
+        _i = 1;
+        while (_i <= Load.bk.length()) {
+            _v = Load.ba.get(_i) + 0;
+            if (_v > Load.ticks) {
+                Load.ticks = _v;
+            }
+            _i += 1;
+        }
+        Load.count = [];
+        _i = 0;
+        while (_i <= Load.ticks) {
+            Load.count.add(0);
+            _i += 1;
+        }
+        _i = 1;
+        while (_i <= Load.bk.length()) {
+            _v = Load.ba.get(_i) + 1;
+            Load.count.set(_v, Load.count.get(_v) + 1);
+            _i += 1;
+        }
+        Load.at = [];
+        _put = 1;
+        _i = 1;
+        while (_i <= Load.ticks + 1) {
+            Load.at.add(_put);
+            _put += Load.count.get(_i);
+            _i += 1;
+        }
+        // pre-size every destination, so a placement is a replace: an append
+        // would put the events back in file order
+        Player.EvTick.clear();
+        Player.EvKind.clear();
+        Player.EvChan.clear();
+        Player.EvA.clear();
+        Player.EvB.clear();
+        Player.EvVoice.clear();
+        Player.EvLen.clear();
+        Player.EvTrk.clear();
+        Player.EvSprite.clear();
+        Player.EvSlot.clear();
+        Player.EvSemis.clear();
+        _i = 1;
+        while (_i <= Load.bk.length()) {
+            Player.EvTick.add(0);
+            Player.EvKind.add(0);
+            Player.EvChan.add(0);
+            Player.EvA.add(0);
+            Player.EvB.add(0);
+            Player.EvVoice.add(0);
+            Player.EvLen.add(0);
+            Player.EvTrk.add(0);
+            Player.EvSprite.add(0);
+            Player.EvSlot.add(0);
+            Player.EvSemis.add(0);
+            _i += 1;
+        }
+        // Two passes over the buffer, note-offs first: inside one tick the
+        // voices have to be handed back before the new notes ask for them, and
+        // a stable pass keeps every other pair of events in file order.
+        _v = 0;
+        while (_v < 2) {
+            _i = 1;
+            while (_i <= Load.bk.length()) {
+                if ((_v == 0) == (Load.bk.get(_i) + 0 == 1)) {
+                    _at = Load.ba.get(_i) + 1;
+                    _put = Load.at.get(_at);
+                    Load.at.set(_at, _put + 1);
+                    Player.EvTick.set(_put, Load.ba.get(_i));
+                    Player.EvKind.set(_put, Load.bk.get(_i));
+                    Player.EvChan.set(_put, Load.bc.get(_i));
+                    Player.EvA.set(_put, Load.bn.get(_i));
+                    Player.EvB.set(_put, Load.bg.get(_i));
+                    Player.EvVoice.set(_put, Load.bv.get(_i));
+                    Player.EvLen.set(_put, Load.bl.get(_i));
+                    Player.EvTrk.set(_put, Load.bc.get(_i));
+                    Player.EvSprite.set(_put, Load.bs.get(_i));
+                    Player.EvSlot.set(_put, Load.bo.get(_i));
+                    Player.EvSemis.set(_put, Load.bm.get(_i));
+                }
+                _i += 1;
+            }
+            _v += 1;
+        }
+    }
+
+    // -- the green-flag entry ----------------------------------------------
+
+    metadata onLoad pos 0,0;
+    // The built-in song as hex, reassembled from its chunks. Only needed when
+    // the lists no longer hold it -- after a paste, "press Enter for the
+    // built-in one" has to mean something, and the parse below is the only
+    // other copy there is.
+    private void builtinText() { // warp
+        Load.text = "";
+        _i = 1;
+        while (_i <= Song.hex.length()) {
+            Load.text = join(Load.text, Song.hex.get(_i));
+            _i += 1;
+        }
+    }
+
+    public void onLoad() { // hook: broadcast Music.load
+        Load.mode = 0;
+        Load.error = 0;
+        Load.text = "";
+        // The settings page polls the keyboard as well, so it has to keep its
+        // hands off while the input box is up -- a hex paste contains no `s`
+        // or `q`, but a typo does, and `q` stops the project.
+        Load.ask = 1;
+        Sensing.ask("Song: paste a MIDI file as hex, or press Enter for the built-in one");
+        Load.text = Sensing.answer;
+        Load.ask = 0;
+        _want = 2;
+        if (Operators.length(Load.text) == 0) {
+            // Enter. The lists still hold the built-in unless a paste replaced
+            // them, and `Load.src` is what remembers which -- so the usual case
+            // costs nothing and the "put it back" case re-parses the built-in.
+            _want = 1;
+            if (Load.src != 1) {
+                builtinText();
+            }
+        }
+        if (Operators.length(Load.text) > 0) {
+            decode();
+            if (Load.error == 0) {
+                parse();
+                Load.errAt = Load.pos;
+            }
+            if (Load.error == 0) {
+                byTick();
+                notes();
+                if (Note.tick.length() == 0) {
+                    Load.error = 6;
+                }
+            }
+            if (Load.error == 0) {
+                // The lists are now this song's; a paste wins, a restored
+                // built-in is the built-in again.
+                Load.src = _want;
+                if (_want == 2) {
+                    Load.mode = 1;
+                }
+                commitMeta();
+            }
+            // A failed paste leaves the lists alone -- nothing has been written
+            // to them yet -- so whatever was playing still is.
+        }
+    }
+
+    // What the debug block shows about this file, once it is the one playing:
+    // its name, its size and its lyrics. `Load.bytes` is the decoded length, so
+    // both a paste and the built-in hex report the file they really are.
+    private void commitMeta() { // warp
+        Song.LyricTick.clear();
+        Song.LyricText.clear();
+        _i = 1;
+        while (_i <= Load.lysText.length()) {
+            Song.LyricTick.add(Load.lysTick.get(_i));
+            Song.LyricText.add(Load.lysText.get(_i));
+            _i += 1;
+        }
+        Song.lyricCount = Song.LyricText.length();
+        Piano.lyric = 0;
+        Song.kb = Operators.round(Load.bytes / 1024);
+        if (Song.kb < 1) {
+            Song.kb = 1;
+        }
+        if (Load.named == 1) {
+            Song.title = Load.tname;
+        } elif (Load.src == 1) {
+            // The built-in, put back from its own hex. That hex is the file, so
+            // its size came back from `Load.bytes`, but not its name: a file
+            // with no sequence name was titled by its own *file name* at bake
+            // time, and that is the one fact the bytes never carried.
+            Song.title = Song.baked;
+        } else {
+            Song.title = "(paste)";
+        }
+    }
+
+    // The renderer's own table: one row per note, in start order, with its
+    // length. Paired through the voice id, which is what a note's two events
+    // share.
+    private void notes() { // warp
+        Note.tick.clear();
+        Note.len.clear();
+        Note.key.clear();
+        Note.trk.clear();
+        Load.npos = [];
+        _i = 0;
+        while (_i < Player.maxVoices) {
+            Load.npos.add(0);
+            _i += 1;
+        }
+        _i = 1;
+        while (_i <= Player.EvKind.length()) {
+            _v = Player.EvVoice.get(_i) + 0;
+            if (Player.EvKind.get(_i) + 0 == 0) {
+                Note.tick.add(Player.EvTick.get(_i));
+                Note.len.add(Player.EvLen.get(_i));
+                Note.key.add(Player.EvA.get(_i));
+                Note.trk.add(Player.EvChan.get(_i));
+                if (_v >= 0 && _v < Player.maxVoices) {
+                    Load.npos.set(_v + 1, Note.len.length());
+                }
+            } elif (Player.EvKind.get(_i) + 0 == 1 && _v >= 0 && _v < Player.maxVoices) {
+                _at = Load.npos.get(_v + 1) + 0;
+                if (_at > 0) {
+                    Note.len.set(_at, Player.EvTick.get(_i) - Note.tick.get(_at));
+                    Load.npos.set(_v + 1, 0);
+                }
+            }
+            _i += 1;
+        }
+        if (Load.tempo == 0) {
+            Load.tempo = 120;                    // a file with no tempo is 120
+        }
+        Song.notes = Note.tick.length();
+        Song.ticks = Load.ticks;
+        Song.pool = Player.maxVoices;
+        // A restored built-in was parsed, not baked, so this is where it says
+        // how fast it goes -- `prepare` reads Song.tempo for any song that did
+        // not come from a paste.
+        Song.tempo = Load.tempo;
+    }
+}

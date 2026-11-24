@@ -1,0 +1,331 @@
+#enable_feature<commentMetadata>;
+// Obfuscation is a publishing step, not a development one: it renames every
+// sprite, variable and custom block, so a build made with it cannot be read in
+// the editor and tools/np5_probe.js cannot find a variable to watch. `make
+// np5-release` turns it on; a plain `make np5` stays debuggable.
+// #enable_feature<doObfuscation>;
+// vanillaScratch, not useTempVariables: scratch.mit.edu rejects a project for
+// one block its VM lacks, and `private _x` does not need TurboWarp's thread
+// variables here. A sprite-local variable is *copied* per clone
+// (rendered-target.js makeClone -> duplicateVariables), so each voice clone
+// already owns its own _i / _v / _vol; that is all this project asks for.
+#enable_feature<vanillaScratch>;
+// Controls while a song plays: S shows or hides the settings page -- a terminal
+// screen, up/down move, left/right change, space toggles, enter closes -- and Q
+// stops everything. The page itself is settings.jsw.
+
+/*
+目前，我计划写NotePlayer V5版本，用Windows SF2 (~/Documents/MuseScore3/SoundFonts/gm.sf2)做主要音色（synth.builtin可能要退役了）。还是像以往NotePlayer架构，模块化，方便维护。由于NPCore过于屎山，我决定重构NPCore，直接让他支持GM2音色，这会很难很难。
+
+由于重构音色麻烦，但改改目前Core应该可以，我先试试自己改。
+目前，改写NpCoreV4变NpCoreV5的计划如下
+1. 重构Core2
+a. Pitch需要处理播放声音的时候，同时这个进程要随时准备接收或检测到Pitch更改命令。
+b. gm.sf2里面音色449个WAV单声道7.5MB，还好，但有些是循环制，难搞。
+c. 需要FLDataV2或Base64(warp)+MIDI(warp)裸解释器，存的数据更多/所有，包括Pitch，Note On Note Off，或者就是Base64+MIDI处理后输出一堆列表嘛（py处理），然后FLDataV2 extract到各List（FastLoad由来，FLDataV1对应NotesList屎山，之后继续扩展到6-7个sublist，如果打算FLDataV2，那么建议还是Python把midi直接转到FLDataV2
+2. 牵连到synth.*等发声模块，Note On和Note Off更复杂，或者也可以偏向于NpCoreV4直接拿开始和时长就够，但想真正播放GM2（还要多通道，其实还好），还需要弄好多好多东西。
+3. builder讲不再兼容NpCoreV5，后续考虑重构。
+
+工作量过于庞大，NotePlayer从1.0到4.25，也经历了三个月，所以才研发了JadenScript （/Volumes/Server/JS2Twrp）让AI拥有写TurboWarp方块的能力，是时候好好用了，我们可以开始计划。目前计划继续保留支持的模块就是Piano和Graph，他们可以后续做性能监控，Graph可以先不迁移，Piano效果还是需要的。
+
+*/
+
+// ---- state the player and the banks share -------------------------------
+// Scratch lists and variables are 1-based; every index below adds 1 to the
+// zero-based id the converter wrote.
+
+public Tick.tick = 0;
+public Tick.active = 0;
+public Tick.wait = 4;
+public Tick.rest = 0.0625;   // beats per tick
+// The clock's catch-up: a tick shorter than a frame cannot be paced by a
+// "wait" alone, so each pass fires every tick the wall clock says is due, up to
+// this many. Vanilla Scratch runs at 30 fps, where a 198 BPM song needs 1.8
+// ticks a frame; without this the song would play at 57% speed.
+public Tick.seconds = 0.125;     // seconds per tick at the current tempo
+public Tick.nextAt = 0;          // Sensing.timer() value the next tick is due at
+// PFA's clock does not count ticks per frame at all: it plays every tick the
+// wall clock says is due and stops when the *work* is done, so a dense passage
+// catches up over a frame or two instead of being resynced away. What replaces
+// the tick cap here is a note budget: a frame may dispatch this many note-ons
+// and then hands the frame back, and the cursor picks up where it stopped.
+// Bumped by `prepare()`: a clone captures it and stops when it changes. Without
+// it a note from the previous song parks on `Tick.tick >= _end` -- and the tick
+// restarts at zero for the new song -- so the clone, and its sound, could outlive
+// the song that asked for it.
+public Tick.gen = 0;
+public Tick.maxNotes = 400;      // note-ons one frame may dispatch
+public Tick.resync = 2;          // seconds behind before the clock gives up
+
+public Player.cursor = 1;          // index into Player.EvTick
+public Player.startEv = 0;         // event index handed to the next clone
+public Player.midiSpeed = 120;     // BPM, overwritten by the tempo events
+public Player.bendRange = 2;       // semitones at full bend
+public Player.voices = 0;          // notes currently sounding, tails included
+// One clone per sounding note, so this is the clone budget: the most notes that
+// may ring at once, and the only thing that can stop a note from being played.
+// There is no musical filter -- every note of the song goes to the engine, which
+// is what a black MIDI needs (the "velocity x seconds" energy rule that used to
+// thin quiet notes here deleted real notes at exactly the density it was meant
+// to help). The project's `_twconfig_` raises TurboWarp's cap to Infinity, so on
+// TurboWarp all 1200 can sound; scratch.mit.edu enforces its own cap of 300 and
+// silently refuses the clones past it, and a refused clone never counts itself,
+// so the books stay exact there too.
+//
+// (A pool of reusable voices would need no clones at all and is faster, but it
+// is audibly wrong -- see voice.inc.jsw.)
+//
+// The loader also uses it as the number of voice ids a song may use: `EvVoice`
+// is checked against it, and `Song.pool` (the size of the converter's voice
+// table) is set from it.
+public Player.maxVoices = 1200;
+public Player.skipped = 0;           // notes dropped at the clone budget, for the record
+public Player.notesPlayed = 0;     // note-ons dispatched, for the HUD
+public Player.nps = 0;             // notes a second, as measured for the HUD
+public Piano.hue = [];             // 128, MIDI track + 1 that lit the key (0 = none).
+                                   // The example colours by track, not by channel.
+public Piano.end = [];             // 128, tick at which that key's note ends
+public Piano.len = [];             // 128, that note's length, for the lit-key fade
+public Piano.isBlack = [0, 1, 0, 1, 0, 0, 1, 0, 1, 0, 1, 0];
+// The highway has two knobs, and they are independent -- both are ordinary
+// Stage variables, so they can be changed while the song plays:
+//
+//   depth    how far the far plane is, in world units. Bigger is a longer road:
+//            the example's own is 360, which puts its cap at screen y = +58;
+//            700 reaches y = +94, nearly the top of the stage.
+//   horizon  ticks of music visible. With the depth fixed, this is how long a
+//            note takes to fall: 250 ticks is 8.7 s at 16 ticks per beat, which
+//            is a long lazy road -- and it is also how many notes are on screen
+//            at once, so this is the one to watch when the frame gets heavy.
+//
+// The renderer divides one by the other once a frame for world units per tick,
+// so raising the depth alone makes notes move faster instead of the road
+// changing shape.
+public Piano.depth = 700;
+public Piano.horizon = 250;
+// The projection's scale -- `150 * x / z` in the example, which calls the same
+// number FOV and Y. Zoom, in effect, and the third knob on the settings page.
+public Piano.fov = 150;
+public Piano.fps = 0;              // measured, shown in the HUD
+public Piano.clock = 0;            // days since 2000 at the last measurement
+public Piano.total = 0;            // the song's length in seconds, for the HUD
+// Notes a second, and where the HUD's two counters stand. `npsNote` is
+// `Player.notesPlayed` at the last whole second, so the rate is a count over a
+// second rather than a frame's count times a frame rate -- the second kind of
+// number jumps by tens between frames and says nothing.
+public Piano.npsAt = 0;            // Sensing.timer() at the last measurement
+public Piano.npsNote = 0;          // Player.notesPlayed then
+// The lyric line's cursor. It only moves forward, because a lyric is looked up
+// once every few frames and the playhead only moves on -- a seek back is the one
+// case that resets it, and the tick test in `hud` notices that on its own.
+public Piano.lyric = 0;
+public Piano.ticks = 0;            // loop iterations, which is the real frame count
+public Piano.drawn = 0;            // Sensing.timer() at the last repaint
+// Seconds between repaints. Not "as often as possible": TurboWarp runs this
+// project at 180 fps (see the `_twconfig_`), and a repaint is ~600 pen blocks,
+// so a repaint per frame is 100k pen blocks a second -- more than the player
+// spends on music. Measured at 240 fps the clock still holds the song's tempo
+// (28.8 ticks/s) with a 4 ms frame, so the picture is the only part that cannot
+// keep up, and it is the part that is allowed to fall behind. 20 repaints a
+// second is smoother than the eye needs for a falling-note view; scratch PFA
+// caps its own redraw at 125 ms (8 a second).
+public Piano.redraw = 0.05;
+// How long one repaint may spend drawing notes. Past it the frame keeps what it
+// has drawn and the rest of the window waits; a dense passage then looks like it
+// is being drawn "late", which is what it is, rather than the music stalling.
+public Piano.drawBudget = 0.006;
+
+// The renderer's cursor: the first row of Note.* that may still be on screen.
+// Notes are in start order, so one moving index saves scanning 15,000 rows.
+public Note.cursor = 1;
+
+public Voice.off = [];             // one note-off counter per voice id
+
+public Mix.epoch = 0;              // bumped on any channel change
+public Mix.synced = 0;             // the epoch the sounding notes have been told about
+public Mix.pedal = [];             // 16, 1 while the sustain pedal is down
+public Mix.expr = [];              // 16, CC11 expression, 0..127
+public Pedal.voice = [];           // notes the pedal is holding open
+public Pedal.chan = [];            // and the channel each of them is on
+public Mix.bend = [];
+// The GM program each channel is on. Only the SCRATCH sound mode reads it: the
+// sample bank resolved the program into a sprite and a slot when the song was
+// baked. A song baked in has program changes too -- they are kind 2 events.
+public Mix.prog = [];
+public Mix.vol = [];
+public Mix.pan = [];
+
+// ---- the player's own three knobs, live ----------------------------------
+// Everything above is the *song's*: channel faders and expression, driven by
+// CC events. These three are the listener's, and they are the settings page's
+// VOLUME / PAN / PITCH rows.
+//
+// They work at all because a voice is a clone and the audio engine re-syncs a
+// live player when its target's volume or effects move: `set volume to` writes
+// `target.volume`, `scratch-audio`'s SoundBank hands that to every playing
+// player of the target, and its effect chain carries a VolumeEffect right
+// beside the Pan and Pitch ones (`AudioEngine.effects = [PanEffect, PitchEffect,
+// VolumeEffect]`, `VolumeEffect._set` ramps the gain over 25 ms). So all three
+// reach a note that is already sounding, not just the next one -- `retune` in
+// voice.inc.jsw is where they are applied.
+//
+// They are deliberately *not* reset by `prepare()`: the song changing should
+// not undo the listener's volume.
+/* The rest of what a channel carries, for the debug page. `mod` is baked by the
+ * converter (CC1); the last four are not, because the converter's CC map is
+ * still {7, 10, 1, 64, 11} -- the columns exist so the page can say "0" instead
+ * of the reader guessing whether the controller arrived. */
+public Mix.mod = [];              // 16, CC1 modulation wheel
+public Mix.reverb = [];           // 16, CC91 (not baked yet)
+public Mix.chorus = [];           // 16, CC93 (not baked yet)
+public Mix.variation = [];        // 16, CC70 (not baked yet)
+public Mix.bankMsb = [];          // 16, CC0  (not baked yet)
+public Mix.bankLsb = [];          // 16, CC32 (not baked yet)
+public Mix.active = [];           // 16, notes sounding on each channel
+public Set.debug = 0;             // the debug page, toggled with D
+
+public Mix.master = 100;           // 0..100, scales every voice's own volume
+public Mix.masterPan = 0;          // -100..100, added to the channel's pan
+public Mix.masterPitch = 0;        // tenths of a semitone, added to note + bend
+
+public Set.open = 0;               // 1 while the page is up
+public Set.cursor = 1;             // selected row, 1..Set.rows
+public Set.rows = 10;              // 10 rows: three of them the player's own knobs
+public Set.dirty = 1;              // repaint the page next frame
+public Set.painted = 0;            // Sensing.timer() at the last page repaint
+public Set.held = "";              // the key that was down at the last poll
+public Set.sound = 0;              // 0 the sample bank, 1 Scratch's own notes
+public Set.glow = 1;               // brighten the note being heard
+public Set.keys = 1;               // draw the keyboard
+public Set.hud = 1;                // draw the HUD
+
+public np.d_pitch = 0;
+public np.d_note = 0;
+
+// ---- the stage -----------------------------------------------------------
+// The example is drawn on a dark stage, which is what makes its white keys and
+// white HUD read. Scratch's default backdrop is white, so the project carries
+// its own; painting the same colour with the pen instead costs twelve strokes
+// on every frame of a sixty-a-second loop.
+stage: costume=0, volume=100, layer=0, tempo=60;
+stage {
+    import "assets/dark.svg" as "dark";
+}
+
+// The hex digits twice over, upper then lower. Scratch finds an item without
+// caring about case, so "a" lands on the "A" slot (11) and the loader folds the
+// upper half back onto the lower one; if it ever did care, the same fold still
+// answers 10. `letter of` on a literal cannot be called, which is why this is a
+// list and not a string.
+public Hex.digits = ["0","1","2","3","4","5","6","7","8","9","A","B","C","D","E","F","a","b","c","d","e","f"];
+
+// ---- the runtime loader --------------------------------------------------
+// A published project cannot open a file. So a song that is not compiled in
+// arrives as text: every green flag shows an input box, and what is pasted into
+// it is decoded and parsed. An empty box means "play the one that is built in".
+//
+// The text is a MIDI file in **hex**, not Base64 -- `0` would compare equal to a
+// space, and `A` to `a`, so Base64's two cases would fold together (see
+// "Comparing text" in syntax.md). `make np5-hex SONG=x.mid` writes one and puts
+// it on the clipboard; `make np5-song SONG=x.mid` bakes one in instead, which is
+// what a song too big to paste wants.
+// A published project cannot open a file, so a song that is not compiled in
+// arrives as text: `ask` shows an input box and what is pasted into it is
+// decoded and parsed. The buffers below are the loader's own; the event lists
+// the player reads are the ones the build wrote, and a successful parse
+// replaces them.
+public Load.mode = 0;              // 0 built-in, 1 the paste won
+// Which song the lists hold: 1 the built-in, 2 a paste, 0 neither. It starts at
+// 1 because that is what the project ships with -- the baked lists *are* the
+// built-in song -- and it is what lets an empty input box be a no-op until a
+// paste has replaced them.
+public Load.src = 1;
+// `Song.hex` -- the built-in song's own MIDI as hex, chunked by
+// tools/midi_to_hex.py -- is declared by song/builtin.jsw. It is needed only to
+// put the built-in back after a paste: the player cannot open a file, so this
+// text and the baked lists are the only two copies there are.
+public Load.error = 0;             // 0 ok, else which step gave up
+public Load.text = "";             // what was typed into the box
+public Load.ask = 0;               // 1 while the box is up: the keys are its own
+public Load.pos = 1;               // the byte cursor
+public Load.bytes = 0;             // bytes the text decoded to
+public Load.ppq = 480;             // ticks per beat, from the header
+public Load.scale = 1;             // 1/16-beat ticks per MIDI tick
+public Load.ticks = 0;
+public Load.notes = 0;
+public Load.tempo = 120;           // the pasted song's own tempo
+public Load.errAt = 0;             // where the parse gave up, for a report
+public Load.name = "";             // the name or lyric the cursor is inside
+public Load.named = 0;             // 1 once a track name has claimed the title
+public Load.tname = "";            // that track name, kept until the parse succeeds
+public Load.lysTick = [];          // the lyrics this parse found, by tick
+public Load.lysText = [];          // and their words, in step
+public Load.data = [];             // the decoded bytes
+public Load.count = [];            // events per tick, for the sort
+public Load.at = [];               // where each tick's events start
+public Load.npos = [];             // voice id -> its row in Note.*
+public Load.prog = [];             // 16 channels, the current program
+public Load.pendV = [];            // (channel, note) -> the voice that owns it
+
+// The printable ASCII set, in code order, so a text byte can become a glyph:
+// cell `code - 31` is that character. A list rather than a string because
+// `letter of` cannot be called on a literal -- and one cell per character is
+// exactly what a byte needs. Bytes outside 32..126 land on cell 1, the space,
+// which is what a stray newline or a non-ASCII byte in a lyric should become.
+public Char.text = [
+    " ", "!", "\"", "#", "$", "%", "&", "'", "(", ")", "*", "+", ",", "-", ".", "/",
+    "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", ":", ";", "<", "=", ">", "?",
+    "@", "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O",
+    "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z", "[", "\\", "]", "^", "_",
+    "`", "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o",
+    "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z", "{", "|", "}", "~"
+];
+public Load.pendA = [];            // and the buffer row that voice started at
+// the parse's own event buffer, in file order; the counting sort moves it
+public Load.ba = [];
+public Load.bk = [];
+public Load.bc = [];
+public Load.bn = [];
+public Load.bg = [];
+public Load.bv = [];
+public Load.bl = [];
+public Load.br = [];
+public Load.bs = [];
+public Load.bo = [];
+public Load.bm = [];
+public Load.free = [];             // voice ids not in use
+
+// ---- generated data ------------------------------------------------------
+// bank/ holds one sprite per GM family (sounds + the voice script);
+// song/ holds the FLDataV2 lists and Song.tempo / Song.pool.
+include "bank/synth.gm.jsw"
+include "bank/map.jsw"
+include "song/song.jsw"
+include "song/builtin.jsw"
+
+// Order is thread order, and thread order is scheduling: the sequencer ends a
+// pass as soon as a block asks for a redraw, so any thread listed after the pen
+// layer waits for the next frame. Measured: with `core` last, a redrawing piano
+// starved the clock down to 12 ticks a second where the song wants 29; with the
+// pen layer last it holds 28.9 and never falls behind. So the clock comes first,
+// then the loader (both are the ones that must keep time), and the picture last.
+include "core.jsw"
+include "loader.jsw"
+include "piano.jsw"
+
+// The settings page and its terminal live inside class piano (they draw on its
+// pen layer) and the native sound path lives inside class core (where `dispatch`
+// is); settings.jsw / terminal.inc.jsw / native.jsw are body includes, named
+// from those two files.
+
+// TurboWarp settings: the player is a clock, so it wants a high frame rate and
+// the larger limits (pitch beyond +/-360 semitones, no clone cap).
+//
+// `turbo` is ON so that the picture can never stall the clock. The sequencer
+// ends a *pass* the moment any block asks for a redraw, and the pen layer asks
+// for one every time it draws -- measured, with the clock thread queued behind a
+// redrawing piano, it ran 5 times in 7 seconds instead of 210 and the song
+// played at 40% of its tempo. Turbo removes that early exit. It costs nothing
+// extra now that notes come from the voice pool: a frame spends its work budget
+// either way, and what used to spend it was `create clone`, one per note.
+metadata note Stage at 20,20 350x170: "Configuration for https://turbowarp.org/\nYou can move, resize, and minimize this comment, but don't edit it by hand. This comment can be deleted to remove the stored settings.\n{\"framerate\":180,\"runtimeOptions\":{\"maxClones\":Infinity,\"miscLimits\":false,\"fencing\":false},\"turbo\":true,\"hq\":true} // _twconfig_";

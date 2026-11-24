@@ -59,11 +59,22 @@ class VolumeTests(unittest.TestCase):
         self.assertEqual(blob[:4], bytes([1, 2, 3, 4]))
         self.assertEqual(self.volume.smart.reads, 2, "two sectors were served")
 
-    def test_a_read_past_the_end_is_an_error_not_a_short_read(self) -> None:
-        ok, why = self.volume.read(7, 4)
+    def test_a_read_that_starts_past_the_end_is_an_error(self) -> None:
+        ok, why = self.volume.read(8, 1)
         self.assertFalse(ok)
         self.assertIn("past the end", why)
         self.assertEqual(self.volume.errors, 1)
+
+    def test_a_read_that_runs_off_the_end_answers_what_is_left(self) -> None:
+        """Short, not refused: a whole-image pull asks a round number of sectors.
+
+        The image is not a round number of sectors, so refusing the last
+        request would truncate it -- by up to sixty-three sectors for a kernel.
+        """
+        ok, payload = self.volume.read(7, 4)
+        self.assertTrue(ok, "the request must be shortened, not refused")
+        self.assertEqual(len(bytes.fromhex(payload)), disk.SECTOR)
+        self.assertEqual(self.volume.errors, 0)
 
     def test_an_unmounted_volume_answers_nothing(self) -> None:
         self.volume.unmount()

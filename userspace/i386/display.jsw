@@ -24,6 +24,11 @@ public X.pow2 = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192,
     8388608, 16777216, 33554432, 67108864, 134217728, 268435456, 536870912,
     1073741824, 2147483648, 4294967296];
 public X.dispPen = -1;
+/* How many pixels one cell is drawn at. A text mode is a fixed grid whatever
+ * the window is; see `dispMeasure`. */
+public X.dispScale = 1;
+public X.dispPenW = 0;                   // the pen size the painter last set
+public X.dispClean = 0;                  // nothing has been drawn since the clear
 
 import "assets/lists/font.jsa" as font;
 
@@ -51,6 +56,16 @@ class Display {
             } else {
                 paintSome();
             }
+            /* A player can size its pane before it applies the project's own
+             * stage size, and the window can be dragged after that: look at
+             * the stage again now and then, and repaint if it moved. Every
+             * frame would be a walk per frame; two seconds is a resize nobody
+             * notices and a boot nobody pays for. */
+            X.dispFrames += 1;
+            if (X.dispFrames > 120) {
+                X.dispFrames = 0;
+                dispRecheck();
+            }
             Control.wait(0);
         }
     }
@@ -58,101 +73,164 @@ class Display {
     /* How big is the stage? There is no block for it, and this project does not
      * import an extension that would answer: the sprite measures it instead.
      *
-     * Go to infinity with the 2 x 2 costume every sprite starts with, and read
-     * back where the VM put it. Scratch fences the sprite to the stage, so the
-     * number that comes back is half the stage minus half the costume -- one
-     * pixel each way. TurboWarp's compiler lets the infinity through, so the
-     * position comes back unchanged and the sprite walks out to the edge a
-     * pixel at a time instead. Either way the answer decides how many cells fit
-     * and where the screen sits: a bigger stage gets the screen in the middle
-     * of it, a smaller one gets it in the corner with the firmware printing
-     * less. */
+     * Walk the 2 x 2 costume into each of the four edges and read back where
+     * the renderer stopped it. `touching edge` is the renderer's own answer,
+     * so this measures whatever stage the page has *now*: the one a
+     * `_twconfig_` asked for, a pane a player fitted to its window, an editor
+     * dragged into a new shape. Reading back a fenced `setXY(2000, 2000)` is
+     * the cheaper probe and stays as the fallback, but it answers with the
+     * fence's idea of the stage, and a player that sizes its pane first and
+     * applies the project's own stage size afterwards answered 600 x 720 for a
+     * 640 x 480 stage -- an eighty-column guest drawn into seventy-five
+     * columns is a screen of sheared blocks, which is what MEMZ looked like.
+     */
     private void dispMeasure() { // warp
         /* Both builds measure. The Scratch build has no custom extensions, but
-         * nothing here needs one: the costume, the fence and `touching edge`
-         * are built-in, and a Scratch project loaded into TurboWarp is a
-         * project whose stage can be resized like any other. Assuming
-         * 480 x 360 there painted a 480 x 360 screen into a much bigger stage
-         * and left the rest of it black. */
+         * nothing here needs one: the costume and `touching edge` are built in,
+         * and a Scratch project loaded into TurboWarp is a project whose stage
+         * can be resized like any other. Assuming 480 x 360 there painted a
+         * 480 x 360 screen into a much bigger stage and left the rest black. */
         Looks.switchCostume("Frame");
         Looks.size = 100;
-        /* A finite out-of-range probe, not infinity: every VM fences a sprite
-         * to the stage, so setting a position it is not allowed to keep and
-         * reading it back is the stage's half-width less half the costume.
-         * Infinity was the old probe, and infinity is the one value some VMs
-         * store verbatim -- which is how the Scratch build ended up assuming
-         * 480 x 360 in the first place, and how a fenced read could come back
-         * as a number that meant nothing. */
-        Motion.setXY(2000, 2000);
-        _w = Motion.x * 2 + 2;
-        _h = Motion.y * 2 + 2;
-        /* A stage that reports itself smaller than a costume or larger than a
-         * 2400-pixel panel is a stage that did not fence -- TurboWarp can be
-         * told to stop fencing, and then the probe keeps the 2000 it was
-         * given. Walk instead when that happens. */
-        if (_w < 200 || _h < 200 || _w > 2400 || _h > 2400) {
-            /* Nothing fenced it: walk the sprite out to the edge instead. It
-             * has to be on stage for the edge to be something to touch, and
-             * the walk is bounded, because a loop that never ends in warp mode
-             * is a frozen project. */
-            _w = 0;
-            _h = 0;
-            Looks.show();
-            Motion.setXY(0, 0);
-            _n = 0;
-            while (!Sensing.touching("_edge_") && _n < 4000) {
-                Motion.x += 1;
-                _n += 1;
-            }
-            /* The walk stops with the costume's *edge* on the stage's edge, so
-             * the centre is one pixel inside it and the two-pixel costume
-             * hangs one more pixel past that: add the two pixels back. */
-            if (Sensing.touching("_edge_")) {
-                _w = Motion.x * 2 + 2;
-            }
-            Motion.setXY(0, 0);
-            _n = 0;
-            while (!Sensing.touching("_edge_") && _n < 4000) {
-                Motion.y += 1;
-                _n += 1;
-            }
-            if (Sensing.touching("_edge_")) {
-                _h = Motion.y * 2 + 2;
-            }
-            Looks.hide();
-        }
-        if (_w > 4096) { _w = 4096; }
-        if (_h > 4096) { _h = 4096; }
+        _ok = 1;
+        _xr = 0;
+        _xl = 0;
+        _yt = 0;
+        _yb = 0;
         Motion.setXY(0, 0);
-        /* The fence gives up half a costume on some VMs and not on others, so
-         * the answer is worth a pixel either way: snap it to the cell grid
-         * before anything is drawn on it. */
-        _cols = Operators.math("round", _w / X.dispCellW);
-        _rows = Operators.math("round", _h / X.dispCellH);
-        if (_cols < 1) { _cols = X.dispCols; }
-        if (_rows < 1) { _rows = X.dispRows; }
-        /* rounding up must not hang the screen over the edge of the stage */
-        while (_cols * X.dispCellW > _w && _cols > 1) { _cols -= 1; }
-        while (_rows * X.dispCellH > _h && _rows > 1) { _rows -= 1; }
-        /* The card follows the stage: a wider stage is a wider text plane, the
-         * way a VGA card offers more columns at a higher dot clock. The plane
-         * in memory has a ceiling -- X.dispMaxCols by X.dispMaxRows -- and the
-         * stride is the visible width, because that is what a guest writes
-         * through. */
-        if (_cols > X.dispMaxCols) { _cols = X.dispMaxCols; }
-        if (_rows > X.dispMaxRows) { _rows = X.dispMaxRows; }
-        X.dispCols = _cols;
-        X.dispRows = _rows;
+        _n = 0;
+        while (!Sensing.touching("_edge_") && _n < 4000) {
+            Motion.x += 1;
+            _n += 1;
+        }
+        if (Sensing.touching("_edge_")) { _xr = Motion.x; } else { _ok = 0; }
+        Motion.setXY(0, 0);
+        _n = 0;
+        while (!Sensing.touching("_edge_") && _n < 4000) {
+            Motion.x += -1;
+            _n += 1;
+        }
+        if (Sensing.touching("_edge_")) { _xl = Motion.x; } else { _ok = 0; }
+        Motion.setXY(0, 0);
+        _n = 0;
+        while (!Sensing.touching("_edge_") && _n < 4000) {
+            Motion.y += 1;
+            _n += 1;
+        }
+        if (Sensing.touching("_edge_")) { _yt = Motion.y; } else { _ok = 0; }
+        Motion.setXY(0, 0);
+        _n = 0;
+        while (!Sensing.touching("_edge_") && _n < 4000) {
+            Motion.y += -1;
+            _n += 1;
+        }
+        if (Sensing.touching("_edge_")) { _yb = Motion.y; } else { _ok = 0; }
+        Motion.setXY(0, 0);
+        if (_ok == 1) {
+            /* the costume is two pixels wide and two tall, so each reading is a
+             * pixel inside its edge: the span plus those two pixels is the
+             * stage, and the costume size cancels out of it */
+            _w = _xr - _xl + 2;
+            _h = _yt - _yb + 2;
+        } else {
+            /* No renderer to walk against: ask the fence instead. A position
+             * the VM will not keep comes back as the stage's half-size less
+             * half the costume, one pixel each way. */
+            Motion.setXY(2000, 2000);
+            _w = Motion.x * 2 + 2;
+            _h = Motion.y * 2 + 2;
+        }
+        Motion.setXY(0, 0);
+        /* A stage that reports itself smaller than a costume, larger than a
+         * 4096-pixel panel, or with no answer at all is not a stage: keep the
+         * grid this card already had rather than print into a single cell or
+         * invent one. */
+        if (_w < 200 || _h < 200 || _w > 4096 || _h > 4096) {
+            _w = X.stageMeasW;
+            _h = X.stageMeasH;
+        }
+        if (_w < 200 || _h < 200) {
+            _w = X.dispCols * X.dispCellW;
+            _h = X.dispRows * X.dispCellH;
+        }
+        X.stageMeasW = _w;
+        X.stageMeasH = _h;
+        /* A window is a screen, not a bigger character grid: `dispFit` decides
+         * how many cells that stage holds and where they sit. */
+        dispFit(_w, _h);
+        _cols = X.dispCols;
+        _rows = X.dispRows;
         X.dispViewCols = _cols;
         X.dispViewRows = _rows;
         _w = _cols * X.dispCellW;
         _h = _rows * X.dispCellH;
         X.stageW = _w;
         X.stageH = _h;
-        X.dispOffX = (_w - X.dispCols * X.dispCellW) / 2;
-        X.dispOffY = (_h - X.dispRows * X.dispCellH) / 2;
+        X.dispOffX = (X.stageMeasW - _w) / 2;
+        X.dispOffY = (X.stageMeasH - _h) / 2;
         if (X.dispOffX < 0) { X.dispOffX = 0; }
         if (X.dispOffY < 0) { X.dispOffY = 0; }
+    }
+
+    /* Ask the stage what it is, once in a while, and repaint the whole screen
+     * when the answer moved. A player can size its pane before it applies the
+     * project's own stage size, and a window can be dragged; both leave the
+     * card measuring a stage that no longer exists, and a card that keeps its
+     * old grid draws the guest's eighty-by-twenty-five screen sheared. */
+    private void dispRecheck() { // warp
+        _ow = X.stageMeasW;
+        _oh = X.stageMeasH;
+        dispMeasure();
+        if (X.stageMeasW != _ow || X.stageMeasH != _oh) {
+            dispBoot();
+        }
+    }
+
+    /* The grid a stage of `fw` by `fh` gets: how many cells across and down,
+     * and how many stage pixels a cell is drawn at.
+     *
+     * Text mode is eighty columns. Every guest that writes the plane assumes
+     * that stride -- MEMZ writes eighty bytes a row whatever the window is --
+     * so a card that offered *more* columns would shear the guest's rows across
+     * the screen, and one that offered fewer would wrap them. So the column
+     * count is capped at eighty and the width past that goes into the cell:
+     * scale two on a 1280-wide window, three at 1920. A cell is up to eighty
+     * pen strokes whatever it is drawn at, so a bigger cell is the same
+     * painting for four times the screen.
+     *
+     * Split out of `dispMeasure` so the rule can be exercised without a
+     * renderer to measure: see `DisplayFitTests`. */
+    private void dispFit(fw, fh) { // warp
+        /* A stage that measures smaller than a costume is a fence that failed,
+         * not a one-cell screen: fall back to the grid we already had rather
+         * than print the console into a single cell. */
+        _fw = fw;
+        _fh = fh;
+        if (_fw < 200) { _fw = X.dispCols * X.dispCellW; }
+        if (_fh < 200) { _fh = X.dispRows * X.dispCellH; }
+        /* The card follows the stage. A cell is 8 x 16 pixels of font, so a
+         * 1024 x 768 window is a 128 x 48 text mode and the firmware prints
+         * that on its Video line -- a bigger stage is a card with more columns
+         * and more rows, not the same card drawn larger. The plane in memory
+         * is the ceiling (X.dispMaxCols by X.dispMaxRows), because a guest
+         * addresses cells through it.
+         *
+         * Whole pixels, because the pen is: a fractional cell leaves a
+         * scanline of the old frame between every row. */
+        X.dispScale = 1;
+        X.dispCellW = 8;
+        X.dispCellH = 16;
+        _cols = Operators.math("round", _fw / X.dispCellW);
+        _rows = Operators.math("round", _fh / X.dispCellH);
+        if (_cols < 1) { _cols = 1; }
+        if (_rows < 1) { _rows = 1; }
+        /* rounding up must not hang the screen over the edge of the stage */
+        while (_cols * X.dispCellW > _fw && _cols > 1) { _cols -= 1; }
+        while (_rows * X.dispCellH > _fh && _rows > 1) { _rows -= 1; }
+        if (_cols > X.dispMaxCols) { _cols = X.dispMaxCols; }
+        if (_rows > X.dispMaxRows) { _rows = X.dispMaxRows; }
+        X.dispCols = _cols;
+        X.dispRows = _rows;
     }
 
     /* One frame of painting, under warp so a full screen is one frame's work
@@ -161,6 +239,7 @@ class Display {
 
     private void dispBoot() { // warp
         Pen.setPenSize(1);
+        X.dispPenW = 0;
         clearScreen();
         _i = 1;
         while (_i <= X.dispCols * X.dispRows) {
@@ -179,6 +258,13 @@ class Display {
     private void clearScreen() { // warp
         Pen.eraseAll();
         Pen.setPenColor(0);
+        X.dispPen = 0;
+        X.dispPenW = 1;
+        Pen.setPenSize(1);
+        /* Everything the canvas shows from here on is a cell this painter put
+         * there, and what it has not put there is black -- which is what lets
+         * `paintCell` skip a black cell instead of stroking it sixteen times. */
+        X.dispClean = 1;
         _y = X.stageH / 2;
         while (_y > 0 - X.stageH / 2) {
             _y -= 1;
@@ -256,9 +342,23 @@ class Display {
         } elif (_mode == 2) {             // 12h: four bits a pixel
             _rows = 480;
             _cols = 640;
+        } elif (_mode == 3) {             // 4h/5h: two bits a pixel, four colours
+            _rows = 200;
+            _cols = 320;
+        } elif (_mode == 4) {             // 6h: one bit a pixel, two colours
+            _rows = 200;
+            _cols = 640;
         } else {
             return;
         }
+        if (_mode == 1) {
+            Pen.setPenSize(1);             // once a frame: `paintCell` sets its own
+            X.dispPenW = 1;
+        }
+        /* Dots landed on the canvas at addresses no cell owns, so a cell that
+         * looks black is not known to be black any more: `paintCell` loses the
+         * shortcut and paints them until the next clear. */
+        X.dispClean = 0;
         _t0 = Sensing.timer();
         _n = 0;
         while (_n < 400) {
@@ -271,8 +371,57 @@ class Display {
             _row = Operators.math("floor", _i / _cols);
             _col = _i % _cols;
             _at = _row * _cols + _col;
-            if (_mode == 1) {
+            if (_mode >= 3) {
+                /* CGA: four pixels to a byte (two in mode 6), so the cheapest
+                 * readable unit is still the byte, and a run is the stretch of
+                 * one colour in one scanline. A solid row is one pen line and
+                 * eighty list reads; the worst case, a dithered gradient, costs
+                 * a read a pixel and a line a pixel -- which is what the card
+                 * itself costs. */
+                cgaIndex(_row, _col);
+                _c = v;
+                _lim = _cols - _col;
+                if (_lim > 128) {
+                    _lim = 128;
+                }
+                _len = 1;
+                if (_len < _lim) {
+                    cgaIndex(_row, _col + _len);
+                    while (_len < _lim && v == _c) {
+                        _len += 1;
+                        if (_len < _lim) {
+                            cgaIndex(_row, _col + _len);
+                        }
+                    }
+                }
+                cgaColour(_c, _mode);
+                pixelRun(_col, _row, _len, v);
+                X.gfxPos = _i + _len;
+            } elif (_mode == 1) {
+                /* One pen line per *run*, not one pen dot per pixel. A 320 x 200
+                 * frame is 64,000 pixels and a dot is about forty microseconds,
+                 * so painting it a pixel at a time took 160 frames -- two and a
+                 * half seconds -- which is why a graphics program animated at a
+                 * quarter of a frame a second. A frame a guest actually draws
+                 * (flat bars, boxes, a sprite) is a few hundred runs: the bar
+                 * costs one line and the whole frame arrives in one call.
+                 *
+                 * The run ends at the first different byte, at the end of the
+                 * row, and at 128 pixels, so one run's list reads cannot eat the
+                 * frame's budget. The colour is looked up once for the run,
+                 * which is also right: a run is one palette index by definition. */
                 _c = X.gfx.get(_at + 1) + 0;
+                _lim = _cols - _col;
+                if (_lim > 128) {
+                    _lim = 128;
+                }
+                _len = 1;
+                while (_len < _lim && X.gfx.get(_at + _len + 1) + 0 == _c) {
+                    _len += 1;
+                }
+                palette(_c, _mode);
+                pixelRun(_col, _row, _len, v);
+                X.gfxPos = _i + _len;
             } else {
                 _v = X.gfx.get(Operators.math("floor", _at / 2) + 1) + 0;
                 if (_at % 2 == 0) {
@@ -280,16 +429,65 @@ class Display {
                 } else {
                     _c = Operators.math("floor", _v / 16) % 16;
                 }
+                palette(_c, _mode);
+                Pen.setPenColorToColor(v);
+                Motion.setXY(_col - _cols / 2 + 0.5, _rows / 2 - _row - 0.5);
+                Pen.penDown();
+                Pen.penUp();
+                X.gfxPos = _i + 1;
             }
-            palette(_c, _mode);
-            Pen.setPenSize(1);
-            Pen.setPenColorToColor(v);
-            Motion.setXY(_col - _cols / 2 + 0.5, _rows / 2 - _row - 0.5);
-            Pen.penDown();
-            Pen.penUp();
-            X.gfxPos = _i + 1;
             _n += 1;
         }
+    }
+
+    /* ---- the CGA bitmap ------------------------------------------------ *
+     * 320 x 200 in four colours (4h and 5h) and 640 x 200 in two (6h), all of
+     * them a bitmap in the *text* plane at 0xB8000 -- the same memory the
+     * console writes, which is why nothing has to be staged for them.
+     *
+     * The card interleaves its scanlines: even rows start at 0x0000 and odd
+     * rows at 0x2000, eighty bytes each. An address here is therefore computed
+     * rather than indexed, and that interleave is the whole reason a CGA
+     * framebuffer is not simply `row * 80 + col / 4`.
+     */
+    private void cgaIndex(row, col) { // warp
+        // one line a statement: the language has no line continuation
+        if (X.textMode == 4) {            // 6h: eight pixels to a byte
+            _cBit = Operators.math("floor", col / 8);
+        } else {                          // 4h/5h: four pixels to a byte
+            _cBit = Operators.math("floor", col / 4);
+        }
+        _cAt = row % 2 * 8192 + Operators.math("floor", row / 2) * 80 + _cBit;
+        // the plane is four bytes to a list item, the way `rdb` reads it
+        _cW = X.text.get(Operators.math("floor", _cAt / 4) + 1) + 0;
+        _cB = Operators.math("floor", _cW / X.bw.get(_cAt % 4 + 1)) % 256;
+        if (X.textMode == 4) {
+            v = Operators.math("floor", _cB / X.pow2.get(8 - col % 8)) % 2;
+            return;
+        }
+        v = Operators.math("floor", _cB / X.pow2.get(7 - 2 * (col % 4))) % 4;
+    }
+
+    /* A CGA colour as a Scratch colour, out of the EGA table, which holds the
+     * same RGBI values in the same order: black, blue, green, cyan, red,
+     * magenta, brown, light grey, then the eight bright ones. The three-colour
+     * sets are therefore every other entry from green (set 0) or from cyan
+     * (set 1), and the bright bit adds eight. */
+    private void cgaColour(index, mode) { // warp
+        if (index == 0) {
+            // the background is the low four bits of 0x3D9: black unless a
+            // program asks for something else
+            v = X.dispEga.get(X.cgaCtl % 16 + 1) + 0;
+            return;
+        }
+        _cpSet = Operators.math("floor", X.cgaCtl / 32) % 2;
+        _cpBright = Operators.math("floor", X.cgaCtl / 16) % 2;
+        if (mode == 4) {
+            // mode 6 is monochrome: light grey, or white with the bright bit
+            v = X.dispEga.get(8 + _cpBright * 8) + 0;
+            return;
+        }
+        v = X.dispEga.get(3 + _cpSet + _cpBright * 8 + (index - 1) * 2) + 0;
     }
 
     /* The two palettes, as Scratch colours. Mode 13h's low sixteen entries are
@@ -327,44 +525,61 @@ class Display {
          * 1,700,000. Four milliseconds a frame paints a few cells and leaves
          * the rest of the frame to the guest. */
         _t0 = Sensing.timer();
+        /* A whole screen pending is worth more of the frame: a repaint the
+         * guest can see the end of beats a fair share of a frame it cannot. */
+        _budget = 0.004;
+        if (X.textN * 4 > X.dispCols * X.dispRows) {
+            _budget = 0.012;
+        }
         _s = 0;
         while (_s < 400) {
-            if (Sensing.timer() - _t0 > 0.004) {
+            if (Sensing.timer() - _t0 > _budget) {
                 return;
             }
-            _cell = X.textScan;
+            /* `_scan`, not `_cell`: locals here are sprite variables, shared by
+             * every procedure in this sprite, and `paintCell` borrows `_cell`
+             * for the word it decodes. Reading the position back out of a
+             * shared variable after the call restarted the scan at cell one
+             * every time a cell was painted -- which is why a screen of dirty
+             * cells beyond the four-hundredth was never reached. */
+            _scan = X.textScan;
             /* A dirty flag is bookkeeping; the plane is the truth. Repaint
              * whenever the drawn copy differs, because a flag that went
              * missing would leave a cell wrong for ever. */
-            _word = X.text.get(Operators.math("floor", (_cell - 1) / 2) + 1) + 0;
+            _word = X.text.get(Operators.math("floor", (_scan - 1) / 2) + 1) + 0;
             _now = _word % 65536;
-            if ((_cell - 1) % 2 == 1) {
+            if ((_scan - 1) % 2 == 1) {
                 _now = Operators.math("floor", _word / 65536) % 65536;
             }
             _dirty = 0;
-            if (X.textDirty.get(_cell) == 1) {
+            if (X.textDirty.get(_scan) == 1) {
                 _dirty = 1;
             }
-            if (_dirty == 1 || X.textDrawn.get(_cell) != _now) {
+            if (_dirty == 1 || X.textDrawn.get(_scan) != _now) {
                 if (_dirty == 1) {
-                    X.textDirty.set(_cell, 0);
+                    X.textDirty.set(_scan, 0);
                     if (X.textN > 0) {
                         X.textN -= 1;
                     }
                 }
-                paintCell(_cell - 1);
+                paintCell(_scan - 1);
                 X.dispPainted += 1;
             }
-            _cell += 1;
-            if (_cell > X.dispCols * X.dispRows) {
-                _cell = 1;
+            _scan += 1;
+            if (_scan > X.dispCols * X.dispRows) {
+                _scan = 1;
             }
-            X.textScan = _cell;
+            X.textScan = _scan;
             _s += 1;
         }
     }
 
-    /* One cell: the paper first, then the glyph's set bits, a run at a time. */
+    /* One cell: the paper first, then the glyph's set bits, a run at a time.
+     *
+     * A cell is drawn at `X.dispScale` pixels a plane pixel, and the pen is set
+     * to that size: a stroke covers a band of rows instead of one, so a bigger
+     * cell costs the same strokes as a small one. At scale 1 -- the 480 x 360
+     * stage this started on -- none of that arithmetic moves. */
     private void paintCell(index) { // warp
         _col = index % X.dispCols;
         _row = Operators.math("floor", index / X.dispCols);
@@ -387,6 +602,40 @@ class Display {
         if (X.textDrawn.get(index + 1) == _now) {
             return;
         }
+        /* Nothing this cell can put on the glass is visible, and the glass has
+         * not been drawn on since it was cleared: the cell is already right.
+         * Half of a MEMZ screen is black on black, and stroking it sixteen
+         * times is the difference between a repaint and a slow crawl. */
+        if (X.dispClean == 1 && X.textDrawn.get(index + 1) == -1 && _pap == 0) {
+            if (_ink == 0 || _ch == 0) {
+                X.textDrawn.set(index + 1, _now);
+                return;
+            }
+        }
+        /* A glyph that is a solid band needs no font at all: the space, the
+         * full block, the half blocks, and anything whose ink and paper are the
+         * same colour are one stroke a row. MEMZ's animation is nothing but
+         * 0xDC and 0xDB cells, and the bit scan that turns font bytes into ink
+         * runs is most of what a repaint costs. */
+        _solid = 0;                      // 0 general, 1 ink, 2 paper, 3 top, 4 bottom
+        if (_ch == 32 || _ch == 0) {
+            _solid = 2;
+        } elif (_ch == 219 || _ink == _pap) {
+            _solid = 1;
+        } elif (_ch == 220) {
+            _solid = 3;
+        } elif (_ch == 223) {
+            _solid = 4;
+        }
+        _cS = X.dispScale;
+        if (X.dispPenW != _cS) {
+            Pen.setPenSize(_cS);
+            X.dispPenW = _cS;
+        }
+        // a capsule is centred on the line it is drawn along, so a fat pen has
+        // to be inset by half its width to cover the pixels it stands for
+        _cHalf = Operators.math("floor", (_cS - 1) / 2);
+        _cRows = Operators.math("floor", X.dispCellH / _cS);
         // The font table is stored bottom row first: item 1 of a glyph is its
         // *last* row. So row `_g` belongs at `y0 + height - _g`, which puts the
         // The table is stored bottom row first, so the pixel row at height
@@ -396,25 +645,37 @@ class Display {
         // gap where one cell meets the next, which is what made the borders
         // look broken.
         _g = 0;
-        while (_g < X.dispCellH) {
-            _e = X.dispCellH - 1 - _g;
+        while (_g < _cRows) {
+            _e = _cRows - 1 - _g;
             if (_e > X.dispGlyphH - 1) {
                 _e = X.dispGlyphH - 1;
             }
-            _bits = font.get(_ch * X.dispGlyphH + _e) + 0;
-            _y = _y0 + _g;
-            pixelRun(_x0, _y, X.dispCellW, _pap);
-            if (_bits > 0) {
+            _bits = 0;
+            if (_solid == 0) {
+                _bits = font.get(_ch * X.dispGlyphH + _e) + 0;
+            }
+            _y = _y0 + _g * _cS + _cHalf;
+            if (_solid != 1) {
+                pixelRun(_x0 + _cHalf, _y, X.dispCellW - 2 * _cHalf, _pap);
+            }
+            if (_solid == 1) {
+                pixelRun(_x0 + _cHalf, _y, X.dispCellW - 2 * _cHalf, _ink);
+            } elif (_solid == 3 && _g * 2 >= _cRows) {
+                pixelRun(_x0 + _cHalf, _y, X.dispCellW - 2 * _cHalf, _ink);
+            } elif (_solid == 4 && _g * 2 < _cRows) {
+                pixelRun(_x0 + _cHalf, _y, X.dispCellW - 2 * _cHalf, _ink);
+            } elif (_bits > 0) {
                 _b = 0;
                 _runStart = -1;
-                while (_b < 8) {
+                while (_b < X.dispGlyphW) {
                     // bit 7 is the leftmost pixel, so the shift counts down
                     _on = Operators.math("floor", _bits / X.pow2.get(X.dispGlyphW - _b)) % 2;
                     if (_on == 1 && _runStart < 0) {
                         _runStart = _b;
                     }
                     if (_on == 0 && _runStart >= 0) {
-                        pixelRun(_x0 + _runStart, _y, _b - _runStart, _ink);
+                        pixelRun(_x0 + _runStart * _cS + _cHalf, _y,
+                            (_b - _runStart) * _cS - 2 * _cHalf, _ink);
                         _runStart = -1;
                     }
                     _b += 1;
@@ -423,11 +684,11 @@ class Display {
                     /* VGA's ninth column: the box-drawing characters repeat
                      * their last pixel so that lines join across cells. Without
                      * it every horizontal rule would have a one-pixel gap. */
-                    _len = X.dispGlyphW - _runStart;
+                    _len = (X.dispGlyphW - _runStart) * _cS;
                     if (_ch >= 0xC0 && _ch <= 0xDF) {
-                        _len += X.dispCellW - X.dispGlyphW;
+                        _len += X.dispCellW - X.dispGlyphW * _cS;
                     }
-                    pixelRun(_x0 + _runStart, _y, _len, _ink);
+                    pixelRun(_x0 + _runStart * _cS + _cHalf, _y, _len - 2 * _cHalf, _ink);
                 }
             }
             _g += 1;

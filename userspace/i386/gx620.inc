@@ -346,10 +346,11 @@ gxVisible:
     test    al, KIND_GROUP
     jz      .hidden
     mov     al, [es:GX_NODE]
+    xor     ah, ah                  ; the index is a byte, and a stale high half
     push    bx
-    mov     bx, GX_EXP
-    add     bx, ax
-    mov     al, [es:bx]
+    mov     bx, GX_EXP              ; turns `add bx, ax` into a read 256 rows
+    add     bx, ax                  ; past the table: a group whose marker says
+    mov     al, [es:bx]             ; open and whose children stay hidden
     pop     bx
     test    al, al
     jnz     .hidden
@@ -441,7 +442,33 @@ gxFold:
     mov     [es:bx], al
     call    gxVisible
     call    gxFollow
+    call    gxReveal
     pop     bx
+    pop     ax
+    ret
+
+; ---------------------------------------------------------------------------
+; gxReveal -- show one row of what a group just opened into.
+;
+; `gxFollow` keeps the *light* inside the window, and that is enough while the
+; rows under it do not change. Expanding a group whose light is already on the
+; window's last line adds the children *below* the window, so the marker turns
+; from + to - and nothing appears -- the group looks like it will not open. One
+; row of scroll fixes it, and only when there is a row below to show.
+; ---------------------------------------------------------------------------
+gxReveal:
+    push    ax
+    mov     al, [es:GX_SEL]
+    inc     al
+    cmp     al, [es:GX_NVIS]        ; nothing under the light: leave it be
+    jae     .out
+    mov     ah, [es:GX_TOP]
+    add     ah, [es:GX_M_SPAN]
+    cmp     al, ah
+    jbe     .out                    ; the row below is already on the screen
+    sub     al, [es:GX_M_SPAN]
+    mov     [es:GX_TOP], al
+.out:
     pop     ax
     ret
 

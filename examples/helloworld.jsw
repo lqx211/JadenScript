@@ -1,0 +1,49 @@
+stage {}
+class core {
+    private strings = [];
+    private s0 = 'H';
+    private s1 = 'e';
+    private s2 = 'l';
+    private s3 = 'o';
+    private s4 = ' ';
+    private s5 = 'w';
+    private s6 = 'r';
+    private s7 = 'd';
+    private s8 = '!';
+    private f = '';
+    private lv = 0;
+    public void greenFlag(){
+        helloWorld();
+    }
+    public void _print(n){
+        Looks.say(n);
+    }
+    public void _strinit(x){
+        strings.push(s0);
+        strings.push(s1);
+        lv = x;
+        while(lv>0){
+            strings.push(s2)
+            lv--
+        }
+        strings.push(s3);
+        strings.push(s4);
+        strings.push(s5);
+        strings.push(s3);
+        strings.push(s6);
+        strings.push(s2);
+        strings.push(s7);
+        strings.push(s8);
+    }
+    public void doPrint(){
+        while(strings.length()>0){
+            f = join(f,strings.get(1))
+            strings.remove(1);
+        }
+        _print(f);
+    }
+    public void helloWorld(){
+        _strinit(2);
+        doPrint();
+    }
+}

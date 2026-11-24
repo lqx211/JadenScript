@@ -15,9 +15,10 @@
  *     dT   = (P - (T - T_amb) / R_th(fan)) / C_th * dt          degrees
  *
  * and the fan's curve closes the loop -- hot die, faster fan, less thermal
- * resistance, cooler die. The time base is the machine's own RTC (`X.rtcRate`
- * frames to the emulated second), so a throttled browser reports the same
- * temperature as a fast one: the guest did the same work either way.
+ * resistance, cooler die. The time base is the machine's own RTC: the step is
+ * however many of *its* seconds have gone by since the last one, so a throttled
+ * browser and a fast one are integrating the same system over the same clock
+ * instead of a frame count that no two machines agree on.
  */
 
 class Sensor {
@@ -35,11 +36,20 @@ class Sensor {
         }
     }
 
+    /* The seconds since the last step, from the RTC rather than from a frame
+     * count: `wait 0` comes back many times a second-frame, so a fixed step
+     * per pass integrated this model dozens of times too fast. Clamped, because
+     * a tab that was hidden for a minute is not a minute of integration. */
     private void hwStep() { // warp
         if (X.emuOn < 1) {
+            X.hwAt = X.rtcSeconds;
             return;                   // hardware emulation off: no sensors
         }
-        _dt = 1 / X.rtcRate;
+        _dt = X.rtcSeconds - X.hwAt;
+        X.hwAt = X.rtcSeconds;
+        if (_dt < 0) { _dt = 0; }
+        if (_dt > 0.25) { _dt = 0.25; }
+        if (_dt == 0) { return; }
         X.powerOnSecs = X.rtcSeconds;
         /* What the core is doing right now, averaged over what it can do. The
          * boot core's utilisation, because a monitor that averaged the idle

@@ -17,10 +17,9 @@
  *     panel see the traffic a real drive would.
  *
  * The split matters. A synchronous ATA read cannot wait for a network round
- * trip: the firmware polls the status register once and gives up, which is why
- * a boot from a cold network disk is a boot that hangs. Read-ahead is the
- * answer a real drive gives, and it is the answer here -- the image is staged,
- * reads hit it, and the network carries the writes back.
+ * trip: the firmware polls the status register once and gives up. The full
+ * image is pulled before the CPU leaves its reset vector, then ATA reads are
+ * local indexed reads and the network carries writes back.
  *
  * A write is therefore a *cached* write, and a cached write can fail after the
  * drive has already said yes. That is not a fudge: a drive with its write cache
@@ -40,40 +39,59 @@ class NetDisk {
     private head = "";
     private pulling = 0;               // 1 while the drive is being pulled over
     private pullAt = 0;                // how many bytes of it have arrived
+    private tries = 0;                 // connection attempts before giving up
 
     public void netStart() { // hook: green flag
         Looks.hide();
+        X.netPulling = 1;
+        X.netBootStatus = "Connecting to the boot disk";
         X.netOn = 0;
         X.netAcks = 0;
         X.netFails = 0;
         X.netLast = "";
         X.netDeferred = 0;
         X.netOut.clear();
-        WebSocket.connectTo(url);
-        /* Two seconds of frames, not a spin: a socket that is refused has to
-         * report back, and on a backgrounded tab a frame is a second long. */
-        waited = 0;
-        while (WebSocket.isConnected < 1 && waited < 120) {
-            Control.wait(0);
-            waited += 1;
+        /* The deadline is the wall clock, not a count of frames. This used to
+         * be `120 frames`, which reads as two seconds at sixty a second and is
+         * nothing of the kind here: TurboWarp runs at a hundred and eighty and
+         * its turbo mode makes a frame as short as the CPU allows, so the
+         * socket got about twelve milliseconds to complete a handshake and the
+         * machine fell back to the staged disk while a perfectly good server
+         * was listening. Three tries of eight seconds also means the server can
+         * be started *after* the flag is pressed. */
+        tries = 0;
+        while (WebSocket.isConnected < 1 && tries < 3) {
+            tries += 1;
+            WebSocket.connectTo(url);
+            waited = Sensing.timer();
+            while (WebSocket.isConnected < 1 && Sensing.timer() - waited < 8) {
+                Control.wait(0);
+            }
         }
         if (WebSocket.isConnected < 1) {
+            X.netPulling = 0;
+            X.netBootStatus = join("Drive unavailable after ", join(tries, " tries; using built-in disk"));
             return;                         // no server: the staged image boots
         }
         X.netOn = 1;
         WebSocket.sendMessage("I");         // who the drive says it is
         /* The drive on the host is a file, and a file is not a Stage list: a
          * kernel is sixteen megabytes before it has done anything. So the whole
-         * image is pulled into the extension's own buffer, sixty-four sectors a
-         * message, and from then on a sector read is an index rather than a
-         * round trip. A read that had to wait for a round trip is the reason
-         * booting from a cold network disk used to hang. */
+         * image is pulled into the extension's own buffer, a hundred and
+         * twenty-eight sectors a message, and from then on a sector read is an
+         * index rather than a round trip. A read that had to wait for a round
+         * trip is the reason booting from a cold network disk used to hang.
+         *
+         * The message size is the speed of the pull: 128 sectors is one
+         * 64-KiB reply, so a 16-MB image takes about 250 round trips. */
         Ram.allocdisk(33554432);
         pulling = 1;
         pullAt = 0;
         X.netDisk = 0;
         X.netDiskSectors = 0;
-        X.netOut.add(join("R ", 0, " ", 64));
+        X.diskPulled = 0;
+        X.netBootStatus = "Downloading the boot disk: 0 sectors";
+        X.netOut.add(join("R ", 0, " ", 128));
         while (1) {
             pump();
             Control.wait(0);
@@ -102,21 +120,36 @@ class NetDisk {
         }
         if (pulling == 1) {
             if (head == "D") {
-                Ram.hexload(pullAt, msg);
+                /* The block is `load hex [TEXT] into the disk at [ADDR]`, so
+                 * the reply comes first and the offset second. Passing them
+                 * the other way round decodes the *count* as hex and writes
+                 * two bytes at offset zero: the pull still reports every
+                 * sector, and the image stays empty. */
+                Ram.hexload(msg, pullAt);
                 /* however many sectors the host actually sent: the last
                  * request of an image is short, and the drive is as long as
                  * what arrived */
                 pullAt += (Operators.length(msg) - 2) / 2;
-                X.netOut.add(join("R ", Operators.math("floor", pullAt / 512), " ", 64));
+                X.diskPulled = Operators.math("floor", pullAt / 512);
+                X.netBootStatus = join("Downloading the boot disk: ",
+                                       X.diskPulled, " sectors");
+                X.netOut.add(join("R ", X.diskPulled, " ", 128));
                 return;
             }
             if (head == "E") {
-                /* The host answered "no such sector": that is the end of the
-                 * image, and the drive is now as long as what arrived. */
                 pulling = 0;
                 X.netDiskSectors = Operators.math("floor", pullAt / 512);
-                X.netDisk = 1;
-                X.reboot = 1;            // the firmware reads sector 0 again
+                if (msg == "E past the end" && X.netDiskSectors > 0
+                    && Ram.diskread16(510) == 0xAA55) {
+                    X.netDisk = 1;
+                    X.netBootStatus = join("boot disk ready: ",
+                                           X.netDiskSectors, " sectors");
+                } else {
+                    X.netDisk = 0;
+                    X.netDiskSectors = 0;
+                    X.netBootStatus = join("boot disk load failed: ", msg);
+                }
+                X.netPulling = 0;       // the CPU can now boot, or use its fallback
                 return;
             }
         }
@@ -135,6 +168,14 @@ class NetDisk {
         if (head == "E") {
             X.netFails += 1;
             X.netLast = msg;
+            if (pulling == 1) {
+                pulling = 0;
+                X.netDisk = 0;
+                X.netDiskSectors = 0;
+                X.netPulling = 0;
+                X.netBootStatus = join("boot disk load failed: ", msg);
+                return;
+            }
             writeFailed();
             return;
         }
@@ -161,9 +202,23 @@ class NetDisk {
 
     public void netClosed() { // hook: WebSocket.onClose
         X.netOn = 0;
+        if (X.netPulling == 1) {
+            pulling = 0;
+            X.netDisk = 0;
+            X.netDiskSectors = 0;
+            X.netPulling = 0;
+            X.netBootStatus = "boot disk connection closed";
+        }
     }
 
     public void netErrored() { // hook: WebSocket.onError
         X.netOn = 0;
+        if (X.netPulling == 1) {
+            pulling = 0;
+            X.netDisk = 0;
+            X.netDiskSectors = 0;
+            X.netPulling = 0;
+            X.netBootStatus = "boot disk connection failed";
+        }
     }
 }

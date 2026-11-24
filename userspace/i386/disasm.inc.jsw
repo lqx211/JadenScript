@@ -1,0 +1,1014 @@
+/*
+ * disasm — the instruction at the parked instruction pointer, as text.
+ *
+ * The debugger's other half. `X.dbgIp` says where the machine is; this says
+ * what it is standing on, which is the difference between "it is at
+ * 0xF000:05CF" and "it is executing `mov dh, 0x0f` there, which is the middle
+ * of a string and not code at all".
+ *
+ * It only runs while the core is parked (`X.dbgOn` is 1), and that is what
+ * makes it affordable: a parked core retires nothing, so a decoder that costs a
+ * few hundred list reads costs the machine nothing. Decoding every frame of a
+ * *running* machine would be a tax on the thing being measured.
+ *
+ * The tables are `assets/lists/dis.jsa`, written by `tools/i386_dis.py`:
+ *
+ *   [1]              how many mnemonics
+ *   [2 .. n+1]       the mnemonics
+ *   [n+2 .. n+257]   code: which mnemonic an opcode byte means, -1 for none
+ *   [n+258 .. ...]   shape: which operands that opcode takes
+ *   ...              and the same two again for `0F xx`
+ *
+ * `tools/i386_dis.py` is the same decoder in Python, and its `--check` proves
+ * that one against nasm's own listings instruction for instruction: 8,391
+ * instructions of this machine's own firmware, no disagreement about where an
+ * instruction ends or what it is called. `tests/test_i386.py` runs both over
+ * the same bytes and requires the identical line -- because a disassembler that
+ * is one byte out puts every following line one byte out.
+ */
+
+public D.n = 0;                           // how long the instruction was
+
+private _dqAt = 0;                        // where the instruction starts
+private _dqI = 0;                         // where the next byte is, as an
+                                          // offset in the code segment
+private _dqOs = 16;                       // operand size, 16 or 32
+private _dqAs = 16;                       // address size
+private _dqSeg = "";                      // "es:" and friends, or nothing
+private _dqPre = "";                      // "rep ", "lock ", or nothing
+private _dqMop = "";                      // a modrm operand as text
+private _dqSh = 0;                        // the operand shape
+private _dqOp = 0;                        // the opcode: 0x100 | it, for two-byte
+private _dqLow = 0;                       // its low byte, which is what shapes test
+private _dqName = "";                     // the mnemonic
+private _dqS = "";
+private _dqT = "";
+private _dqBody = "";
+private _dqTail = "";
+private _dqKind = "";
+private _dqP = 0;
+private _dqQ = 0;
+private _dqR = 0;
+private _dqIsByte = 0;                    // the operand is one byte wide
+private _dqMod = 0;
+private _dqReg = 0;
+private _dqRm = 0;
+private _dqUsed = 0;
+private _dqDisp = 0;
+private _dqHasDisp = 0;
+private _dqIdx = "";
+private _dqBase = "";
+private _dqDig = 2;                       // the digits a displacement prints with
+private _dhS = "";                        // dHex's own working string
+private _dhP = 0;
+private _dhQ = 0;
+private _dwP = 0;                         // dWord's and dLong's own scratch
+private peekOnly = 0;                     // a read that must not fault
+private peekMiss = 0;                     // ... and that found nothing there
+
+/* An entry of one of the four tables: `base` is the index of the table's first
+   of 256 -- D.MN + 2 for `code`, D.MN + 258 for `shape` -- and `k` is the byte. */
+private void dTab(base, k) { // warp
+    v = dis.get(base + k) + 0;
+}
+
+/* Entry k of one of the name tables: one-based, `k` from zero. */
+private void dName(base, k) { // warp
+    v = dis.get(base + k);
+}
+
+/* Which mnemonic entry k is, k from zero. */
+private void dMn(k) { // warp
+    v = dis.get(k + 2);
+}
+
+/* A byte of the instruction stream, without moving the instruction pointer.
+
+   A peek, not an access: a missing page under the debugger must not take a
+   fault, because taking one changes the machine that is being looked at. What
+   is under an address the page tables do not map reads as the open bus, and
+   that is what the line shows. */
+private void dByte(off) { // warp
+    peekOnly = 1;
+    peekMiss = 0;
+    phys(2, off);
+    if (peekMiss == 1) {
+        peekOnly = 0;
+        v = 255;
+        return;
+    }
+    rdb(v);
+    peekOnly = 0;
+}
+
+private void dWord(off) { // warp
+    dByte(off);
+    _dwP = v;
+    dByte(off + 1);
+    v = _dwP + v * 256;
+}
+
+private void dLong(off) { // warp
+    dByte(off);
+    _dwP = v;
+    dByte(off + 1);
+    _dwP = _dwP + v * 256;
+    dByte(off + 2);
+    _dwP = _dwP + v * 65536;
+    dByte(off + 3);
+    v = _dwP + v * 16777216;
+}
+
+/* `0x1f`: the hex of a value, lowercase, exactly `width` digits.
+
+   Its own scratch, not `_dqP`/`_dqQ`: it is called in the middle of building an
+   operand, and a helper that eats the renderer's working variables is the kind
+   of bug that shows up as one wrong digit three shapes later. */
+private void dHex(value, width) { // warp
+    _dhS = "";
+    _dhP = value % 4294967296;
+    _dhQ = width;
+    while (1) {
+        _dhS = join(Operators.letterOf(_dhP % 16 + 1, "0123456789abcdef"), _dhS);
+        _dhP = Operators.math("floor", _dhP / 16);
+        _dhQ -= 1;
+        if (_dhP < 1 && _dhQ < 1) {
+            v = join("0x", _dhS);
+            return;
+        }
+    }
+}
+
+/* A register name. `width8` 1 is an 8-bit name; otherwise the operand size
+   decides, which is what the 0x66 prefix is for. */
+private void dReg(i, width8) { // warp
+    if (width8 == 1) {
+        dName(D.T_R8, i);
+        return;
+    }
+    if (_dqOs == 32) {
+        dName(D.T_R32, i);
+        return;
+    }
+    dName(D.T_R16, i);
+}
+
+/* A displacement the way a person reads one: the sign, then the magnitude, so
+   `[bp-0x04]` does not come out as `[bp+0xfffc]`. */
+private void dSigned(value, width) { // warp
+    if (value < 0) {
+        dHex(-value, width);
+        v = join("-", v);
+        return;
+    }
+    dHex(value, width);
+    v = join("+", v);
+}
+
+/*
+ * The operand a modrm byte names, into `_dqMop`, and its reg field.
+ *
+ * `mod == 3` is a register. Anything else is an address, and the address is
+ * where the encoding stops being regular: the sixteen-bit form has eight
+ * base/index pairs and one of them means "no base, a word of displacement
+ * follows", and the thirty-two-bit form has a second byte for the same job.
+ */
+private void dModrm(off, width8) { // warp
+    dByte(off);
+    _dqP = v;                            // the modrm byte
+    _dqReg = Operators.math("floor", _dqP / 8) % 8;
+    _dqRm = _dqP % 8;
+    _dqMod = Operators.math("floor", _dqP / 64);
+    _dqUsed = 1;
+    if (_dqMod == 3) {
+        dReg(_dqRm, width8);
+        _dqMop = v;
+        _dqI = off + 1;
+        return;
+    }
+    _dqDig = 2;
+    if (_dqAs == 32) { _dqDig = 4; }
+    _dqBody = "";
+    _dqIdx = "";
+    _dqBase = "";
+    _dqDisp = 0;
+    _dqHasDisp = 0;
+    if (_dqAs == 16) {
+        dAddr16(off);
+    } else {
+        dAddr32(off);
+    }
+    _dqTail = "";
+    if (_dqHasDisp == 1) {
+        if (_dqBody == "") {
+            dHex(_dqDisp, _dqDig);       // no base: the address is the whole of it
+        } else {
+            dSigned(_dqDisp, _dqDig);
+        }
+        _dqTail = v;
+    }
+    _dqKind = "byte ";
+    if (width8 == 0) {
+        _dqKind = "word ";
+        if (_dqOs == 32) { _dqKind = "dword "; }
+    }
+    _dqMop = join(_dqKind, "[", _dqSeg, _dqBody, _dqTail, "]");
+    _dqI = off + _dqUsed;
+}
+
+/* Eight base/index pairs, and `mod 0 / rm 6` which is an absolute word with no
+   base at all. */
+private void dAddr16(off) { // warp
+    _dqI = off + 1;
+    if (_dqRm == 0) { _dqBody = "bx+si"; }
+    if (_dqRm == 1) { _dqBody = "bx+di"; }
+    if (_dqRm == 2) { _dqBody = "bp+si"; }
+    if (_dqRm == 3) { _dqBody = "bp+di"; }
+    if (_dqRm == 4) { _dqBody = "si"; }
+    if (_dqRm == 5) { _dqBody = "di"; }
+    if (_dqRm == 6) { _dqBody = "bp"; }
+    if (_dqRm == 7) { _dqBody = "bx"; }
+    if (_dqMod == 0 && _dqRm == 6) {
+        _dqBody = "";                    // 0x1234 absolute, not [bp+0x1234]
+        dWord(_dqI);
+        _dqDisp = v;
+        _dqHasDisp = 1;
+        _dqUsed = 3;
+        return;
+    }
+    if (_dqMod == 1) {
+        dByte(_dqI);
+        _dqDisp = v;
+        if (_dqDisp > 127) { _dqDisp -= 256; }
+        _dqHasDisp = 1;
+        _dqUsed = 2;
+        return;
+    }
+    if (_dqMod == 2) {
+        dWord(_dqI);
+        _dqDisp = v;
+        if (_dqDisp > 32767) { _dqDisp -= 65536; }
+        _dqHasDisp = 1;
+        _dqUsed = 3;
+    }
+}
+
+/* A SIB byte when rm says so, and `mod 0 / rm 5` which is an absolute dword. */
+private void dAddr32(off) { // warp
+    _dqI = off + 1;
+    _dqUsed = 1;
+    if (_dqRm == 4) {
+        dByte(_dqI);
+        _dqP = v;                        // the SIB byte
+        _dqI += 1;
+        _dqUsed = 2;
+        _dqRm = Operators.math("floor", _dqP / 8) % 8;   // index
+        _dqQ = _dqP % 8;                                 // base
+        if (_dqRm != 4) {                // 4 is "no index", not esp
+            dName(D.T_R32, _dqRm);
+            _dqIdx = v;
+            _dqR = Operators.math("floor", _dqP / 64);
+            if (_dqR > 0) {
+                dName(D.T_SCALE, _dqR);
+                _dqIdx = join(_dqIdx, "*", v);
+            }
+        }
+        if (_dqQ == 5 && _dqMod == 0) {
+            dLong(_dqI);
+            _dqDisp = v;
+            _dqHasDisp = 1;
+            _dqI += 4;
+            _dqUsed += 4;
+        } else {
+            dName(D.T_R32, _dqQ);
+            _dqBase = v;
+        }
+    } elif (_dqMod == 0 && _dqRm == 5) {
+        dLong(_dqI);
+        _dqDisp = v;
+        _dqHasDisp = 1;
+        _dqI += 4;
+        _dqUsed += 4;
+    } else {
+        dName(D.T_R32, _dqRm);
+        _dqBase = v;
+    }
+    _dqBody = _dqBase;
+    if (_dqIdx != "") {
+        if (_dqBody != "") { _dqBody = join(_dqBody, "+"); }
+        _dqBody = join(_dqBody, _dqIdx);
+    }
+    if (_dqMod == 1) {
+        dByte(_dqI);
+        _dqDisp = v;
+        if (_dqDisp > 127) { _dqDisp -= 256; }
+        _dqHasDisp = 1;
+        _dqI += 1;
+        _dqUsed += 1;
+    } elif (_dqMod == 2) {
+        dLong(_dqI);
+        _dqDisp = v;
+        _dqHasDisp = 1;
+        _dqI += 4;
+        _dqUsed += 4;
+    }
+}
+
+/* The prefixes, in the order they were written. 0x66 and 0x67 are toggles: they
+   mean "the other size", not "thirty-two". */
+private void dPrefix() { // warp
+    while (1) {
+        dByte(_dqI);
+        if (v == 102) {
+            if (_dqOs == 16) { _dqOs = 32; } else { _dqOs = 16; }
+            _dqI += 1;
+        } elif (v == 103) {
+            if (_dqAs == 16) { _dqAs = 32; } else { _dqAs = 16; }
+            _dqI += 1;
+        } elif (v == 38) {
+            _dqSeg = "es:";
+            _dqI += 1;
+        } elif (v == 46) {
+            _dqSeg = "cs:";
+            _dqI += 1;
+        } elif (v == 54) {
+            _dqSeg = "ss:";
+            _dqI += 1;
+        } elif (v == 62) {
+            _dqSeg = "ds:";
+            _dqI += 1;
+        } elif (v == 100) {
+            _dqSeg = "fs:";
+            _dqI += 1;
+        } elif (v == 101) {
+            _dqSeg = "gs:";
+            _dqI += 1;
+        } elif (v == 240) {
+            _dqPre = "lock ";
+            _dqI += 1;
+        } elif (v == 242) {
+            _dqPre = "repne ";
+            _dqI += 1;
+        } elif (v == 243) {
+            _dqPre = "rep ";
+            _dqI += 1;
+        } else {
+            return;
+        }
+    }
+}
+
+/* `[+0x04]`-style displacement, into `_dqS`. */
+private void dTailOf(remember) { // warp
+    if (_dqBody == "") {
+        dHex(_dqDisp, _dqDig);
+    } else {
+        dSigned(_dqDisp, _dqDig);
+    }
+}
+
+/* The register the operand size picks, into `_dqS`. */
+private void dRegOp(i) { // warp
+    dReg(i, 0);
+    _dqS = v;
+}
+
+/* The line itself: the instruction at `at`, as text in `X.dbgDis`, and its
+   length in `D.n`. The caller says where, because a halted core is standing on
+   the instruction that stopped it and its own `ip` has already moved on. */
+public void disasm(at) { // warp
+    _dqAt = at;
+    _dqI = at;
+    _dqOs = 16;
+    _dqAs = 16;
+    if (dsz == 4) {
+        _dqOs = 32;
+        _dqAs = 32;
+    }
+    _dqSeg = "";
+    _dqPre = "";
+    dPrefix();
+    dByte(_dqI);
+    _dqOp = v;
+    _dqI += 1;
+    if (_dqOp == 15) {
+        dByte(_dqI);
+        _dqQ = v;
+        _dqI += 1;
+        _dqLow = _dqQ;
+        _dqOp = 256 + _dqQ;
+        dTab(D.MN + 514, _dqQ);
+        if (v < 0) {
+            dHex(15, 2);
+            _dqS = v;
+            dHex(_dqQ, 2);
+            X.dbgDis = join(_dqPre, _dqSeg, "db ", _dqS, ",", v);
+            D.n = _dqI - _dqAt;
+            return;
+        }
+    } else {
+        _dqLow = _dqOp;
+        dTab(D.MN + 2, _dqLow);
+        if (v < 0) {
+            dHex(_dqLow, 2);
+            X.dbgDis = join(_dqPre, _dqSeg, "db ", v);
+            D.n = _dqI - _dqAt;
+            return;
+        }
+    }
+    dMn(v);
+    _dqName = v;
+    if (_dqOp >= 256) {
+        dTab(D.MN + 770, _dqLow);
+    } else {
+        dTab(D.MN + 258, _dqLow);
+    }
+    _dqSh = v + 0;
+    dShape();
+    X.dbgDis = join(_dqPre, _dqS);
+    D.n = _dqI - _dqAt;
+}
+
+/* Which operands the shape wants, rendered into `_dqS` with the mnemonic in
+   front. One branch per shape; the numbering is `D.K_*`. */
+private void dShape() { // warp
+    _dqS = _dqName;
+    if (_dqSh == D.K_NONE || _dqSh == D.K_SEGIMP || _dqSh == D.K_STRING) { return; }
+    if (_dqSh == D.K_PUSHA) {
+        _dqS = "pusha";
+        if (_dqOs == 32) { _dqS = "pushad"; }
+        return;
+    }
+    if (_dqSh == D.K_ENTER) {
+        dWord(_dqI);
+        _dqS = join(_dqName, " ");
+        dHex(v, 4);
+        _dqS = join(_dqS, v, ",");
+        dByte(_dqI + 2);
+        dHex(v, 2);
+        _dqS = join(_dqS, v);
+        _dqI += 3;
+        return;
+    }
+    if (_dqSh == D.K_RETF_IW || _dqSh == D.K_IW) {
+        dWord(_dqI);
+        dHex(v, 4);
+        _dqS = join(_dqName, " ", v);
+        _dqI += 2;
+        return;
+    }
+    if (_dqSh == D.K_IB || _dqSh == D.K_AAM) {
+        dByte(_dqI);
+        dHex(v, 2);
+        _dqS = join(_dqName, " ", v);
+        _dqI += 1;
+        return;
+    }
+    if (_dqSh == D.K_LOOP || _dqSh == D.K_JB) {
+        dByte(_dqI);
+        _dqP = v;
+        if (_dqP > 127) { _dqP -= 256; }
+        dHex((_dqI + 1 + _dqP) % 65536, 4);
+        _dqS = join(_dqName, " ", v);
+        _dqI += 1;
+        return;
+    }
+    if (_dqSh == D.K_JCC32) {
+        if (_dqOs == 32) {
+            dLong(_dqI);
+            _dqP = v;
+            if (_dqP > 2147483647) { _dqP -= 4294967296; }
+            dHex((_dqI + 4 + _dqP) % 4294967296, 8);
+            _dqT = v;
+            dName(D.T_CC, _dqLow % 16);
+            _dqS = join("j", v, " ", _dqT);
+            _dqI += 4;
+            return;
+        }
+        dWord(_dqI);
+        _dqP = v;
+        if (_dqP > 32767) { _dqP -= 65536; }
+        dHex((_dqI + 2 + _dqP) % 65536, 4);
+        _dqT = v;
+        dName(D.T_CC, _dqLow % 16);
+        _dqS = join("j", v, " ", _dqT);
+        _dqI += 2;
+        return;
+    }
+    if (_dqSh == D.K_JV) {
+        if (_dqOs == 32) {
+            dLong(_dqI);
+            _dqP = v;
+            if (_dqP > 2147483647) { _dqP -= 4294967296; }
+            dHex((_dqI + 4 + _dqP) % 4294967296, 8);
+            _dqI += 4;
+        } else {
+            dWord(_dqI);
+            _dqP = v;
+            if (_dqP > 32767) { _dqP -= 65536; }
+            dHex((_dqI + 2 + _dqP) % 65536, 4);
+            _dqI += 2;
+        }
+        _dqS = join(_dqName, " ", v);
+        return;
+    }
+    if (_dqSh == D.K_AP) {
+        dWord(_dqI);
+        _dqP = v;                        // the offset
+        dWord(_dqI + 2);
+        dHex(v, 4);
+        _dqS = join(v, ":");
+        dHex(_dqP, 4);
+        _dqS = join(_dqName, " ", _dqS, v);
+        _dqI += 4;
+        return;
+    }
+    if (_dqSh == D.K_OB || _dqSh == D.K_OV) {
+        dAddrMoffs();
+        return;
+    }
+    if (_dqSh == D.K_ZREG) {
+        dRegOp(_dqLow % 8);
+        _dqS = join(_dqName, " ", _dqS);
+        return;
+    }
+    if (_dqSh == D.K_ZB) {
+        dName(D.T_R8, _dqLow % 8);
+        _dqS = join(_dqName, " ", v, ", ");
+        dByte(_dqI);
+        dHex(v, 2);
+        _dqS = join(_dqS, v);
+        _dqI += 1;
+        return;
+    }
+    if (_dqSh == D.K_ZV) {
+        dRegOp(_dqLow % 8);
+        _dqS = join(_dqName, " ", _dqS, ", ");
+        if (_dqOs == 32) {
+            dLong(_dqI);
+            dHex(v, 8);
+            _dqI += 4;
+        } else {
+            dWord(_dqI);
+            dHex(v, 4);
+            _dqI += 2;
+        }
+        _dqS = join(_dqS, v);
+        return;
+    }
+    if (_dqSh == D.K_AL_IB) {
+        dByte(_dqI);
+        dHex(v, 2);
+        _dqS = join(_dqName, " al, ", v);
+        _dqI += 1;
+        return;
+    }
+    if (_dqSh == D.K_RAX_IV) {
+        if (_dqOs == 32) {
+            dLong(_dqI);
+            dHex(v, 8);
+            _dqI += 4;
+            _dqS = join(_dqName, " eax, ", v);
+        } else {
+            dWord(_dqI);
+            dHex(v, 4);
+            _dqI += 2;
+            _dqS = join(_dqName, " ax, ", v);
+        }
+        return;
+    }
+    if (_dqSh == D.K_IN_IB) {
+        _dqP = "al";
+        if (_dqLow % 2 == 1) { _dqP = "ax"; }
+        if (_dqLow % 2 == 1 && _dqOs == 32) { _dqP = "eax"; }
+        dByte(_dqI);
+        dHex(v, 2);
+        if (_dqName == "out") {
+            _dqS = join("out ", v, ", ", _dqP);
+        } else {
+            _dqS = join("in ", _dqP, ", ", v);
+        }
+        _dqI += 1;
+        return;
+    }
+    if (_dqSh == D.K_IN_DX) {
+        _dqP = "al";
+        if (_dqLow % 2 == 1) { _dqP = "ax"; }
+        if (_dqLow % 2 == 1 && _dqOs == 32) { _dqP = "eax"; }
+        if (_dqName == "out") {
+            _dqS = join("out dx, ", _dqP);
+        } else {
+            _dqS = join("in ", _dqP, ", dx");
+        }
+        return;
+    }
+    dShapeModrm();
+}
+
+/* `mov al,[0x4ee]` and its three siblings: an absolute address with the
+   accumulator, and no modrm at all. */
+private void dAddrMoffs() { // warp
+    _dqDig = 4;
+    if (_dqAs == 32) { _dqDig = 8; }
+    if (_dqAs == 32) {
+        dLong(_dqI);
+        _dqI += 4;
+    } else {
+        dWord(_dqI);
+        _dqI += 2;
+    }
+    _dqKind = "byte";
+    if (_dqSh == D.K_OV) {
+        _dqKind = "word";
+        if (_dqOs == 32) { _dqKind = "dword"; }
+    }
+    _dqP = join(_dqKind, " [", _dqSeg);
+    dHex(v, _dqDig);
+    _dqP = join(_dqP, v, "]");
+    _dqQ = "al";
+    if (_dqSh == D.K_OV) {
+        _dqQ = "ax";
+        if (_dqOs == 32) { _dqQ = "eax"; }
+    }
+    if (_dqLow == 160 || _dqLow == 161) {
+        _dqS = join("mov ", _dqQ, ", ", _dqP);
+        return;
+    }
+    _dqS = join("mov ", _dqP, ", ", _dqQ);
+}
+
+/* A displacement printed the way `_imm` prints one: two digits while it fits in
+   a byte, four otherwise, and always unsigned. */
+private void dImm8ish(value) { // warp
+    _dqP = value % 4294967296;
+    _dqQ = 2;
+    if (value > 255 || value < -128) { _dqQ = 4; }
+    dHex(_dqP, _dqQ);
+}
+
+/* Everything that reads a modrm byte: the register forms, the eight groups, the
+   shifts and the two escapes. */
+private void dShapeModrm() { // warp
+    _dqS = _dqName;
+    if (_dqSh == D.K_EB_GB) {
+        dModrm(_dqI, 1);
+        dName(D.T_R8, _dqReg);
+        _dqS = join(_dqName, " ", _dqMop, ", ", v);
+        return;
+    }
+    if (_dqSh == D.K_GB_EB) {
+        dModrm(_dqI, 1);
+        dName(D.T_R8, _dqReg);
+        _dqS = join(_dqName, " ", v, ", ", _dqMop);
+        return;
+    }
+    if (_dqSh == D.K_EV_GV) {
+        dModrm(_dqI, 0);
+        dRegOf(_dqReg);
+        _dqS = join(_dqName, " ", _dqMop, ", ", v);
+        return;
+    }
+    if (_dqSh == D.K_GV_EV) {
+        dModrm(_dqI, 0);
+        dRegOf(_dqReg);
+        _dqS = join(_dqName, " ", v, ", ", _dqMop);
+        return;
+    }
+    if (_dqSh == D.K_EB_IB) {
+        dModrm(_dqI, 1);
+        dByte(_dqI);
+        dHex(v, 2);
+        _dqS = join(_dqName, " ", _dqMop, ", ", v);
+        _dqI += 1;
+        return;
+    }
+    if (_dqSh == D.K_EV_IV) {
+        dModrm(_dqI, 0);
+        if (_dqOs == 32) {
+            dLong(_dqI);
+            dHex(v, 8);
+            _dqI += 4;
+        } else {
+            dWord(_dqI);
+            dHex(v, 4);
+            _dqI += 2;
+        }
+        _dqS = join(_dqName, " ", _dqMop, ", ", v);
+        return;
+    }
+    if (_dqSh == D.K_EV_IBS) {
+        dModrm(_dqI, 0);
+        _dqR = _dqReg;
+        dByte(_dqI);
+        _dqP = v;
+        if (_dqP > 127) { _dqP -= 256; }
+        _dqI += 1;
+        if (_dqName == "grp1") {
+            dImm8ish(_dqP);
+            _dqT = v;
+            dName(D.T_ALU, _dqR);
+            _dqS = join(v, " ", _dqMop, ", ", _dqT);
+            return;
+        }
+        if (_dqName == "imul") {
+            dImm8ish(_dqP);
+            _dqT = v;
+            dRegOf(_dqR);
+            _dqS = join("imul ", v, ", ", _dqMop, ", ", _dqT);
+            return;
+        }
+        dImm8ish(_dqP);
+        _dqS = join(_dqName, " ", _dqMop, ", ", v);
+        return;
+    }
+    if (_dqSh == D.K_G1B || _dqSh == D.K_G1V || _dqSh == D.K_G1VS) {
+        _dqR = _dqSh == D.K_G1B;         // 1 for the byte form
+        dModrm(_dqI, _dqR);
+        _dqR = _dqReg;
+        if (_dqSh == D.K_G1VS) {
+            dByte(_dqI);
+            _dqP = v;
+            if (_dqP > 127) { _dqP -= 256; }
+            dImm8ish(_dqP);
+            _dqI += 1;
+        } elif (_dqR >= 0 && _dqSh == D.K_G1B) {
+            dByte(_dqI);
+            dHex(v, 2);
+            _dqI += 1;
+        } elif (_dqOs == 32) {
+            dLong(_dqI);
+            dHex(v, 8);
+            _dqI += 4;
+        } else {
+            dWord(_dqI);
+            dHex(v, 4);
+            _dqI += 2;
+        }
+        _dqT = v;
+        dName(D.T_ALU, _dqR);
+        _dqS = join(v, " ", _dqMop, ", ", _dqT);
+        return;
+    }
+    if (_dqSh == D.K_G2B || _dqSh == D.K_G2V) {
+        _dqR = _dqSh == D.K_G2B;
+        dModrm(_dqI, _dqR);
+        dName(D.T_SHIFT, _dqReg);
+        _dqR = v;
+        if (_dqLow == 192 || _dqLow == 193) {
+            dByte(_dqI);
+            dHex(v, 2);
+            _dqS = join(_dqR, " ", _dqMop, ", ", v);
+            _dqI += 1;
+            return;
+        }
+        if (_dqLow == 208 || _dqLow == 209) {
+            _dqS = join(_dqR, " ", _dqMop, ", 1");
+            return;
+        }
+        _dqS = join(_dqR, " ", _dqMop, ", cl");
+        return;
+    }
+    if (_dqSh == D.K_G3B || _dqSh == D.K_G3V) {
+        _dqR = _dqSh == D.K_G3B;
+        /* `dModrm` uses `_dqR` itself when there is a SIB byte, so the width
+         * of this group's operand has to live somewhere else: `test byte
+         * [eax+esi*4], 0xc8` read a thirty-two-bit immediate because the
+         * scale byte had overwritten the flag. */
+        _dqIsByte = _dqR;
+        dModrm(_dqI, _dqR);
+        if (_dqReg == 0) {
+            if (_dqIsByte == 1) {
+                dByte(_dqI);
+                dHex(v, 2);
+                _dqI += 1;
+            } elif (_dqOs == 32) {
+                dLong(_dqI);
+                dHex(v, 8);
+                _dqI += 4;
+            } else {
+                dWord(_dqI);
+                dHex(v, 4);
+                _dqI += 2;
+            }
+            _dqS = join("test ", _dqMop, ", ", v);
+            return;
+        }
+        if (_dqReg == 1) {
+            _dqS = join("test ", _dqMop);
+            return;
+        }
+        dName(D.T_G3, _dqReg);
+        _dqS = join(v, " ", _dqMop);
+        return;
+    }
+    if (_dqSh == D.K_G4B) {
+        dModrm(_dqI, 1);
+        dName(D.T_G4, _dqReg);
+        _dqS = join(v, " ", _dqMop);
+        return;
+    }
+    if (_dqSh == D.K_G5V) {
+        dModrm(_dqI, 0);
+        if (_dqReg == 3 || _dqReg == 5) {
+            _dqS = join("call far ", _dqMop);
+        } elif (_dqReg == 2) {
+            _dqS = join("call ", _dqMop);
+        } elif (_dqReg == 4) {
+            _dqS = join("jmp ", _dqMop);
+        } elif (_dqReg == 6) {
+            _dqS = join("push ", _dqMop);
+        } else {
+            dName(D.T_G5, _dqReg);
+            _dqS = join(v, " ", _dqMop);
+        }
+        return;
+    }
+    if (_dqSh == D.K_G6) {
+        dModrm(_dqI, 0);
+        dName(D.T_G6, _dqReg);
+        _dqS = join(v, " ", _dqMop);
+        return;
+    }
+    if (_dqSh == D.K_G7) {
+        dModrm(_dqI, 0);
+        dName(D.T_G7, _dqReg);
+        _dqS = join(v, " ", _dqMop);
+        return;
+    }
+    if (_dqSh == D.K_MOV_EW_SREG || _dqSh == D.K_MOV_SREG_EW) {
+        dByte(_dqI);
+        _dqR = Operators.math("floor", v / 8) % 8;
+        dName(D.T_SREG, _dqR);
+        _dqT = v;
+        if (_dqR > 5) { _dqT = "?"; }
+        dModrm(_dqI, 0);
+        if (_dqSh == D.K_MOV_EW_SREG) {
+            _dqS = join("mov ", _dqMop, ", ", _dqT);
+        } else {
+            _dqS = join("mov ", _dqT, ", ", _dqMop);
+        }
+        return;
+    }
+    if (_dqSh == D.K_EW) {
+        dModrm(_dqI, 0);
+        dName(D.T_R16, _dqReg);          // arpl's second operand is a word
+        _dqS = join(_dqName, " ", _dqMop, ", ", v);
+        return;
+    }
+    if (_dqSh == D.K_SETCC) {
+        dModrm(_dqI, 1);
+        dName(D.T_CC, _dqLow % 16);
+        _dqS = join("set", v, " ", _dqMop);
+        return;
+    }
+    if (_dqSh == D.K_CMOV) {
+        dModrm(_dqI, 0);
+        dRegOf(_dqReg);
+        _dqT = v;
+        dName(D.T_CC, _dqLow % 16);
+        _dqS = join("cmov", v, " ", _dqT, ", ", _dqMop);
+        return;
+    }
+    if (_dqSh == D.K_MOVZX) {
+        dModrm(_dqI, 0);
+        dRegOf(_dqReg);
+        _dqS = join(_dqName, " ", v, ", ", _dqMop);
+        return;
+    }
+    if (_dqSh == D.K_IMUL3) {
+        dModrm(_dqI, 0);
+        _dqR = _dqReg;
+        if (_dqLow == 105) {
+            if (_dqOs == 32) {
+                dLong(_dqI);
+                dHex(v, 8);
+                _dqI += 4;
+            } else {
+                dWord(_dqI);
+                dHex(v, 4);
+                _dqI += 2;
+            }
+            _dqT = v;
+            dRegOf(_dqR);
+            _dqS = join("imul ", v, ", ", _dqMop, ", ", _dqT);
+            return;
+        }
+        dRegOf(_dqR);
+        _dqS = join("imul ", v, ", ", _dqMop);
+        return;
+    }
+    if (_dqSh == D.K_NOP0F) {
+        dModrm(_dqI, 0);
+        _dqS = join("nop ", _dqMop);
+        return;
+    }
+    if (_dqSh == D.K_BOUND) {
+        dModrm(_dqI, 0);
+        dRegOf(_dqReg);
+        _dqS = join("bound ", v, ", ", _dqMop);
+        return;
+    }
+    if (_dqSh == D.K_LAR) {
+        dModrm(_dqI, 0);
+        dRegOf(_dqReg);
+        _dqS = join(_dqName, " ", v, ", ", _dqMop);
+        return;
+    }
+    if (_dqSh == D.K_SHLD) {
+        /* the second operand is the modrm's reg field -- read it *after* the
+           operand, because a 32-bit address is what rewrites the scratch
+           registers while it is being built */
+        dModrm(_dqI, 0);
+        dName(D.T_R16, _dqReg);
+        _dqT = v;
+        if (_dqOs == 32) {
+            dName(D.T_R32, _dqReg);
+            _dqT = v;
+        }
+        if (_dqLow == 164 || _dqLow == 172) {
+            dByte(_dqI);
+            dHex(v, 2);
+            _dqI += 1;
+            _dqS = join(_dqName, " ", _dqMop, ", ", _dqT, ", ", v);
+            return;
+        }
+        _dqS = join(_dqName, " ", _dqMop, ", ", _dqT, ", cl");
+        return;
+    }
+    if (_dqSh == D.K_BT) {
+        dModrm(_dqI, 0);
+        dRegOf(_dqReg);
+        _dqS = join(_dqName, " ", _dqMop, ", ", v);
+        return;
+    }
+    if (_dqSh == D.K_GRP8B) {
+        dModrm(_dqI, 0);
+        _dqR = _dqReg;
+        dByte(_dqI);
+        dHex(v, 2);
+        _dqI += 1;
+        _dqT = v;
+        dName(D.T_G8, _dqR);
+        _dqS = join(v, " ", _dqMop, ", ", _dqT);
+        return;
+    }
+    if (_dqSh == D.K_CMPXCHG8) {
+        dModrm(_dqI, 0);
+        _dqS = join("cmpxchg8b ", _dqMop);
+        return;
+    }
+    if (_dqSh == D.K_CV || _dqSh == D.K_MOV_TREG) {
+        dByte(_dqI);
+        _dqI += 1;
+        _dqR = v % 8;
+        _dqQ = Operators.math("floor", v / 8) % 8;
+        if (_dqLow == 32 || _dqLow == 33) {
+            dName(D.T_R32, _dqR);
+            _dqS = join("mov ", v, ", cr", _dqQ);
+            return;
+        }
+        if (_dqLow == 34 || _dqLow == 35) {
+            dName(D.T_R32, _dqR);
+            _dqS = join("mov ", v, ", dr", _dqQ);
+            return;
+        }
+        if (_dqLow == 36 || _dqLow == 37) {
+            dName(D.T_R32, _dqR);
+            _dqS = join("mov tr", _dqQ, ", ", v);
+            return;
+        }
+        dName(D.T_R32, _dqR);
+        _dqS = join("mov ", v, ", tr", _dqQ);
+        return;
+    }
+    if (_dqSh == D.K_X87OP) {
+        dByte(_dqI);
+        _dqMod = Operators.math("floor", v / 64);
+        if (_dqMod == 3) {
+            _dqI += 1;
+            _dqS = join("esc st", v % 8);
+            return;
+        }
+        dModrm(_dqI, 0);
+        _dqS = join("esc ", _dqMop);
+        return;
+    }
+}
+
+/* A register name by the operand size, for the shapes that print one without
+   going through a modrm operand. */
+private void dRegOfName(i) { // warp
+    if (_dqOs == 32) {
+        dName(D.T_R32, i);
+        _dqS = v;
+        return;
+    }
+    dName(D.T_R16, i);
+    _dqS = v;
+}
+
+/* `dRegOf(k)` as a value, because Scratch procedures cannot return one. */
+private void dRegOf(k) { // warp
+    dRegOfName(k);
+    v = _dqS;
+}

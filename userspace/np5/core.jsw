@@ -1,0 +1,350 @@
+// The clock and the event cursor. This class owns Tick and nothing else: every
+// sound lives in a synth.gm.* clone, and every note is a row of the FLDataV2
+// lists that song/song.jsw imports.
+//
+// None of these procedures is `// warp`, and that is deliberate. In warp mode
+// the VM re-executes a yielded block inside the same frame instead of
+// rescheduling the thread (sequencer.js: "In warp mode, yielded blocks are
+// re-executed immediately"), so a tick loop that rests for its tick burns the
+// whole 500 ms warp budget every frame: it fires half a second of notes at once
+// and then freezes. Warp belongs on bounded work that must finish atomically --
+// loading, parsing -- never on a loop that is supposed to stay in real time.
+class core {
+    private _k;
+    private _v;
+    private _sp;
+    private _now;
+    private _n;
+
+        private void dispatch(i) {
+        _k = Player.EvKind.get(i);
+        if (_k == 0) {
+            // The key is lit until the note's own end, not until a note-off
+            // arrives. A seek -- the clock jumping over a stall -- moves the
+            // cursor past the note-offs of the notes that were down, and a key
+            // driven by those events then stayed on for the rest of the song.
+            // `Piano.end` is what the score says, and `drawKeys` lights the key
+            // while the clock is behind it, so a skipped note-off cannot stick.
+            // Overlapping notes on one key keep the later end, and the lit-key
+            // fade runs off the note's own span.
+            Piano.hue.set(Player.EvA.get(i) + 1, Player.EvTrk.get(i) + 1);
+            // The end is the note's own tick plus its length, not "now plus
+            // length": a note dispatched a tick late -- the first tick of a song
+            // is tick 1, and a dense passage can lag more -- must still go dark
+            // where the score says. A note whose end has already passed still
+            // lights its key for a moment, so a stall does not leave the
+            // keyboard blind.
+            _n = Player.EvTick.get(i) + Player.EvLen.get(i);
+            if (_n < Tick.tick) {
+                _n = Tick.tick;
+            }
+            if (Piano.end.get(Player.EvA.get(i) + 1) > _n) {
+                _n = Piano.end.get(Player.EvA.get(i) + 1);
+            }
+            Piano.end.set(Player.EvA.get(i) + 1, _n);
+            Piano.len.set(Player.EvA.get(i) + 1, Player.EvLen.get(i));
+            Player.notesPlayed += 1;
+            Tick.notes += 1;
+            // Every note is played. There used to be a filter here -- scratch
+            // PFA's "velocity x seconds" energy rule, gated on the mix being
+            // crowded -- and it was wrong twice: unconditionally it deleted the
+            // melody of ordinary songs, and gated it still thinned black MIDIs
+            // exactly where the notes matter. A note reaches the engine unless
+            // the clone budget is full, because that is the only reason a note
+            // cannot be played at all.
+            //
+            // A clone past the project's cap is silently not created, and a note
+            // that never starts never retires either -- so the count of sounding
+            // notes would drift up for the rest of the session, and every later
+            // release would take the "too many voices" branch. Asking for fewer
+            // than the cap is what keeps the books straight, and the drop is
+            // counted so the page can show it.
+            // One clone per note -- see voice.inc.jsw for why a pool of reusable
+            // voices cannot be used instead. TurboWarp's turbo mode is what
+            // makes this affordable: without it `create clone` ends the
+            // sequencer pass, so a chord of four notes costs four frames.
+            //
+            // The clone counts itself (its first block runs inside this one), so
+            // `Player.voices` is exact even when the platform refuses a clone.
+            if (Player.voices < Player.maxVoices) {
+                Player.startEv = i;
+                _sp = Player.EvSprite.get(i);
+                if (_sp == 0) {
+                    Control.createClone("synth.gm.a");
+                } elif (_sp == 1) {
+                    Control.createClone("synth.gm.b");
+                } elif (_sp == 2) {
+                    Control.createClone("synth.gm.c");
+                } elif (_sp == 3) {
+                    Control.createClone("synth.gm.d");
+                } elif (_sp == 4) {
+                    Control.createClone("synth.gm.e");
+                } elif (_sp == 5) {
+                    Control.createClone("synth.gm.f");
+                } elif (_sp == 6) {
+                    Control.createClone("synth.gm.g");
+                } elif (_sp == 7) {
+                    Control.createClone("synth.gm.h");
+                } else {
+                    Control.createClone("synth.piano");
+                }
+                // Counted where the voice is actually made, not where the event
+                // is read: a note dropped at the clone budget never sounds, so
+                // it must not sit in this channel's column for ever.
+                Mix.active.set(Player.EvChan.get(i) + 1, Mix.active.get(Player.EvChan.get(i) + 1) + 1);
+            } else {
+                Player.skipped += 1;
+            }
+        } elif (_k == 1) {
+            // The light is not touched here: it is the score's, not the event's
+            // (see the note-on above), so a note-off that arrives while another
+            // note on the same key is still running must not darken it.
+            _v = Player.EvVoice.get(i) + 1;
+            // The sustain pedal is a promise that the note keeps sounding after
+            // its key comes up. The converter expands the pedal into longer
+            // notes when a song is baked in, but nothing can be expanded at run
+            // time -- so a pasted song's pedal is applied here instead: the note
+            // is remembered and released when the pedal does.
+            _ch = Player.EvChan.get(i) + 1;
+            if (Mix.pedal.get(_ch) == 1) {
+                // Held open by the pedal. In DEFAULT mode `_v` is a pool slot, so
+                // the pedal-up can find the voice that is actually sounding it.
+                Pedal.voice.add(_v);
+                Pedal.chan.add(_ch);
+            } else {
+                Voice.off.set(_v, Voice.off.get(_v) + 1);
+                if (Mix.active.get(_ch) > 0) {
+                    Mix.active.set(_ch, Mix.active.get(_ch) - 1);
+                }
+            }
+        } elif (_k == 2) {
+            // A program change. The sample bank resolved the program into a
+            // sprite and a slot when the song was baked, so this only matters
+            // to the native path -- which has to ask the music extension for
+            // the instrument before each note.
+            Mix.prog.set(Player.EvChan.get(i) + 1, Player.EvA.get(i));
+        } elif (_k == 3) {
+            Mix.bend.set(Player.EvChan.get(i) + 1, Player.EvA.get(i) / 8192 * Player.bendRange * 10);
+            Mix.epoch += 1;
+        } elif (_k == 4) {
+            Mix.vol.set(Player.EvChan.get(i) + 1, Player.EvA.get(i));
+            Mix.epoch += 1;
+        } elif (_k == 5) {
+            Mix.pan.set(Player.EvChan.get(i) + 1, Player.EvA.get(i) / 127 * 200 - 100);
+            Mix.epoch += 1;
+        } elif (_k == 7) {
+            _ch = Player.EvChan.get(i) + 1;
+            if (Player.EvA.get(i) >= 64) {
+                if (Mix.pedal.get(_ch) == 0) {
+                    Mix.pedal.set(_ch, 1);
+                    Mix.epoch += 1;
+                }
+            } else {
+                if (Mix.pedal.get(_ch) == 1) {
+                    Mix.pedal.set(_ch, 0);
+                    pedalUp(_ch);
+                    Mix.epoch += 1;
+                }
+            }
+        } elif (_k == 8) {
+            // CC1, the modulation wheel. The converter has baked it since the
+            // first note player and the player never read it; the debug page is
+            // the first thing that wanted to see it.
+            Mix.mod.set(Player.EvChan.get(i) + 1, Player.EvA.get(i));
+            Mix.epoch += 1;
+        } elif (_k == 9) {
+            Mix.expr.set(Player.EvChan.get(i) + 1, Player.EvA.get(i));
+            Mix.epoch += 1;
+        } elif (_k == 6) {
+            Player.midiSpeed = Player.EvA.get(i);
+            Music.setTempo(Player.midiSpeed);
+            // Every tempo change moves the tick; deriving it from Tick.rest,
+            // which is in beats, keeps the two from drifting apart.
+            Tick.seconds = Tick.rest * 60 / Player.midiSpeed;
+        }
+    }
+
+    // Every note the pedal is holding on one channel stops now. Walking the list
+    // backwards means a delete cannot move an entry that has not been looked at
+    // yet, and a pedal-up is rare enough that the scan costs nothing.
+    private void pedalUp(chan) { // warp
+        _i = Pedal.voice.length();
+        while (_i >= 1) {
+            if (Pedal.chan.get(_i) + 0 == chan) {
+                _v = Pedal.voice.get(_i) + 0;
+                Voice.off.set(_v, Voice.off.get(_v) + 1);
+                if (Mix.active.get(chan) > 0) {
+                    Mix.active.set(chan, Mix.active.get(chan) - 1);
+                }
+                Pedal.voice.delete(_i);
+                Pedal.chan.delete(_i);
+            }
+            _i -= 1;
+        }
+    }
+
+    // The first event still ahead of `tick`, by binary search: the tick list is
+    // sorted, and a long stall can leave tens of thousands of events behind.
+    private void seekTo(tick) { // warp
+        _lo = Player.cursor;
+        _hi = Player.EvTick.length() + 1;
+        while (_lo < _hi) {
+            _mid = Operators.math("floor", (_lo + _hi) / 2);
+            if (Player.EvTick.get(_mid) + 0 <= tick) {
+                _lo = _mid + 1;
+            } else {
+                _hi = _mid;
+            }
+        }
+        // Past the end is legal and meaningful: `dispatchDue` then does nothing
+        // and the clock ends the song, which is what the clamp used to prevent.
+        Player.cursor = _lo;
+    }
+
+    // Everything due, until the frame's note budget is gone. The budget is what
+    // `Tick.maxCatchUp` used to be for -- a frame must end -- but counting notes
+    // instead of ticks means a dense passage is *finished* over the next frame
+    // or two rather than skipped, which is the difference between hearing a
+    // black MIDI and hearing the holes in it.
+    private void dispatchDue() {
+        while (Player.cursor <= Player.EvTick.length() && Player.EvTick.get(Player.cursor) <= Tick.tick && Tick.notes < Tick.maxNotes) {
+            dispatch(Player.cursor);
+            Player.cursor += 1;
+        }
+    }
+
+    // Everything a song needs before its first tick. `// warp` is load-bearing:
+    // a `repeat` outside warp mode runs **one iteration per frame** on vanilla
+    // Scratch, and this builds 128 keyboard slots plus one entry per voice --
+    // 424 frames, fourteen seconds of silence before the music starts. TurboWarp
+    // compiles the project and hides it, which is exactly the kind of bug that
+    // only shows up where it matters.
+    private void prepare() { // warp
+        Tick.tick = 0;
+        Tick.notes = 0;
+        Tick.active = 1;
+        Tick.gen += 1;
+        Mix.synced = Mix.epoch;
+        Tick.wait = 4;
+        Tick.rest = 0.0625;          // 1 / 2 ** Tick.wait, without the utilities extension
+        Player.cursor = 1;
+        Player.startEv = 0;
+        Player.voices = 0;
+        Player.notesPlayed = 0;
+        Player.skipped = 0;
+        Player.midiSpeed = 120;
+        if (Song.tempo > 0) {
+            Player.midiSpeed = Song.tempo;
+        }
+        if (Load.mode == 1) {
+            // a pasted song's own tempo, read from its first set-tempo event
+            Player.midiSpeed = Load.tempo;
+        }
+        Player.bendRange = 2;
+        Music.setTempo(Player.midiSpeed);
+        Mix.epoch = 0;
+
+        Piano.hue.clear();
+        Piano.end.clear();
+        Piano.len.clear();
+        Note.cursor = 1;
+        repeat (128) {
+            Piano.hue.add(0);
+            Piano.end.add(0);
+            Piano.len.add(0);
+        }
+        Voice.off.clear();
+        repeat (Song.pool) {
+            Voice.off.add(0);
+        }
+        Mix.bend.clear();
+        Mix.vol.clear();
+        Mix.pan.clear();
+        Mix.pedal.clear();
+        Mix.expr.clear();
+        Mix.prog.clear();
+        Mix.mod.clear();
+        Mix.reverb.clear();
+        Mix.chorus.clear();
+        Mix.variation.clear();
+        Mix.bankMsb.clear();
+        Mix.bankLsb.clear();
+        Mix.active.clear();
+        Pedal.voice.clear();
+        Pedal.chan.clear();
+        repeat (16) {
+            Mix.bend.add(0);
+            Mix.vol.add(100);
+            Mix.pan.add(0);
+            Mix.pedal.add(0);
+            Mix.expr.add(127);
+            Mix.prog.add(0);
+            Mix.mod.add(0);
+            Mix.reverb.add(0);
+            Mix.chorus.add(0);
+            Mix.variation.add(0);
+            Mix.bankMsb.add(0);
+            Mix.bankLsb.add(0);
+            Mix.active.add(0);
+        }
+    }
+
+    metadata greenFlag pos 0,0;
+    public void greenFlag() {
+        // The song is settled first: the loader draws the input box and parses
+        // whatever is pasted into it, and until that returns the event lists are
+        // not the ones that will play. Nothing below reads them.
+        Control.broadcastAndWait("Music.load");
+        prepare();
+        // The clock.
+        //
+        // `wait 0` is the yield: exactly one frame, every frame, so the pen and
+        // the audio thread always get their turn and the loop cannot spin. It
+        // is deliberately not `rest for beats` -- that block initialises a fresh
+        // stack timer the first time it is reached inside a loop and returns
+        // without yielding, so it busy-waits instead of pacing.
+        //
+        // Which ticks to run comes from the wall clock, not from the frame:
+        // vanilla Scratch is 30 fps and a 198 BPM song wants a tick every 19 ms,
+        // so one tick a frame would play it at 57% speed. Every tick whose time
+        // has passed is fired, bounded by Tick.maxCatchUp so one frame can never
+        // become a burst.
+        Tick.seconds = Tick.rest * 60 / Player.midiSpeed;
+        Tick.nextAt = Sensing.timer() + Tick.seconds;
+        while (Tick.active == 1) {
+            Control.wait(0);
+            _now = Sensing.timer();
+            Tick.notes = 0;
+            // A hidden tab and a long hitch both stop this loop while the wall
+            // clock keeps running. Checked *before* the catch-up loop: draining
+            // three lost seconds a tick at a time fires all of them inside one
+            // frame, which is heard as a blast of notes that are already over.
+            // Skipping is what a seek does, and it is what scratch PFA does.
+            if (_now - Tick.nextAt > Tick.resync && Tick.seconds > 0) {
+                Tick.tick += Operators.math("round", (_now - Tick.nextAt) / Tick.seconds);
+                Tick.nextAt = _now + Tick.seconds;
+                seekTo(Tick.tick);
+            }
+            // The note budget is part of the loop condition, not a `break`:
+            // `break` in JadenScript is `stop this script` (there is no loop
+            // break in Scratch), so using one here would kill the clock the
+            // first time a frame's budget filled -- on exactly the dense songs
+            // this budget exists for.
+            // Tell the sounding notes about a bend or a fader change, once. The
+            // broadcast is fire-and-forget: with nothing changing it never
+            // happens at all.
+            if (Mix.epoch != Mix.synced) {
+                Mix.synced = Mix.epoch;
+                Control.broadcast("retune");
+            }
+            while (_now >= Tick.nextAt && Tick.active == 1 && Tick.notes < Tick.maxNotes) {
+                Tick.tick += 1;
+                Tick.nextAt += Tick.seconds;
+                dispatchDue();
+                if (Player.cursor > Player.EvTick.length()) {
+                    Tick.active = 0;
+                }
+            }
+        }
+    }
+}

@@ -17,6 +17,8 @@ EDDBX   equ 0x7F2
 EDDAH   equ 0x7F4
 EDDCX   equ 0x7F6
 PARAMS  equ 0x960                   ; the EDD drive parameters
+GEOM    equ 0x980                   ; CX and DX from AH=08h, the old way
+GEOERR  equ 0x984                   ; ... and the status, then two carries
 SECTOR2 equ 0x900                   ; where a packet read lands
 
 start:
@@ -76,6 +78,29 @@ start:
     mov     ah, 0x48
     mov     dl, 0x80
     int     0x13
+
+    ; ---- and the geometry, the old way -----------------------------------
+    ; the same drive, asked for its cylinders, heads and sectors: the answer a
+    ; partition tool divides by and a DOS-era loader trusts
+    xor     ax, ax
+    mov     ds, ax
+    mov     ah, 0x08
+    mov     dl, 0x80
+    int     0x13
+    mov     [GEOERR], ah                ; the status byte: 0 worked
+    mov     al, 0
+    adc     al, 0                       ; the carry says whether it did
+    mov     [GEOERR + 1], al
+    mov     [GEOM], cx
+    mov     [GEOM + 2], dx
+
+    ; ---- and the same question to the CD, which has no geometry ----------
+    mov     ah, 0x08
+    mov     dl, 0x9F
+    int     0x13
+    mov     al, 0
+    adc     al, 0
+    mov     [GEOERR + 2], al
 
     hlt
 

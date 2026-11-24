@@ -216,8 +216,8 @@ metadata note Stage at 50,50 350x170: "{\"width\":640,\"height\":480,\"warpTimer
 
 import "assets/lists/X.image.jsa";
 
-// include "input.jsw"
-// include "display.jsw"
-// include "net.jsw"
-// include "core.jsw"
+include "input.jsw"
+include "display.jsw"
+include "net.jsw"
+include "core.jsw"
 

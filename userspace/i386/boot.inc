@@ -138,8 +138,9 @@ bootOptions:
     call    bmList
     cmp     al, 0xFF
     je      .out
-    mov     bx, bo_devs
-    add     bx, ax
+    xor     ah, ah                  ; the choice is a byte: `add bx, ax` with a
+    mov     bx, bo_devs             ; stale high half reads 256 devices past
+    add     bx, ax                  ; the end of the table
     mov     al, [bx]
 .out:
     ret
@@ -167,6 +168,7 @@ bootPxe:
     call    bmList
     cmp     al, 0xFF
     je      .out
+    xor     ah, ah
     mov     bx, pb_modes
     add     bx, ax
     mov     al, [bx]
@@ -429,6 +431,9 @@ bmBoot:
     je      .pxe                    ; sectors to read, it has a story
     mov     [es:BM_DEV], al
     mov     [es:BDA_BOOTDEV], al
+    mov     byte [es:0x4FF], 1      ; this device, and only this one: int 19h
+                                    ; otherwise walks the CMOS boot order and a
+                                    ; "Floppy" pick would boot the hard disk
     mov     byte [es:CON_ATTR], 0x07
     call    clear_text
     xor     dl, dl

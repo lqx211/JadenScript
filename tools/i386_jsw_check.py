@@ -53,6 +53,15 @@ def prepare(target: str | None = None) -> None:
                    cwd=ROOT, check=True, capture_output=True)
 
 
+def _same_number(a, b) -> bool:
+    """Two numbers as the FPU means them: NaN equals NaN here, because both
+    machines are supposed to have *produced* one rather than to compare equal."""
+    a, b = float(a), float(b)
+    if a != a and b != b:
+        return True
+    return a == b
+
+
 def jsw_byte(env, addr) -> int:
     """One byte out of the simulator's memory list, the way the CPU reads it."""
     words = env.lists.get("X.mem") or []
@@ -160,6 +169,36 @@ def main(argv: list[str]) -> int:
         if args.trace:
             print(f"{i:6d} jsw {jcs:04x}:{jip:04x}->{ncs:04x}:{nip:04x}   "
                   f"ref {mach.sreg[ref.SEG_CS]:04x}:{mach.eip:04x}")
+        # The FPU is state the pc cannot show: a power of two applied in the
+        # wrong order leaves the register file exactly where it was and the
+        # *value* wrong, so it is compared here rather than at the end.
+        want = mach.fpu
+        jsw_sw = (int(env.vars["fpTop"]) * 2048 + int(env.vars["fpC3"]) * 16384
+                  + int(env.vars["fpC2"]) * 1024 + int(env.vars["fpC1"]) * 512
+                  + int(env.vars["fpC0"]) * 256 + int(env.vars["fpSf"]) * 64
+                  + int(env.vars["fpEs"]) * 128)
+        fpu_diff = ""
+        if jsw_sw != want.status():
+            fpu_diff = f"status jsw {jsw_sw:#06x} ref {want.status():#06x}"
+        elif int(env.vars["fpCw"]) != want.cw:
+            fpu_diff = f"control word jsw {int(env.vars['fpCw']):#06x} ref {want.cw:#06x}"
+        else:
+            for slot in range(8):
+                got = env.lists["fpSt"][slot]
+                empty = int(env.lists["fpEmpty"][slot])
+                if empty != (1 if want.empty[slot] else 0):
+                    fpu_diff = f"st({slot}) empty jsw {empty} ref {want.empty[slot]}"
+                    break
+                if empty:
+                    continue
+                if not _same_number(got, want.st[slot]):
+                    fpu_diff = (f"st({slot}) jsw {got!r} ref {want.st[slot]!r}")
+                    break
+        if fpu_diff:
+            print(f"diverged at instruction {i}: the x87")
+            print(f"  jsw ir {int(env.vars['ir']):#x} at {env.where_stmt}")
+            print(f"  {fpu_diff}")
+            return 1
         if ncs != mach.sreg[ref.SEG_CS] or nip != mach.eip:
             print(f"diverged at instruction {i}: jsw {ncs:04x}:{nip:04x} "
                   f"ref {mach.sreg[ref.SEG_CS]:04x}:{mach.eip:04x}")

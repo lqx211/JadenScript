@@ -107,7 +107,7 @@ class NetworkBootTests(unittest.TestCase):
         machine.sreg[rv.SEG_CS] = rv.RESET_CS
         machine.eip = rv.RESET_IP
         limit = 12_000_000
-        while machine.keys and machine.steps < limit:
+        while machine.pending_keys() and machine.steps < limit:
             machine.run(limit=min(limit, machine.steps + 250_000))
         machine.run(limit=machine.steps + 900_000)
         self.assertEqual(machine.nic_register(0x5C, 1) & 4, 4,
@@ -129,7 +129,7 @@ class NetworkBootTests(unittest.TestCase):
             machine.sreg[rv.SEG_CS] = rv.RESET_CS
             machine.eip = rv.RESET_IP
             limit = 12_000_000
-            while machine.keys and machine.steps < limit:
+            while machine.pending_keys() and machine.steps < limit:
                 machine.run(limit=min(limit, machine.steps + 250_000))
             machine.run(limit=machine.steps + 900_000)
             return self._screen(machine)

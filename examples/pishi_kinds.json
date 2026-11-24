@@ -1,0 +1,598 @@
+{
+ "kinds": {
+  "activeInputImage": "REPORTER",
+  "addToMyDetectionList": "COMMAND",
+  "analogChangeDetected": "BOOLEAN",
+  "analogRead": "REPORTER",
+  "beepOnPin": "COMMAND",
+  "buttonPressed": "BOOLEAN",
+  "changePenHueBy": "COMMAND",
+  "changePenSizeBy": "COMMAND",
+  "changeTempo": "COMMAND",
+  "clear": "COMMAND",
+  "clearLed": "COMMAND",
+  "clearMessageLogs": "COMMAND",
+  "clearMyDetectionList": "COMMAND",
+  "digitalPinEdgeDetect": "BOOLEAN",
+  "digitalRead": "REPORTER",
+  "digitalWrite": "COMMAND",
+  "displaySymbol": "COMMAND",
+  "exampleOpcode": "REPORTER",
+  "faceIsDetected": "BOOLEAN",
+  "faceTilt": "REPORTER",
+  "getAllItemsArgument": "REPORTER",
+  "getClassificationInterval": "REPORTER",
+  "getClassificationStatus": "REPORTER",
+  "getConfidenceOf": "REPORTER",
+  "getDetectedLabelName": "REPORTER",
+  "getFirmataVersion": "REPORTER",
+  "getForce": "REPORTER",
+  "getImageLabel": "REPORTER",
+  "getLabelName": "REPORTER",
+  "getLabelTrainsCount": "COMMAND",
+  "getMotorPosition": "REPORTER",
+  "getMyDetectionList": "REPORTER",
+  "getMyDetectionListItem": "REPORTER",
+  "getNameofDetectionByIndex": "REPORTER",
+  "getNextWord": "REPORTER",
+  "getNumberOfDetectionsByName": "REPORTER",
+  "getObjectCount": "REPORTER",
+  "getPinState": "REPORTER",
+  "getPoseLabel": "REPORTER",
+  "getSpeech": "REPORTER",
+  "getSpinSpeed": "REPORTER",
+  "getTiltAngle": "REPORTER",
+  "getTranslate": "REPORTER",
+  "getViewerLanguage": "REPORTER",
+  "getWidthOf": "REPORTER",
+  "getX": "REPORTER",
+  "getXOf": "REPORTER",
+  "goToPart": "COMMAND",
+  "i2cDisable": "COMMAND",
+  "i2cStatus": "REPORTER",
+  "i2cWrite": "REPORTER",
+  "imageLabelConfidence": "REPORTER",
+  "isAnalogInRange": "COMMAND",
+  "isButtonPressed": "BOOLEAN",
+  "isDigitalInputActive": "BOOLEAN",
+  "isFreeFalling": "BOOLEAN",
+  "isImageLabelDetected": "BOOLEAN",
+  "isObjectDetected": "BOOLEAN",
+  "isPoseLabelDetected": "BOOLEAN",
+  "isSoundLabelDetected": "BOOLEAN",
+  "isTilted": "BOOLEAN",
+  "lastAnswer": "COMMAND",
+  "listModels": "REPORTER",
+  "motorOff": "COMMAND",
+  "motorOn": "COMMAND",
+  "motorOnFor": "COMMAND",
+  "motorOnForRotation": "COMMAND",
+  "motorTurnClockwise": "COMMAND",
+  "moveServo": "COMMAND",
+  "orderSavedDetections": "COMMAND",
+  "pin": "REPORTER",
+  "playDrumForBeats": "COMMAND",
+  "playNoteFor": "COMMAND",
+  "playNoteForBeats": "COMMAND",
+  "playPattern": "COMMAND",
+  "pointInFaceTiltDirection": "COMMAND",
+  "readPinSmart": "COMMAND",
+  "resetAll": "COMMAND",
+  "resetLabel": "COMMAND",
+  "restForBeats": "COMMAND",
+  "rgbBlink": "COMMAND",
+  "rgbFadeIn": "COMMAND",
+  "rgbFadeOut": "COMMAND",
+  "saveAndOrderDetections": "COMMAND",
+  "saveDetections": "COMMAND",
+  "seeingColor": "BOOLEAN",
+  "selectCamera": "COMMAND",
+  "selectInputImage": "COMMAND",
+  "serialDisable": "COMMAND",
+  "serialEnable": "COMMAND",
+  "serialStatus": "REPORTER",
+  "setClassificationInterval": "COMMAND",
+  "setDetectionModel": "COMMAND",
+  "setLanguage": "COMMAND",
+  "setMinimumConfidence": "COMMAND",
+  "setMotorDirection": "COMMAND",
+  "setMotorPower": "COMMAND",
+  "setMotorSpeed": "COMMAND",
+  "setPenColorParamTo": "COMMAND",
+  "setPenColorToColor": "COMMAND",
+  "setPenHueToNumber": "COMMAND",
+  "setPenShadeToNumber": "COMMAND",
+  "setPenSizeTo": "COMMAND",
+  "setPersona": "COMMAND",
+  "setPinMode": "COMMAND",
+  "setPoseModelUrl": "COMMAND",
+  "setRGBColor": "COMMAND",
+  "setRole": "COMMAND",
+  "setSoundModelUrl": "COMMAND",
+  "setSourceLanguage": "COMMAND",
+  "setTemperature": "COMMAND",
+  "setVoice": "COMMAND",
+  "soundLabelConfidence": "REPORTER",
+  "speakAndWait": "COMMAND",
+  "stamp": "COMMAND",
+  "startMotorPower": "COMMAND",
+  "startRecognition": "COMMAND",
+  "stopBeepForMs": "COMMAND",
+  "train": "REPORTER",
+  "turnClassification": "COMMAND",
+  "videoOn": "REPORTER",
+  "waitForDigitalInput": "COMMAND",
+  "whenAnyObjectDetected": "HAT",
+  "whenButtonPressed": "HAT",
+  "whenColor": "HAT",
+  "whenDetectedAnyLabel": "HAT",
+  "whenDetectionsCountChanged": "HAT",
+  "whenGesture": "HAT",
+  "whenImageLabelDetected": "HAT",
+  "whenMakeyKeyPressed": "HAT",
+  "whenMotionGreaterThan": "HAT",
+  "whenPoseLabelDetected": "HAT",
+  "whenSoundLabelDetected": "HAT",
+  "whenTilted": "HAT"
+ },
+ "orders": {
+  "activeInputImage": [
+   "VIDEO_STATE"
+  ],
+  "addToMyDetectionList": [
+   "OBJECT"
+  ],
+  "analogChangeDetected": [
+   "PIN",
+   "SENSITIVITY"
+  ],
+  "analogRead": [
+   "PIN"
+  ],
+  "beepOnPin": [
+   "PIN"
+  ],
+  "beepOnPinForMs": [
+   "PIN",
+   "DURATION"
+  ],
+  "buttonPressed": [
+   "PORT"
+  ],
+  "changePenHueBy": [
+   "HUE"
+  ],
+  "changePenSizeBy": [
+   "SIZE"
+  ],
+  "changeTempo": [
+   "TEMPO"
+  ],
+  "clearLed": [
+   "PIN"
+  ],
+  "digitalPinEdgeDetect": [
+   "PIN",
+   "EDGE_TYPE"
+  ],
+  "digitalRead": [
+   "PIN"
+  ],
+  "digitalWrite": [
+   "PIN",
+   "ON_OFF"
+  ],
+  "displaySymbol": [
+   "MATRIX"
+  ],
+  "generateBackdrop": [
+   "PROMPT",
+   "MODEL"
+  ],
+  "getConfidenceOf": [
+   "OBJECT",
+   "INDEX",
+   "SOURCE"
+  ],
+  "getHeightOf": [
+   "OBJECT",
+   "INDEX",
+   "SOURCE"
+  ],
+  "getKeypointsDistance": [
+   "KEYPOINT_1",
+   "KEYPOINT_2",
+   "OBJECT_NUMBER"
+  ],
+  "getLabelName": [
+   "LABEL"
+  ],
+  "getLabelTrainsCount": [
+   "LABEL"
+  ],
+  "getMyDetectionListItem": [
+   "INDEX"
+  ],
+  "getNameofDetectionByIndex": [
+   "INDEX",
+   "SOURCE"
+  ],
+  "getNextWord": [
+   "MODE"
+  ],
+  "getNumberOfDetectionsByName": [
+   "OBJECT",
+   "SOURCE"
+  ],
+  "getPinState": [
+   "PIN"
+  ],
+  "getSpinSpeed": [
+   "DIRECTION"
+  ],
+  "getTranslate": [
+   "WORDS",
+   "LANGUAGE"
+  ],
+  "getWidthOf": [
+   "OBJECT",
+   "INDEX",
+   "SOURCE"
+  ],
+  "getWordCount": [
+   "MODE"
+  ],
+  "getX": [
+   "OBJECT_NUMBER",
+   "KEYPOINT"
+  ],
+  "getXOf": [
+   "OBJECT",
+   "INDEX",
+   "SOURCE"
+  ],
+  "goToPart": [
+   "PART"
+  ],
+  "i2cEnable": [
+   "DELAY"
+  ],
+  "i2cWrite": [
+   "ADDRESS",
+   "DATA"
+  ],
+  "imageLabelConfidence": [
+   "LABEL"
+  ],
+  "isAnalogInRange": [
+   "PIN",
+   "MIN",
+   "MAX"
+  ],
+  "isAnythingDetected": [
+   "SOURCE"
+  ],
+  "isButtonPressed": [
+   "BTN"
+  ],
+  "isDigitalInputActive": [
+   "PIN",
+   "STATE"
+  ],
+  "isImageLabelDetected": [
+   "LABEL"
+  ],
+  "isObjectDetected": [
+   "OBJECT",
+   "INDEX",
+   "SOURCE"
+  ],
+  "isPoseLabelDetected": [
+   "LABEL"
+  ],
+  "isSoundLabelDetected": [
+   "LABEL"
+  ],
+  "isTilted": [
+   "TILT"
+  ],
+  "lastAnswer": [
+   "PROVIDER"
+  ],
+  "lastGeneratedAssetName": [
+   "ASSET_TYPE"
+  ],
+  "listModels": [
+   "PROVIDER",
+   "FILTER"
+  ],
+  "midiPlayDrumForBeats": [
+   "DRUM",
+   "BEATS"
+  ],
+  "motorOff": [
+   "MOTOR_ID"
+  ],
+  "motorOn": [
+   "MOTOR_ID"
+  ],
+  "motorOnFor": [
+   "MOTOR_ID",
+   "DURATION"
+  ],
+  "motorOnForRotation": [
+   "MOTOR_ID",
+   "ROTATION"
+  ],
+  "motorSetPower": [
+   "PORT",
+   "POWER"
+  ],
+  "motorTurnClockwise": [
+   "PORT",
+   "TIME"
+  ],
+  "motorTurnCounterClockwise": [
+   "PORT",
+   "TIME"
+  ],
+  "moveServo": [
+   "PIN",
+   "ANGLE1",
+   "ANGLE2",
+   "SPEED"
+  ],
+  "orderSavedDetections": [
+   "ORDER_TYPE"
+  ],
+  "pin": [
+   "NUMBER"
+  ],
+  "playDrumForBeats": [
+   "DRUM",
+   "BEATS"
+  ],
+  "playNoteFor": [
+   "NOTE",
+   "DURATION"
+  ],
+  "playNoteForBeats": [
+   "NOTE",
+   "BEATS"
+  ],
+  "playPattern": [
+   "PATTERN",
+   "PIN"
+  ],
+  "readPinSmart": [
+   "PIN"
+  ],
+  "resetLabel": [
+   "LABEL"
+  ],
+  "restForBeats": [
+   "BEATS"
+  ],
+  "rgbFadeIn": [
+   "RPIN",
+   "GPIN",
+   "BPIN",
+   "COLOR",
+   "DURATION"
+  ],
+  "rgbFadeOut": [
+   "RPIN",
+   "GPIN",
+   "BPIN",
+   "COLOR",
+   "DURATION"
+  ],
+  "seeingColor": [
+   "COLOR"
+  ],
+  "selectCamera": [
+   "CAMERA"
+  ],
+  "selectInputImage": [
+   "INPUT"
+  ],
+  "serialEnable": [
+   "RX_PIN",
+   "TX_PIN"
+  ],
+  "servo": [
+   "PIN",
+   "ANGLE"
+  ],
+  "setBackdropType": [
+   "BACKDROP_TYPE"
+  ],
+  "setClassificationInterval": [
+   "INTERVAL"
+  ],
+  "setCostumeBackgroundMode": [
+   "BG_MODE"
+  ],
+  "setDetectionModel": [
+   "MODEL_NAME"
+  ],
+  "setImageStyle": [
+   "STYLE"
+  ],
+  "setLanguage": [
+   "LANGUAGE"
+  ],
+  "setLanguageCode": [
+   "CODE"
+  ],
+  "setLightHue": [
+   "HUE"
+  ],
+  "setMaxTokens": [
+   "NUMBER"
+  ],
+  "setMinimumConfidence": [
+   "CONFIDENCE"
+  ],
+  "setMotorDirection": [
+   "MOTOR_ID",
+   "MOTOR_DIRECTION"
+  ],
+  "setMotorPower": [
+   "MOTOR_ID",
+   "POWER"
+  ],
+  "setMotorSpeed": [
+   "PIN1",
+   "PIN2",
+   "SPEED",
+   "DIRECTION"
+  ],
+  "setPenColorParamTo": [
+   "COLOR_PARAM",
+   "VALUE"
+  ],
+  "setPenColorToColor": [
+   "COLOR"
+  ],
+  "setPenHueToNumber": [
+   "HUE"
+  ],
+  "setPenShadeToNumber": [
+   "SHADE"
+  ],
+  "setPenSizeTo": [
+   "SIZE"
+  ],
+  "setPersona": [
+   "TEXT"
+  ],
+  "setPinMode": [
+   "PIN",
+   "MODE"
+  ],
+  "setPoseModelUrl": [
+   "URL"
+  ],
+  "setRGBColor": [
+   "RPIN",
+   "GPIN",
+   "BPIN",
+   "RED",
+   "GREEN",
+   "BLUE"
+  ],
+  "setRGBColorFromColor": [
+   "RPIN",
+   "GPIN",
+   "BPIN",
+   "COLOR"
+  ],
+  "setRGBPredefinedColor": [
+   "RPIN",
+   "GPIN",
+   "BPIN",
+   "COLOR"
+  ],
+  "setRole": [
+   "ROLE"
+  ],
+  "setSoundModelUrl": [
+   "URL"
+  ],
+  "setSourceLanguage": [
+   "LANGUAGE"
+  ],
+  "setTemperature": [
+   "NUMBER"
+  ],
+  "setTempo": [
+   "TEMPO"
+  ],
+  "setVideoTransparency": [
+   "TRANSPARENCY"
+  ],
+  "setVoice": [
+   "VOICE"
+  ],
+  "soundLabelConfidence": [
+   "LABEL"
+  ],
+  "speakAndWait": [
+   "WORDS"
+  ],
+  "startMotorPower": [
+   "MOTOR_ID",
+   "POWER"
+  ],
+  "stopBeep": [
+   "PIN"
+  ],
+  "stopBeepForMs": [
+   "PIN",
+   "DURATION"
+  ],
+  "stopServo": [
+   "PIN"
+  ],
+  "train": [
+   "LABEL"
+  ],
+  "turnClassification": [
+   "ON_OFF"
+  ],
+  "updateModelList": [
+   "ENGINE"
+  ],
+  "videoOn": [
+   "ATTRIBUTE",
+   "SUBJECT"
+  ],
+  "waitForDigitalInput": [
+   "PIN",
+   "STATE"
+  ],
+  "whenAnyObjectDetected": [
+   "OBJECT"
+  ],
+  "whenBrightnessLessThan": [
+   "DISTANCE"
+  ],
+  "whenButtonPressed": [
+   "PORT"
+  ],
+  "whenCodePressed": [
+   "SEQUENCE"
+  ],
+  "whenColor": [
+   "COLOR"
+  ],
+  "whenDetectedLabel": [
+   "LABEL"
+  ],
+  "whenDetectionsCountChanged": [
+   "MODE"
+  ],
+  "whenDistanceLessThan": [
+   "DISTANCE"
+  ],
+  "whenGesture": [
+   "GESTURE"
+  ],
+  "whenImageLabelDetected": [
+   "LABEL"
+  ],
+  "whenMakeyKeyPressed": [
+   "KEY"
+  ],
+  "whenMotionGreaterThan": [
+   "REFERENCE"
+  ],
+  "whenPoseLabelDetected": [
+   "LABEL"
+  ],
+  "whenSoundLabelDetected": [
+   "LABEL"
+  ]
+ }
+}

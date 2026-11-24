@@ -163,7 +163,7 @@ class Rv64SourceTests(unittest.TestCase):
             self.assertNotIn("Math.", path.read_text(encoding="utf-8"), path.name)
 
     def test_the_modules_are_included_and_resolve(self) -> None:
-        """Every `// include` names a file that exists, and nothing is included twice."""
+        """Every `include` names a file that exists, and nothing is included twice."""
         from jswc import include
 
         source = include.expand(JSW)

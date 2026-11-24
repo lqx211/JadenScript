@@ -1,0 +1,93 @@
+// Trying to make the obfuscation that i love:
+/*
+class normal {
+    private a = 0;
+    private b = 0;
+    private void main(){
+        Sensing.ask("Enter value a");
+        a = Sensing.answer(); // this to get answer
+        b = Sensing.ask("Enter value b"); // also another way to get answer
+        if (a==b){
+            Looks.say("They are equal.")
+        } else {
+            Looks.say("They are inequal.")
+        }
+    }
+    public void greenFlag(){
+        main;
+    }
+}
+*/
+class the_one_that_i_want {
+    private v = [0,0];
+    private s = [];
+    private c0 = 0;
+    private strings = ['Enter value a','Enter value b','They are equal.','They are inequal.'];
+    private integers = [];
+    private c0_activate = 1; // each code session has it own c number, or else the switch counter will break
+    private c0_last = -1;
+        private void p0(p){ // input
+        Sensing.ask(p);
+        s.push(Sensing.answer());
+    }
+    private void p1(a,b){ // equ
+        s.push(a==b);
+    }
+    private void p2(pos,val){ // goto somewhere if valid (for c0 only)
+        if (val==1 || val=='true'){
+            c0 = pos-1; // it will c0++;
+        }
+    }
+    private void idea(){
+        // add internal function
+        // isTrue(v) = (v>0 || v=='true')
+        // isFalse(v) = (v=0 || v=='false')
+        // input(prompt) = Sensing.ask(prompt), input(x) assign to a variable (input(x) itself returns value, but after compile it auto turns to user answer block)
+        // if code is:
+        print(join('Hello, ',input('Whats your name'),'!'));
+        // then it will convert to (scratch code)
+        private tmp0;
+        Sensing.ask('Whats your name');
+        _t0 = Sensing.answer; // tmp0 is like a memory, precalculated in compiler how many tmp is required. With special cases like clone... maybe...
+        // maybe make a list especially for sensing ask... nah. this is so complicated. this is enough isnt it......??????
+        // If name conflit with userspace variable, then it auto changes the number value after t until found one not conflict when compile
+        Looks.say(join('Hello, ',_t0,'!'));
+
+        // so then
+        a = input('Whats your name');
+        // equals scratch
+        Sensing.ask('Whats your name');
+        a = Sensing.answer(); // I dont know does it requires () to get answer, does it? Or both is fine?
+        // If its directly assigned to a variable, then no temp variable need to be allocated for them.
+        
+    }
+    private void p3(p){ // say
+        Looks.say(p);
+    }
+    private void main(){ // at 0 0
+        c0_activate = 1;
+        c0_addPointer = 1;
+        while(c0_activate){
+            switch c0 {
+                case 0 {p0(strings.get(1));}
+                case 1 {v.set(1,s.get(s.length()));}
+                case 2 {s.remove(s.length());} // pop
+                case 3 {p0(strings.get(2));}
+                case 4 {v.set(2,s.get(s.length()))}
+                case 5 {s.remove(s.length());}
+                case 6 {p1(v.get(1),v.get(2));}
+                case 7 {p2(8,s.get(s.length()));} // if gate, goto 8 if true
+                case 8 {c0=10;} // else, goto 11 (need -1 because c0++)
+                case 9 {p3(strings.get(3));} 
+                case 10 {c0=11;} // if break (goto 12)
+                case 11 {p3(strings.get(4));}
+                case 12 {c0_activate=0;} // endif
+                case _ {c0_activate=-1;} // this should not happen
+            }
+            c0++;
+        }
+        if (c0_activate<0){
+            Control.stopAll(); // may broken, so stop
+        }
+    }
+}

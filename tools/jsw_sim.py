@@ -56,6 +56,7 @@ class StopAll(Exception):
 _TOKEN = re.compile(r"""
     \s*(?:
       (?P<num>-?\d+(?:\.\d+)?)
+    | (?P<fstr>f"(?:[^"\\]|\\.)*")
     | (?P<str>"(?:[^"\\]|\\.)*")
     | (?P<name>[A-Za-z_][A-Za-z0-9_.]*)
     | (?P<op><=|>=|==|!=|&&|\|\||[-+*/%()\[\],<>!=])
@@ -93,6 +94,37 @@ class Parser:
         got = self.take()
         if got != tok:
             raise SyntaxError(f"expected {tok!r}, got {got!r}")
+
+    @staticmethod
+    def _fstring(body: str):
+        pieces, literal, i = [], "", 0
+        while i < len(body):
+            ch = body[i]
+            if ch == "{":
+                end = body.find("}", i)
+                if end < 0:
+                    literal += ch
+                    i += 1
+                    continue
+                if literal:
+                    pieces.append(("lit", literal.replace('\\"', '"')))
+                    literal = ""
+                pieces.append(compile_expr(body[i + 1:end], None))
+                i = end + 1
+                continue
+            if ch == "\\" and i + 1 < len(body):
+                literal += body[i + 1]
+                i += 2
+                continue
+            literal += ch
+            i += 1
+        if literal:
+            pieces.append(("lit", literal.replace('\\"', '"')))
+        if not pieces:
+            return ("lit", "")
+        if len(pieces) == 1:
+            return pieces[0]
+        return ("call", "join", pieces)
 
     def expr(self):
         return self.or_()
@@ -152,6 +184,12 @@ class Parser:
 
     def atom(self):
         tok = self.take()
+        if tok.startswith('f"'):
+            # the decompiler writes a chain of `join` blocks as an f-string, so
+            # this is where a project's concatenation shows up. Reading it as
+            # anything else -- which is what an unsupported token used to do --
+            # turns every assembled string into 0.
+            return self._fstring(tok[2:-1])
         if tok.startswith('"'):
             return ("lit", tok[1:-1].replace('\\"', '"'))
         if re.fullmatch(r"-?\d+(\.\d+)?", tok):
@@ -220,6 +258,10 @@ class Env:
         self.where = ""
         self.where_stmt = None
         self.klass = ""
+        #: Which monitors the program has shown or hidden, as ``(kind, name) ->
+        #: bool``. Monitors are not part of the machine, but a debug panel that
+        #: never changes is exactly the kind of bug worth catching here.
+        self.monitors: dict[tuple[str, str], bool] = {}
 
     # ---- values ----
     @staticmethod
@@ -280,12 +322,37 @@ def strip_comment(line: str) -> str:
     return "".join(out).rstrip()
 
 
+def _brackets(line: str) -> int:
+    """How much this line opens the bracket it is inside.
+
+    Outside a string only: `join("[", body)` opens a literal and `"["` opens
+    nothing, and a counter that cannot tell them apart folds the following
+    lines into the statement -- which is how a decoder that builds
+    `"["  +  address  +  "]"` out of three statements ended up parsed as one.
+    """
+    depth, in_string, i = 0, False, 0
+    while i < len(line):
+        ch = line[i]
+        if ch == "\\" and in_string:
+            i += 2
+            continue
+        if ch == '"':
+            in_string = not in_string
+        elif not in_string:
+            if ch == "[":
+                depth += 1
+            elif ch == "]":
+                depth -= 1
+        i += 1
+    return depth
+
+
 def join_lists(text: str) -> str:
     """A list literal may span lines; a statement may not. Fold the first into
     one line so the line-based parser below never has to know."""
     out, buf, depth = [], "", 0
     for line in text.splitlines():
-        depth += line.count("[") - line.count("]")
+        depth += _brackets(line)
         if buf:
             buf = buf + " " + line.strip()
         else:
@@ -441,8 +508,11 @@ def eval_expr(node, env: Env):
     if kind in ("+", "-", "*", "/", "%"):
         a = eval_expr(node[1], env)
         b = eval_expr(node[2], env)
-        if kind == "+" and (isinstance(a, str) or isinstance(b, str)):
-            return f"{a}{b}"
+        # `+` is `operator_add` in this language, always: it coerces both sides
+        # to numbers, so `"a" + "b"` is 0 and not "ab". Concatenation is
+        # `join(...)`, which is a different block -- and a simulator that
+        # guessed "a string is present, so this must be a join" hid a decoder
+        # that built every line of text with `+` and published the number zero.
         x, y = Env.num(a), Env.num(b)
         if kind == "+":
             return x + y
@@ -450,10 +520,21 @@ def eval_expr(node, env: Env):
             return x - y
         if kind == "*":
             return x * y
+        # Division and remainder follow JavaScript, which is what Scratch is:
+        # a non-zero over zero is an infinity with the sign of the quotient, and
+        # `0 / 0` and anything over zero remainder is a NaN. Answering 0.0 here
+        # instead made `1 / 0` look like zero, and the FPU's own infinity test
+        # then matched every value of zero -- which is how `frndint(0)` came back
+        # as -2^63 in one machine and 0 in the other.
         if kind == "/":
-            return x / y if y else 0.0
-        if y == 0:
-            return 0.0
+            if y == 0:
+                if x == 0 or x != x:
+                    return float("nan")
+                sign = math.copysign(1.0, x) * math.copysign(1.0, y)
+                return math.copysign(float("inf"), sign)
+            return x / y
+        if y == 0 or x != x or y != y:
+            return float("nan")
         return x - math.floor(x / y) * y
     if kind in ("<", ">", "<=", ">=", "==", "!="):
         a = eval_expr(node[1], env)
@@ -478,6 +559,20 @@ def eval_expr(node, env: Env):
     raise NotImplementedError(node)
 
 
+def _scratch_text(value) -> str:
+    """How Scratch prints a value: a whole number has no decimal point, and a
+    float is as short as it can be. `"0x" + 0.0` in this language means the
+    string `0x0`, and a simulator that says `0x0.0` is a different machine."""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    number = Env.num(value)
+    if number == int(number):
+        return str(int(number))
+    return repr(number)
+
+
 def call_builtin(name: str, args: list, env: Env):
     if name in env.ext:
         return env.ext[name](args)
@@ -493,7 +588,16 @@ def call_builtin(name: str, args: list, env: Env):
             "sqrt": math.sqrt,
         }[fn](x)
     if name == "join":
-        return "".join(str(a) for a in args)
+        return "".join(_scratch_text(a) for a in args)
+    # `letter (i) of (s)` and `length of (s)`: the CPU's decoders build strings
+    # a character at a time, and a simulator that answers 0 for both turns the
+    # whole of `dHex` into the number zero.
+    if name == "Operators.letterOf":
+        text = _scratch_text(args[1])
+        index = int(Env.num(args[0]))
+        return text[index - 1] if 1 <= index <= len(text) else ""
+    if name == "Operators.length":
+        return float(len(_scratch_text(args[0])))
     if name == "Control.wait":
         raise Yield()
     if name in ("Looks.hide", "Looks.show", "Pen.eraseAll", "Pen.setPenSize",
@@ -604,6 +708,15 @@ def exec_block(env: Env, body: list):
             raise Return()
         if kind == "call":
             _, name, argtext = stmt
+            # `Variables.showVariable(x)` / `Lists.showList(x)` name their
+            # target the way a declaration does -- the argument is the *name*,
+            # not its value -- so it is recorded before anything is evaluated.
+            if name in MONITOR_CALLS and argtext.strip():
+                kind_name = "list" if name.startswith("Lists") else "var"
+                target = argtext.strip().strip('"')
+                env.monitors[(kind_name, target)] = \
+                    name.split(".")[1].startswith("show")
+                continue
             args = []
             if argtext.strip():
                 for part in split_args(argtext):
@@ -642,6 +755,13 @@ def exec_block(env: Env, body: list):
 BUILTIN_NOOP = {
     "Looks.hide", "Looks.show", "Pen.eraseAll", "Pen.setPenSize", "Pen.setPenColor",
     "Pen.penDown", "Pen.penUp", "Motion.setXY",
+}
+
+#: Calls whose argument is a state *name* rather than a value. They flip a
+#: monitor, which the machine does not care about but a debugger does.
+MONITOR_CALLS = {
+    "Variables.showVariable", "Variables.hideVariable",
+    "Lists.showList", "Lists.hideList",
 }
 
 

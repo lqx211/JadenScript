@@ -1,0 +1,1063 @@
+public my_variable = 0;
+
+metadata watch Stage.handpose_getObjectCount id="OW6uqiF{{-7.~QG-p.S+" mode=default at 5,5 0x0 shown;
+
+stage: costume=0, volume=100, layer=0, tempo=60, video="off", videoTransparency=0;
+stage {
+    import "assets/cd21514d0531fdffb22204e0ec5ed84a.svg" as backdrop1; // costume centerx=240 centery=180 res=1
+    import "assets/83a9787d4cb6f3b7632b4ddfebf74367.wav" as pop; // sound rate=44100 samples=1032
+}
+
+FaceMesh: name="FaceMesh", x=0, y=0, size=100, direction=90, show=1, costume=0, volume=100, layer=1, rotation="all", draggable=0;
+class FaceMesh {
+    import "assets/22072506492776d9238e55d1af62f641.svg" as costume1; // costume centerx=40 centery=50 res=1
+    import "assets/f9f239506871d9b87beae7fa21486a6f.svg" as costume2; // costume centerx=40 centery=50 res=1
+    import "assets/83c36d806dc92327b9e7049a565c6bff.wav" as Meow; // sound rate=44100 samples=37376
+
+    loose { // at 51,95
+        // facemesh_getXFromMenu
+                // unsupported block: facemesh_getXFromMenu
+    }
+
+    loose { // at 732,142
+        // facemesh_setCoordinateReturnType
+                // unsupported block: facemesh_setCoordinateReturnType
+                // unsupported block: facemesh_saveAndOrderDetections
+                // unsupported block: facemesh_orderSavedDetections
+                // unsupported block: facemesh_selectInputImage
+                // unsupported block: facemesh_videoToggle
+                // unsupported block: facemesh_setVideoTransparency
+                // unsupported block: facemesh_showDetectionBoxes
+                // unsupported block: facemesh_setClassificationInterval
+                // unsupported block: facemesh_turnClassification
+                // unsupported block: facemesh_selectCamera
+    }
+
+    loose { // at -130,145
+        // facemesh_getX
+                // unsupported block: facemesh_getX
+    }
+
+    loose { // at 151,207
+        // facemesh_getY
+                // unsupported block: facemesh_getY
+    }
+
+    loose { // at 52,240
+        // facemesh_getObjectCount
+                // unsupported block: facemesh_getObjectCount
+    }
+
+    loose { // at 236,254
+        // facemesh_getYFromMenu
+                // unsupported block: facemesh_getYFromMenu
+    }
+
+    loose { // at -9,324
+        // facemesh_getKeypointsAngle
+                // unsupported block: facemesh_getKeypointsAngle
+    }
+
+    loose { // at -10,376
+        // facemesh_getKeypointsDistance
+                // unsupported block: facemesh_getKeypointsDistance
+    }
+
+    loose { // at 80,555
+        // facemesh_getClassificationInterval
+                // unsupported block: facemesh_getClassificationInterval
+    }
+
+    loose { // at 347,656
+        // facemesh_getSavedDetectionCount
+                // unsupported block: facemesh_getSavedDetectionCount
+    }
+
+    loose { // at 67,708
+        // facemesh_getClassificationStatus
+                // unsupported block: facemesh_getClassificationStatus
+    }
+
+    loose { // at 70,774
+        // facemesh_activeInputImage
+                // unsupported block: facemesh_activeInputImage
+    }
+}
+
+HandPose: name="HandPose", x=36, y=28, size=100, direction=90, show=1, costume=0, volume=100, layer=2, rotation="all", draggable=0;
+class HandPose {
+    import "assets/dfa802b5059155bd676202cbf86fb0f4.svg" as costume1; // costume centerx=0 centery=0 res=1
+    import "assets/83a9787d4cb6f3b7632b4ddfebf74367.wav" as pop; // sound rate=44100 samples=1032
+
+    loose { // at 350,98
+        // handpose_getX
+                // unsupported block: handpose_getX
+    }
+
+    loose { // at 252,155
+        // handpose_getY
+                // unsupported block: handpose_getY
+    }
+
+    loose { // at 181,171
+        // handpose_getObjectCount
+                // unsupported block: handpose_getObjectCount
+    }
+
+    loose { // at 169,236
+        // handpose_getKeypointsAngle
+                // unsupported block: handpose_getKeypointsAngle
+    }
+
+    loose { // at 277,291
+        // handpose_getKeypointsDistance
+                // unsupported block: handpose_getKeypointsDistance
+    }
+
+    loose { // at 304,341
+        // handpose_setCoordinateReturnType
+                // unsupported block: handpose_setCoordinateReturnType
+    }
+
+    loose { // at 194,441
+        // handpose_saveAndOrderDetections
+                // unsupported block: handpose_saveAndOrderDetections
+                // unsupported block: handpose_orderSavedDetections
+    }
+
+    loose { // at -120,620
+        // handpose_getSavedDetectionCount
+                // unsupported block: handpose_getSavedDetectionCount
+    }
+
+    loose { // at 239,674
+        // handpose_turnClassification
+                // unsupported block: handpose_turnClassification
+                // unsupported block: handpose_selectInputImage
+                // unsupported block: handpose_videoToggle
+                // unsupported block: handpose_showDetectionBoxes
+    }
+
+    loose { // at 430,699
+        // handpose_setClassificationInterval
+                // unsupported block: handpose_setClassificationInterval
+    }
+
+    loose { // at 133,782
+        // handpose_activeInputImage
+                // unsupported block: handpose_activeInputImage
+    }
+
+    loose { // at 125,853
+        // handpose_getClassificationInterval
+                // unsupported block: handpose_getClassificationInterval
+    }
+
+    loose { // at 76,916
+        // handpose_setVideoTransparency
+                // unsupported block: handpose_setVideoTransparency
+    }
+
+    loose { // at 378,972
+        // handpose_getClassificationStatus
+                // unsupported block: handpose_getClassificationStatus
+    }
+
+    loose { // at 332,1009
+        // handpose_selectCamera
+                // unsupported block: handpose_selectCamera
+    }
+}
+
+PoseNet: name="PoseNet", x=36, y=28, size=100, direction=90, show=1, costume=0, volume=100, layer=3, rotation="all", draggable=0;
+class PoseNet {
+    import "assets/dfa802b5059155bd676202cbf86fb0f4.svg" as costume1; // costume centerx=0 centery=0 res=1
+    import "assets/83a9787d4cb6f3b7632b4ddfebf74367.wav" as pop; // sound rate=44100 samples=1032
+
+    loose { // at 332,52
+        // posenet_getX
+                // unsupported block: posenet_getX
+    }
+
+    loose { // at 228,158
+        // posenet_getY
+                // unsupported block: posenet_getY
+    }
+
+    loose { // at -1,160
+        // posenet_getObjectCount
+                // unsupported block: posenet_getObjectCount
+    }
+
+    loose { // at 179,276
+        // posenet_getNoseY
+                // unsupported block: posenet_getNoseY
+    }
+
+    loose { // at 436,369
+        // posenet_getNoseX
+                // unsupported block: posenet_getNoseX
+    }
+
+    loose { // at 255,423
+        // posenet_getLeftEyeX
+                // unsupported block: posenet_getLeftEyeX
+    }
+
+    loose { // at 179,481
+        // posenet_getRightEyeX
+                // unsupported block: posenet_getRightEyeX
+    }
+
+    loose { // at 83,552
+        // posenet_getLeftEarY
+                // unsupported block: posenet_getLeftEarY
+    }
+
+    loose { // at 372,575
+        // posenet_getLeftEyeY
+                // unsupported block: posenet_getLeftEyeY
+    }
+
+    loose { // at -65,621
+        // posenet_getRightElbowX
+                // unsupported block: posenet_getRightElbowX
+    }
+
+    loose { // at 193,643
+        // posenet_getRightEyeY
+                // unsupported block: posenet_getRightEyeY
+    }
+
+    loose { // at 51,681
+        // posenet_getRightElbowY
+                // unsupported block: posenet_getRightElbowY
+    }
+
+    loose { // at 185,729
+        // posenet_getLeftWristX
+                // unsupported block: posenet_getLeftWristX
+    }
+
+    loose { // at 212,738
+        // posenet_getKeypointsAngle
+                // unsupported block: posenet_getKeypointsAngle
+    }
+
+    loose { // at 80,748
+        // posenet_getLeftEarX
+                // unsupported block: posenet_getLeftEarX
+    }
+
+    loose { // at 175,806
+        // posenet_getLeftWristY
+                // unsupported block: posenet_getLeftWristY
+    }
+
+    loose { // at 97,825
+        // posenet_getKeypointsDistance
+                // unsupported block: posenet_getKeypointsDistance
+    }
+
+    loose { // at 144,873
+        // posenet_getLeftKneeX
+                // unsupported block: posenet_getLeftKneeX
+    }
+
+    loose { // at 177,883
+        // posenet_getRightEarY
+                // unsupported block: posenet_getRightEarY
+    }
+
+    loose { // at 42,897
+        // posenet_setCoordinateReturnType
+                // unsupported block: posenet_setCoordinateReturnType
+    }
+
+    loose { // at 679,898
+        // posenet_getRightEarX
+                // unsupported block: posenet_getRightEarX
+    }
+
+    loose { // at 451,937
+        // posenet_getRightShoulderX
+                // unsupported block: posenet_getRightShoulderX
+    }
+
+    loose { // at 268,946
+        // posenet_getLeftKneeY
+                // unsupported block: posenet_getLeftKneeY
+    }
+
+    loose { // at 348,952
+        // posenet_getLeftHipX
+                // unsupported block: posenet_getLeftHipX
+    }
+
+    loose { // at 351,955
+        // posenet_getRightWristY
+                // unsupported block: posenet_getRightWristY
+    }
+
+    loose { // at 356,958
+        // posenet_getLeftHipY
+                // unsupported block: posenet_getLeftHipY
+    }
+
+    loose { // at 357,958
+        // posenet_getRightWristX
+                // unsupported block: posenet_getRightWristX
+    }
+
+    loose { // at 271,979
+        // posenet_getLeftAnkleY
+                // unsupported block: posenet_getLeftAnkleY
+    }
+
+    loose { // at 125,987
+        // posenet_saveDetections
+                // unsupported block: posenet_saveDetections
+    }
+
+    loose { // at 214,989
+        // posenet_getLeftShoulderX
+                // unsupported block: posenet_getLeftShoulderX
+    }
+
+    loose { // at -87,998
+        // posenet_getSavedDetectionCount
+                // unsupported block: posenet_getSavedDetectionCount
+    }
+
+    loose { // at 291,1002
+        // posenet_getLeftShoulderY
+                // unsupported block: posenet_getLeftShoulderY
+    }
+
+    loose { // at 255,1013
+        // posenet_getRightHipY
+                // unsupported block: posenet_getRightHipY
+    }
+
+    loose { // at 305,1025
+        // posenet_getRightKneeY
+                // unsupported block: posenet_getRightKneeY
+    }
+
+    loose { // at 148,1028
+        // posenet_getRightHipX
+                // unsupported block: posenet_getRightHipX
+    }
+
+    loose { // at 417,1048
+        // posenet_getRightKneeX
+                // unsupported block: posenet_getRightKneeX
+    }
+
+    loose { // at 643,1089
+        // posenet_getRightAnkleX
+                // unsupported block: posenet_getRightAnkleX
+    }
+
+    loose { // at 134,1098
+        // posenet_getLeftElbowX
+                // unsupported block: posenet_getLeftElbowX
+    }
+
+    loose { // at 381,1098
+        // posenet_getRightShoulderY
+                // unsupported block: posenet_getRightShoulderY
+    }
+
+    loose { // at 590,1101
+        // posenet_getLeftAnkleX
+                // unsupported block: posenet_getLeftAnkleX
+    }
+
+    loose { // at 375,1107
+        // posenet_getRightAnkleY
+                // unsupported block: posenet_getRightAnkleY
+    }
+
+    loose { // at 459,1197
+        // posenet_getLeftElbowY
+                // unsupported block: posenet_getLeftElbowY
+    }
+
+    loose { // at -13,1270
+        // posenet_getMinimumConfidence
+                // unsupported block: posenet_getMinimumConfidence
+    }
+
+    loose { // at 254,1282
+        // posenet_setMinimumConfidence
+                // unsupported block: posenet_setMinimumConfidence
+    }
+
+    loose { // at 680,1384
+        // posenet_showDetectionBoxes
+                // unsupported block: posenet_showDetectionBoxes
+    }
+
+    loose { // at 377,1392
+        // posenet_videoToggle
+                // unsupported block: posenet_videoToggle
+    }
+
+    loose { // at 3,1403
+        // posenet_activeInputImage
+                // unsupported block: posenet_activeInputImage
+    }
+
+    loose { // at 43,1497
+        // posenet_setClassificationInterval
+                // unsupported block: posenet_setClassificationInterval
+    }
+
+    loose { // at 600,1515
+        // posenet_setVideoTransparency
+                // unsupported block: posenet_setVideoTransparency
+    }
+
+    loose { // at -108,1570
+        // posenet_selectInputImage
+                // unsupported block: posenet_selectInputImage
+    }
+
+    loose { // at 42,1608
+        // posenet_selectCamera
+                // unsupported block: posenet_selectCamera
+    }
+
+    loose { // at 313,1616
+        // posenet_turnClassification
+                // unsupported block: posenet_turnClassification
+    }
+
+    loose { // at 3,1646
+        // posenet_getClassificationStatus
+                // unsupported block: posenet_getClassificationStatus
+    }
+
+    loose { // at -13,1703
+        // posenet_getClassificationInterval
+                // unsupported block: posenet_getClassificationInterval
+    }
+}
+
+ObjectDetection: name="ObjectDetection", x=36, y=28, size=100, direction=90, show=1, costume=0, volume=100, layer=4, rotation="all", draggable=0;
+class ObjectDetection {
+    import "assets/dfa802b5059155bd676202cbf86fb0f4.svg" as costume1; // costume centerx=0 centery=0 res=1
+    import "assets/83a9787d4cb6f3b7632b4ddfebf74367.wav" as pop; // sound rate=44100 samples=1032
+
+    loose { // at 211,35
+        // objectdetection_getListOfDetections
+                // unsupported block: objectdetection_getListOfDetections
+    }
+
+    loose { // at 393,101
+        // objectdetection_getObjectCount
+                // unsupported block: objectdetection_getObjectCount
+    }
+
+    loose { // at 135,174
+        // objectdetection_isAnythingDetected
+                // unsupported block: objectdetection_isAnythingDetected
+    }
+
+    loose { // at 427,210
+        // objectdetection_getMyDetectionListItemCount
+                // unsupported block: objectdetection_getMyDetectionListItemCount
+    }
+
+    loose { // at 864,244
+        // objectdetection_isObjectDetected
+                // unsupported block: objectdetection_isObjectDetected
+    }
+
+    loose { // at 93,270
+        // objectdetection_saveAndOrderDetections
+                // unsupported block: objectdetection_saveAndOrderDetections
+    }
+
+    loose { // at 662,338
+        // objectdetection_getAllItemsArgument
+                // unsupported block: objectdetection_getAllItemsArgument
+    }
+
+    loose { // at 142,367
+        // objectdetection_getMyDetectionList
+                // unsupported block: objectdetection_getMyDetectionList
+    }
+
+    loose { // at 274,394
+        // objectdetection_getNameofDetectionByIndex
+                // unsupported block: objectdetection_getNameofDetectionByIndex
+    }
+
+    loose { // at 526,442
+        // objectdetection_removeFromMyDetectionList
+                // unsupported block: objectdetection_removeFromMyDetectionList
+    }
+
+    loose { // at 751,450
+        // objectdetection_selectInputImage
+                // unsupported block: objectdetection_selectInputImage
+    }
+
+    loose { // at -52,459
+        // objectdetection_getWidthOf
+                // unsupported block: objectdetection_getWidthOf
+    }
+
+    loose { // at 359,472
+        // objectdetection_getClassificationInterval
+                // unsupported block: objectdetection_getClassificationInterval
+    }
+
+    loose { // at 415,494
+        // objectdetection_getNumberOfDetectionsByName
+                // unsupported block: objectdetection_getNumberOfDetectionsByName
+    }
+
+    loose { // at 1003,505
+        // objectdetection_getMyDetectionListItem
+                // unsupported block: objectdetection_getMyDetectionListItem
+    }
+
+    loose { // at 268,528
+        // objectdetection_clearMyDetectionList
+                // unsupported block: objectdetection_clearMyDetectionList
+    }
+
+    loose { // at 765,563
+        // objectdetection_selectCamera
+                // unsupported block: objectdetection_selectCamera
+    }
+
+    loose { // at -117,572
+        // objectdetection_getYOf
+                // unsupported block: objectdetection_getYOf
+    }
+
+    loose { // at 489,586
+        // objectdetection_turnClassification
+                // unsupported block: objectdetection_turnClassification
+    }
+
+    loose { // at 400,593
+        // objectdetection_getConfidenceOf
+                // unsupported block: objectdetection_getConfidenceOf
+    }
+
+    loose { // at 443,595
+        // objectdetection_activeInputImage
+                // unsupported block: objectdetection_activeInputImage
+    }
+
+    loose { // at 526,609
+        // objectdetection_whenAnyObjectDetected
+                // unsupported block: objectdetection_whenAnyObjectDetected
+                // unsupported block: objectdetection_setClassificationInterval
+    }
+
+    loose { // at 319,618
+        // objectdetection_whenDetectionsCountChanged
+                // unsupported block: objectdetection_whenDetectionsCountChanged
+    }
+
+    loose { // at 580,629
+        // objectdetection_addToMyDetectionList
+                // unsupported block: objectdetection_addToMyDetectionList
+                // unsupported block: objectdetection_showDetectionBoxes
+    }
+
+    loose { // at 354,642
+        // objectdetection_setDetectionModel
+                // unsupported block: objectdetection_setDetectionModel
+    }
+
+    loose { // at 168,667
+        // objectdetection_whenObjectDetected
+                // unsupported block: objectdetection_whenObjectDetected
+    }
+
+    loose { // at 125,674
+        // objectdetection_getXOf
+                // unsupported block: objectdetection_getXOf
+    }
+
+    loose { // at 400,775
+        // objectdetection_videoToggle
+                // unsupported block: objectdetection_videoToggle
+    }
+
+    loose { // at 637,791
+        // objectdetection_setMinimumConfidence
+                // unsupported block: objectdetection_setMinimumConfidence
+    }
+
+    loose { // at 285,793
+        // objectdetection_setVideoTransparency
+                // unsupported block: objectdetection_setVideoTransparency
+    }
+
+    loose { // at 682,882
+        // objectdetection_getHeightOf
+                // unsupported block: objectdetection_getHeightOf
+    }
+
+    loose { // at 230,891
+        // objectdetection_getMinimumConfidence
+                // unsupported block: objectdetection_getMinimumConfidence
+    }
+
+    loose { // at 373,1017
+        // objectdetection_setLookForMode
+                // unsupported block: objectdetection_setLookForMode
+    }
+}
+
+GoogleTechableMachine: name="GoogleTechableMachine", x=36, y=28, size=100, direction=90, show=1, costume=0, volume=100, layer=5, rotation="all", draggable=0;
+class GoogleTechableMachine {
+    import "assets/dfa802b5059155bd676202cbf86fb0f4.svg" as costume1; // costume centerx=0 centery=0 res=1
+    import "assets/83a9787d4cb6f3b7632b4ddfebf74367.wav" as pop; // sound rate=44100 samples=1032
+
+    loose { // at 221,50
+        // googleteachablemachine_whenImageLabelDetected
+                // unsupported block: googleteachablemachine_whenImageLabelDetected
+    }
+
+    loose { // at 259,200
+        // googleteachablemachine_isImageLabelDetected
+                // unsupported block: googleteachablemachine_isImageLabelDetected
+    }
+
+    loose { // at 139,285
+        // googleteachablemachine_setClassificationInterval
+                // unsupported block: googleteachablemachine_setClassificationInterval
+    }
+
+    loose { // at 608,338
+        // googleteachablemachine_setImageModelUrl
+                // unsupported block: googleteachablemachine_setImageModelUrl
+    }
+
+    loose { // at 404,346
+        // googleteachablemachine_imageLabelConfidence
+                // unsupported block: googleteachablemachine_imageLabelConfidence
+    }
+
+    loose { // at 353,376
+        // googleteachablemachine_getImageLabel
+                // unsupported block: googleteachablemachine_getImageLabel
+    }
+
+    loose { // at 147,390
+        // googleteachablemachine_whenPoseLabelDetected
+                // unsupported block: googleteachablemachine_whenPoseLabelDetected
+    }
+
+    loose { // at 179,501
+        // googleteachablemachine_whenSoundLabelDetected
+                // unsupported block: googleteachablemachine_whenSoundLabelDetected
+    }
+
+    loose { // at 704,567
+        // googleteachablemachine_setPoseModelUrl
+                // unsupported block: googleteachablemachine_setPoseModelUrl
+    }
+
+    loose { // at 557,620
+        // googleteachablemachine_poseLabelConfidence
+                // unsupported block: googleteachablemachine_poseLabelConfidence
+    }
+
+    loose { // at 910,624
+        // googleteachablemachine_isPoseLabelDetected
+                // unsupported block: googleteachablemachine_isPoseLabelDetected
+    }
+
+    loose { // at 338,671
+        // googleteachablemachine_isSoundLabelDetected
+                // unsupported block: googleteachablemachine_isSoundLabelDetected
+    }
+
+    loose { // at -49,681
+        // googleteachablemachine_soundLabelConfidence
+                // unsupported block: googleteachablemachine_soundLabelConfidence
+    }
+
+    loose { // at -80,806
+        // googleteachablemachine_getClassificationInterval
+                // unsupported block: googleteachablemachine_getClassificationInterval
+    }
+
+    loose { // at 634,807
+        // googleteachablemachine_turnClassification
+                // unsupported block: googleteachablemachine_turnClassification
+    }
+
+    loose { // at 240,821
+        // googleteachablemachine_setMinimumConfidence
+                // unsupported block: googleteachablemachine_setMinimumConfidence
+    }
+
+    loose { // at 415,875
+        // googleteachablemachine_getPoseLabel
+                // unsupported block: googleteachablemachine_getPoseLabel
+    }
+
+    loose { // at -107,890
+        // googleteachablemachine_getClassificationStatus
+                // unsupported block: googleteachablemachine_getClassificationStatus
+    }
+
+    loose { // at 52,920
+        // googleteachablemachine_selectInputImage
+                // unsupported block: googleteachablemachine_selectInputImage
+    }
+
+    loose { // at 879,936
+        // googleteachablemachine_setSoundModelUrl
+                // unsupported block: googleteachablemachine_setSoundModelUrl
+    }
+
+    loose { // at 48,994
+        // googleteachablemachine_getMinimumConfidence
+                // unsupported block: googleteachablemachine_getMinimumConfidence
+    }
+
+    loose { // at 427,1001
+        // googleteachablemachine_getSoundLabel
+                // unsupported block: googleteachablemachine_getSoundLabel
+    }
+
+    loose { // at 665,1009
+        // googleteachablemachine_setVideoTransparency
+                // unsupported block: googleteachablemachine_setVideoTransparency
+    }
+
+    loose { // at 1033,1056
+        // googleteachablemachine_selectCamera
+                // unsupported block: googleteachablemachine_selectCamera
+    }
+
+    loose { // at 437,1096
+        // googleteachablemachine_videoToggle
+                // unsupported block: googleteachablemachine_videoToggle
+    }
+
+    loose { // at 136,1103
+        // googleteachablemachine_activeInputImage
+                // unsupported block: googleteachablemachine_activeInputImage
+    }
+}
+
+SpeechRecognition: name="SpeechRecognition", x=36, y=28, size=100, direction=90, show=1, costume=0, volume=100, layer=6, rotation="all", draggable=0;
+class SpeechRecognition {
+    import "assets/dfa802b5059155bd676202cbf86fb0f4.svg" as costume1; // costume centerx=0 centery=0 res=1
+    import "assets/83a9787d4cb6f3b7632b4ddfebf74367.wav" as pop; // sound rate=44100 samples=1032
+
+    loose { // at 539,91
+        // speechrecognition_startRecognition
+                // unsupported block: speechrecognition_startRecognition
+    }
+
+    loose { // at 191,174
+        // speechrecognition_getSpeech
+                // unsupported block: speechrecognition_getSpeech
+    }
+
+    loose { // at 160,318
+        // speechrecognition_getLiveSpeech
+                // unsupported block: speechrecognition_getLiveSpeech
+    }
+
+    loose { // at 482,345
+        // speechrecognition_getNextWord
+                // unsupported block: speechrecognition_getNextWord
+    }
+
+    loose { // at 578,358
+        // speechrecognition_getConfidence
+                // unsupported block: speechrecognition_getConfidence
+    }
+
+    loose { // at 91,381
+        // speechrecognition_getWordCount
+                // unsupported block: speechrecognition_getWordCount
+    }
+
+    loose { // at 405,529
+        // speechrecognition_setLanguage
+                // unsupported block: speechrecognition_setLanguage
+    }
+
+    loose { // at 569,674
+        // speechrecognition_setLanguageCode
+                // unsupported block: speechrecognition_setLanguageCode
+    }
+
+    loose { // at 778,951
+        // speechrecognition_convertToEnglishNum
+                // unsupported block: speechrecognition_convertToEnglishNum
+    }
+}
+
+AIChatBot: name="AIChatBot", x=36, y=28, size=100, direction=90, show=1, costume=0, volume=100, layer=7, rotation="all", draggable=0;
+class AIChatBot {
+    import "assets/dfa802b5059155bd676202cbf86fb0f4.svg" as costume1; // costume centerx=0 centery=0 res=1
+    import "assets/83a9787d4cb6f3b7632b4ddfebf74367.wav" as pop; // sound rate=44100 samples=1032
+
+    loose { // at 264,89
+        // aichatbot_answer
+                // unsupported block: aichatbot_answer
+    }
+
+    loose { // at 365,217
+        // aichatbot_lastAnswer
+                // unsupported block: aichatbot_lastAnswer
+    }
+
+    loose { // at 365,266
+        // aichatbot_setApiKey
+                // unsupported block: aichatbot_setApiKey
+    }
+
+    loose { // at 0,296
+        // aichatbot_listModels
+                // unsupported block: aichatbot_listModels
+    }
+
+    loose { // at 21,403
+        // aichatbot_setAssistantName
+                // unsupported block: aichatbot_setAssistantName
+    }
+
+    loose { // at 205,560
+        // aichatbot_setRole
+                // unsupported block: aichatbot_setRole
+    }
+
+    loose { // at 582,672
+        // aichatbot_setPersona
+                // unsupported block: aichatbot_setPersona
+    }
+
+    loose { // at 46,714
+        // aichatbot_setMaxTokens
+                // unsupported block: aichatbot_setMaxTokens
+    }
+
+    loose { // at -34,865
+        // aichatbot_setTimeout
+                // unsupported block: aichatbot_setTimeout
+    }
+
+    loose { // at 304,884
+        // aichatbot_setTemperature
+                // unsupported block: aichatbot_setTemperature
+    }
+
+    loose { // at 679,1027
+        // aichatbot_clearMessageLogs
+                // unsupported block: aichatbot_clearMessageLogs
+    }
+
+    loose { // at 222,1078
+        // aichatbot_lastError
+                // unsupported block: aichatbot_lastError
+    }
+}
+
+Arduino: name="Arduino", x=36, y=28, size=100, direction=90, show=1, costume=0, volume=100, layer=8, rotation="all", draggable=0;
+class Arduino {
+    import "assets/dfa802b5059155bd676202cbf86fb0f4.svg" as costume1; // costume centerx=0 centery=0 res=1
+    import "assets/83a9787d4cb6f3b7632b4ddfebf74367.wav" as pop; // sound rate=44100 samples=1032
+
+    loose { // at 348,101
+        // arduino_digitalRead
+                // unsupported block: arduino_digitalRead
+    }
+
+    loose { // at 23,131
+        // arduino_readPinSmart
+                // unsupported block: arduino_readPinSmart
+    }
+
+    loose { // at 191,155
+        // arduino_beepOnPin
+                // unsupported block: arduino_beepOnPin
+    }
+
+    loose { // at 943,213
+        // arduino_digitalWrite
+                // unsupported block: arduino_digitalWrite
+    }
+
+    loose { // at 306,217
+        // arduino_pwmWrite
+                // unsupported block: arduino_pwmWrite
+    }
+
+    loose { // at 91,286
+        // arduino_stopBeep
+                // unsupported block: arduino_stopBeep
+    }
+
+    loose { // at 22,312
+        // arduino_analogRead
+                // unsupported block: arduino_analogRead
+    }
+
+    loose { // at 266,328
+        // arduino_stopBeepForMs
+                // unsupported block: arduino_stopBeepForMs
+    }
+
+    loose { // at 626,339
+        // arduino_turnOnLed
+                // unsupported block: arduino_turnOnLed
+                // unsupported block: arduino_clearLed
+    }
+
+    loose { // at 469,358
+        // arduino_beepOnPinForMs
+                // unsupported block: arduino_beepOnPinForMs
+    }
+
+    loose { // at 232,430
+        // arduino_playPattern
+                // unsupported block: arduino_playPattern
+                // unsupported block: arduino_stopServo
+                // unsupported block: arduino_setRGBColor
+    }
+
+    loose { // at 316,436
+        // arduino_servo
+                // unsupported block: arduino_servo
+    }
+
+    loose { // at 143,522
+        // arduino_moveServo
+                // unsupported block: arduino_moveServo
+    }
+
+    loose { // at 19,525
+        // arduino_waitForDigitalInput
+                // unsupported block: arduino_waitForDigitalInput
+                // unsupported block: arduino_setMotorSpeed
+    }
+
+    loose { // at 340,590
+        // arduino_ledBlinkAdvanced
+                // unsupported block: arduino_ledBlinkAdvanced
+                // unsupported block: arduino_setRGBColorFromColor
+    }
+
+    loose { // at 127,615
+        // arduino_analogChangeDetected
+                // unsupported block: arduino_analogChangeDetected
+    }
+
+    loose { // at 444,642
+        // arduino_rgbBlink
+                // unsupported block: arduino_rgbBlink
+    }
+
+    loose { // at 249,653
+        // arduino_isDigitalInputActive
+                // unsupported block: arduino_isDigitalInputActive
+    }
+
+    loose { // at 213,686
+        // arduino_stopMotor
+                // unsupported block: arduino_stopMotor
+                // unsupported block: arduino_serialEnable
+                // unsupported block: arduino_serialDisable
+                // unsupported block: arduino_rgbFadeIn
+                // unsupported block: arduino_i2cEnable
+                // unsupported block: arduino_rgbFadeOut
+    }
+
+    loose { // at 20,702
+        // arduino_i2cStatus
+                // unsupported block: arduino_i2cStatus
+    }
+
+    loose { // at 336,769
+        // arduino_digitalPinEdgeDetect
+                // unsupported block: arduino_digitalPinEdgeDetect
+    }
+
+    loose { // at 1019,774
+        // arduino_serialStatus
+                // unsupported block: arduino_serialStatus
+    }
+
+    loose { // at 277,781
+        // arduino_setRGBPredefinedColor
+                // unsupported block: arduino_setRGBPredefinedColor
+    }
+
+    loose { // at 383,843
+        // arduino_i2cDisable
+                // unsupported block: arduino_i2cDisable
+    }
+
+    loose { // at 89,865
+        // arduino_getPinMode
+                // unsupported block: arduino_getPinMode
+    }
+
+    loose { // at 169,875
+        // arduino_i2cWrite
+                // unsupported block: arduino_i2cWrite
+    }
+
+    loose { // at 81,915
+        // arduino_pin
+                // unsupported block: arduino_pin
+    }
+
+    loose { // at 432,949
+        // arduino_setPinMode
+                // unsupported block: arduino_setPinMode
+    }
+
+    loose { // at 6,1014
+        // arduino_mapValue
+                // unsupported block: arduino_mapValue
+    }
+
+    loose { // at 265,1062
+        // arduino_isAnalogInRange
+                // unsupported block: arduino_isAnalogInRange
+    }
+
+    loose { // at 329,1063
+        // arduino_getPinState
+                // unsupported block: arduino_getPinState
+    }
+
+    loose { // at 13,1081
+        // arduino_getFirmataVersion
+                // unsupported block: arduino_getFirmataVersion
+    }
+
+    loose { // at 157,1087
+        // arduino_i2cRead
+                // unsupported block: arduino_i2cRead
+    }
+
+    loose { // at 632,1096
+        // arduino_waitForAnalogThreshold
+                // unsupported block: arduino_waitForAnalogThreshold
+    }
+
+    loose { // at 74,1124
+        // arduino_exportArduinoCode
+                // unsupported block: arduino_exportArduinoCode
+    }
+}

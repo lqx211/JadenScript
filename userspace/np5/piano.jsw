@@ -1,0 +1,518 @@
+// The 3D keyboard, the falling notes and the 5x5 pen font, ported from
+// @hevean_3's "midi player MBH ver2.3"
+// (userspace/MIDIPlayer_Example_3DKeyboard.sb3).
+//
+// The projection is the example's, unchanged:
+//
+//     screen_x = 150 * (-x / z)
+//     screen_y = 150 * ((150 + y) / z)
+//
+// so z is the distance from the viewer and -180 is the floor the keyboard sits
+// on. A key is one line: from (x, 0, z) forward and up to (x, len, z + len) --
+// the example's `note(x, y, z, len)` -- which reads as a key lying flat and
+// receding. A pressed key moves 3 units closer (`z + 3`), which is what makes
+// it look like it is being pushed down.
+//
+// The example repaints the whole frame -- `erase all`, the keys, the notes, the
+// text -- once per frame inside `midi_play`, and that is what is done here: one
+// pen layer cannot be updated in pieces, so anything that moves forces a full
+// repaint. Everything below is a bounded amount of work, so each helper is
+// `// warp`: the repaint has to land inside one frame or the keys tear.
+// The console font from the i386/rv64 projects: CP437, 8 x 15, pre-decoded into
+// horizontal runs by tools/font_runs.py (the 5 x 5 font this replaced is still
+// in assets/lists for reference; nothing imports it).
+import "assets/lists/Font.chars.jsa";
+import "assets/lists/Font.start.jsa";
+import "assets/lists/Font.runs.jsa";
+
+// Pen draws relative to the sprite, so this sprite must sit exactly at the
+// origin; the compiler otherwise places a new class on a grid.
+piano: x=0, y=0, size=100, direction=90, show=0;
+class piano {
+    private _k;
+    private _x;
+    private _y;
+    private _z;
+    private _len;
+    private _ahead;
+    private _glow;
+    private _speed;
+    private _sec;
+    private _mm;
+    private _ss;
+    private _now;
+    private _d;
+    private _run;
+    private _col;
+    private _ch;
+    private _glyph;
+    private _i;
+    private _row;
+    // The HUD's string scratch. `_ht` is what the formatters return, `_hu` and
+    // `_hv` build the line around it, `_hz` is the third number of a clock or a
+    // timecode. Shared by `clockText`, `cutText` and `hud`, which never hold one
+    // across another's call.
+    private _ht;                       // what a formatter returns
+    private _hu;
+    private _hv;
+    private _hz;                       // `clockText`'s own scratch
+    private _hl;                       // the line being built, which no formatter
+                                       // may touch: `clockText` assigns `_hu` too,
+                                       // and a line held in there loses its head
+    private _q;                        // a tick count taken modulo the bar
+    private _drawn;                    // notes drawn this frame, for the budget
+    private _due;                      // Sensing.timer() the draw budget expires at
+
+    private void goTo(x, y, z) { // warp
+        Motion.setXY(Piano.fov * (x * -1 / z), Piano.fov * ((Piano.fov + y) / z));
+    }
+
+    // One line of the projection: the key and the note body are both this.
+    private void note(x, y, z, len) { // warp
+        goTo(x, y, z);
+        Pen.penDown();
+        goTo(x, y + len, z + len);
+        Pen.penUp();
+    }
+
+    private void drawKeys(black) { // warp
+        // The example's widths for the 3D view: 7 for the white pass, 4 for the
+        // black one. Without them the keys inherit the size the text left
+        // behind and come out as hairlines.
+        //
+        // The colour is set once per pass, not once per key. Both passes draw
+        // only keys of one colour, so the per-key `set pen color` calls were
+        // always setting the value it already had -- and a pen block costs about
+        // 40 us here, so 88 of them were most of the keyboard's frame budget
+        // (measured: 257 pen strokes a frame for 88 keys). A lit key is the only
+        // one that needs its own colour, and it puts the pass colour back.
+        if (black == 0) {
+            Pen.setPenSize(7);
+            Pen.setPenColor("#ffffff");
+            _len = 20;
+        } else {
+            Pen.setPenSize(4);
+            Pen.setPenColor("#000000");
+            _len = 12;
+        }
+        _k = 0;
+        repeat (128) {
+            if (Piano.isBlack.get(_k % 12 + 1) == black) {
+                _z = -180;
+                // A key is lit while the score says its note is still sounding:
+                // `Piano.end` is the tick the last note on this key ends at, and
+                // `Tick.active` is the clock. Driving the light from the score
+                // instead of counting note-ons and note-offs is what keeps it
+                // honest -- a seek moves the cursor past the note-offs of the
+                // notes that were down, and a count then left the key lit for
+                // the rest of the song.
+                _g = Piano.end.get(_k + 1);
+                if (Tick.active == 1 && _g >= Tick.tick && _g > 0) {
+                    // The example's lit key: the track's hue, full brightness,
+                    // and a saturation that starts hot and cools as the note is
+                    // played out.
+                    _a = Piano.len.get(_k + 1);
+                    if (_a < 1) {
+                        _a = 1;
+                    }
+                    _b = (_g - Tick.tick) / _a * 100;
+                    if (_b > 100) {
+                        _b = 100;
+                    }
+                    Pen.setPenColorParamTo("color", (Piano.hue.get(_k + 1) - 1) * Song.hueStep);
+                    Pen.setPenColorParamTo("brightness", 100);
+                    Pen.setPenColorParamTo("saturation", 30 + _b);
+                    if (black == 1) {
+                        // The example keeps the black keys darker so a lit one
+                        // still reads as a black key.
+                        Pen.changePenColorParam("brightness", -40);
+                    }
+                    _z += 3;
+                    note(_k * 3.75 - 238.25, 0, _z, _len);
+                    if (black == 0) {
+                        Pen.setPenColor("#ffffff");
+                    } else {
+                        Pen.setPenColor("#000000");
+                    }
+                } else {
+                    note(_k * 3.75 - 238.25, 0, _z, _len);
+                }
+            }
+            _k += 1;
+        }
+    }
+
+    // The falling notes: the example's Render_mode 3. `Note.cursor` is the first
+    // row of Note.* that may still be on screen, so a frame costs the notes it
+    // can see, never the fifteen thousand in the song.
+    // A black MIDI can put tens of thousands of notes inside the horizon, and
+    // drawing all of them would spend the frame's whole budget on the picture
+    // and stall the clock -- the notes would arrive late because they were drawn
+    // first. So the loop stops itself: past `Piano.drawBudget` seconds it leaves
+    // the rest of the window for the next frame. The picture degrades, the music
+    // does not. (scratch PFA's `vis` does the same thing with a 0.125 s check.)
+    private void drawNotes() { // warp
+        _drawn = 0;
+        _due = Sensing.timer() + Piano.drawBudget;
+        Pen.setPenSize(2);
+        // Depth and horizon are the player's to tune; units per tick is all the
+        // geometry below needs, and it is one divide a frame.
+        _speed = Piano.depth / Piano.horizon;
+        _i = Note.cursor;
+        _run = 1;
+        while (_run == 1) {
+            if (_i > Song.notes) {
+                _run = 0;
+            } else {
+                _ahead = Note.tick.get(_i) - Tick.tick;
+                if (_ahead > Piano.horizon) {
+                    _run = 0;
+                } else {
+                    // Ticks of this note still to come. Negative means it is
+                    // over; it can only be retired when it is the cursor,
+                    // because a longer note before it may still be sounding.
+                    _len = _ahead + Note.len.get(_i);
+                    if (_len < 0) {
+                        if (_i == Note.cursor) {
+                            Note.cursor += 1;
+                        }
+                    } else {
+                        _x = Note.key.get(_i) * 3.75 - 238.25;
+                        // How much of the note is left, 0..1, for the glow. It
+                        // has to be taken before the clip, which only exists to
+                        // keep the body inside the horizon.
+                        _glow = _len / Note.len.get(_i);
+                        Pen.setPenColorParamTo("color", Note.trk.get(_i) * Song.hueStep);
+                        Pen.setPenColorParamTo("brightness", 80);
+                        Pen.setPenColorParamTo("saturation", 100);
+                        if (_ahead > 0) {
+                            // Falling. The body is the note's own length, and
+                            // the far end stops at the horizon plane: using the
+                            // *remaining* ticks here would add the distance to
+                            // the length, and the note would visibly shrink as
+                            // it closed in.
+                            _len = Note.len.get(_i);
+                            if (_ahead + _len > Piano.horizon) {
+                                _len = Piano.horizon - _ahead;
+                            }
+                            note(_x, _ahead * _speed * -1, _ahead * _speed * -1 - 180, _len * _speed * -1);
+                        } else {
+                            // Sounding: the head sits on the key and the body
+                            // is what is left, so it sinks into the key as the
+                            // note is played out. At exactly zero there is
+                            // nothing left to draw.
+                            if (_len > Piano.horizon) {
+                                _len = Piano.horizon;
+                            }
+                            if (_len > 0) {
+                                // 発音時発光: a sounding note brightens and
+                                // desaturates as it is consumed, so the one
+                                // being heard stands out from the queue.
+                                if (_glow > 0 && Set.glow == 1) {
+                                    Pen.setPenColorParamTo("brightness", 80 + _glow * 30);
+                                    Pen.setPenColorParamTo("saturation", 100 + _glow * -100);
+                                }
+                                note(_x, 0, -180, _len * _speed * -1);
+                            }
+                        }
+                    }
+                    _i += 1;
+                    _drawn += 1;
+                    if (_drawn % 64 == 0 && Sensing.timer() > _due) {
+                        _run = 0;
+                    }
+                }
+            }
+        }
+    }
+
+    // The pen layer has no partial update, but `erase all` also throws away the
+    // HUD, which costs thirteen pen strokes a character to put back. Painting
+    // the backdrop's own colour over the animation area instead -- five 60px
+    // bands, y -180 to +120, everything the keys and the notes reach -- leaves
+    // the HUD strip (y 120..180) standing between frames.
+    private void clearStage() { // warp
+        Pen.setPenColor("#101418");
+        Pen.setPenSize(60);
+        _i = -150;
+        repeat (6) {                    // the whole stage, top band included
+            Motion.setXY(-240, _i);
+            Pen.penDown();
+            Motion.x = 240;
+            Pen.penUp();
+            _i += 60;
+        }
+    }
+
+    // The hit line at the front edge of the keyboard.
+    private void hitLine() { // warp
+        Pen.setPenSize(2);
+        Pen.setPenColor("#ff0000");
+        Motion.setXY(-200, -122);
+        Pen.penDown();
+        Motion.x = 200;
+        Pen.penUp();
+    }
+
+    // One pen line per horizontal run of set pixels. The rv64 console walks the
+    // 120 bits of a glyph box at run time, which a HUD that repaints four lines
+    // every frame cannot afford; the runs are pre-computed, so a glyph costs the
+    // thirteen strokes it has.
+    private void text(message, x, y, color, size) { // warp
+        Pen.setPenColor(color);
+        Pen.setPenSize(size);
+        _px = x;
+        _col = 0;
+        repeat (Operators.length(message)) {
+            _col += 1;
+            _ch = Operators.letterOf(_col, message);
+            _g = Font.chars.indexOf(_ch);
+            if (_g > 0) {
+                _a = Font.start.get(_g);
+                _b = Font.start.get(_g + 1);
+                while (_a < _b) {
+                    Motion.setXY(_px + Font.runs.get(_a) * size, y - Font.runs.get(_a + 1) * size);
+                    Pen.penDown();
+                    Motion.x = _px + (Font.runs.get(_a) + Font.runs.get(_a + 2)) * size - 1;
+                    Pen.penUp();
+                    _a += 3;
+                }
+            }
+            _px += 8 * size;
+        }
+    }
+
+    // The debug block: five lines, left top, on the terminal's own row pitch.
+    //
+    //    00:00.00/00:00.00 Tick:0/0 BPM:0
+    //    FPS:0 NPS:0 Polyphony:0
+    //    POS    1  1  1   0
+    //    MIDI "title" (125 kB)
+    //    -> the lyric the playhead is inside
+    //
+    // It is drawn *after* the picture and has no paper of its own, so the five
+    // lines are an overlay on the road rather than a strip cut out of the top of
+    // it. That is what lets them sit on `Term.pitch`: five such rows are eighty-
+    // five pixels, and the strip that used to be reserved here was sixty-two,
+    // which is why the block was squeezed to twelve -- a pitch equal to the
+    // glyph's own twelve rows of ink, with no air at all between the lines. The
+    // pages in `settings.jsw` are on the same pitch, so the HUD and the debug
+    // page read as the same screen.
+    //
+    // Every label is drawn in capitals and is written in capitals here, because
+    // the pen font *cannot* tell case apart: `text` looks a character up with
+    // `Font.chars.indexOf`, and a Scratch list compares with `Cast.compare`,
+    // which lower-cases both sides for strings
+    // (`scratch-vm-develop/src/util/cast.js`). So `indexOf("a")` finds the "A"
+    // cell first and every lowercase letter draws as its capital. Writing the
+    // spec's `Tick:` here would be a comment that lies about the screen; the
+    // dynamic text (a title, a lyric) is the file's own and is drawn the same
+    // way.
+    //
+    // Every glyph pixel is a pen stroke, so the block costs about 1,300 strokes
+    // and is rebuilt with the picture.
+    // One line of the HUD block, `k` rows down from the top of the stage, on the
+    // same pitch as the terminal's pages so the two screens share a rhythm.
+    private void hudText(k, message, color, size) { // warp
+        text(message, -232, 180 - 4 - k * Term.pitch, color, size);
+    }
+
+    private void hud() { // warp
+        // The playhead, in song seconds and not on the wall clock: a transport
+        // shows where the *music* is, and it is what the tick count, the SMPTE
+        // fields and the lyric cursor all have to agree with.
+        _sec = Tick.tick * 60 / (16 * Song.tempo);
+        _now = Song.ticks * 60 / (16 * Song.tempo);
+        clockText(_sec);
+        _hl = join(_ht, "/");
+        clockText(_now);
+        _hl = join(_hl, join(_ht, join(" TICK:", join(Tick.tick, join("/", Song.ticks)))));
+        _hl = join(_hl, join(" BPM:", Operators.round(Player.midiSpeed)));
+        hudText(0, _hl, "#ffffff", 1);
+
+        _hl = join("FPS:", join(Piano.fps, join(" NPS:", join(Player.nps, " POLYPHONY:"))));
+        hudText(1, join(_hl, Player.voices), "#ffffff", 1);
+
+        // The position in the bar the way a sequencer writes it: measure, beat,
+        // division within the beat, and ticks within the division -- Logic's
+        // `1 1 1 1`. A measure is four beats and the player's grid is sixteen
+        // ticks to the beat, so its ticks fall on divisions; the last field
+        // counts to 240 inside a division, which is Logic's own resolution, so
+        // one player tick is sixty of those and the field steps 0, 60, 120, 180.
+        _q = Operators.round(Tick.tick) % 64;
+        termRight(Operators.math("floor", Operators.round(Tick.tick) / 64) + 1, 3);
+        _hl = Term.text;
+        termRight(Operators.math("floor", _q / 16) + 1, 2);
+        _hl = join(_hl, Term.text);
+        termRight(Operators.math("floor", _q % 16 / 4) + 1, 2);
+        _hl = join(_hl, Term.text);
+        termRight((_q % 4) * 60, 4);
+        _hl = join(_hl, Term.text);
+        hudText(2, join("POS ", _hl), "#9fc6d8", 1);
+
+        // What the file was: the name it carried and how big it was. A paste
+        // has no name of its own, and `loader.jsw` says so.
+        cutText(Song.title, 26);
+        _hl = join("MIDI \"", join(_ht, "\" ("));
+        _hl = join(_hl, join(Song.kb, " KB)"));
+        hudText(3, _hl, "#8fb0c0", 1);
+
+        // The lyric the playhead is inside. The cursor only moves forward except
+        // when the song is seeked back, where the tick test restarts it -- so
+        // this is a scan of the lyrics passed, not of the whole list.
+        if (Song.lyricCount > 0) {
+            if (Piano.lyric >= 1 && Song.LyricTick.get(Piano.lyric) > Tick.tick) {
+                Piano.lyric = 0;
+            }
+            while (Piano.lyric < Song.lyricCount && Song.LyricTick.get(Piano.lyric + 1) <= Tick.tick) {
+                Piano.lyric += 1;
+            }
+            if (Piano.lyric >= 1) {
+                cutText(Song.LyricText.get(Piano.lyric), 40);
+                hudText(4, join("-> ", _ht), "#ffd479", 1);
+            }
+        }
+    }
+
+    // "MM:SS.CC" into `_ht`: minutes, seconds, hundredths, the way a transport
+    // writes a position. Padded by hand because Scratch's `join` has no format
+    // string, and a field that grows a digit must not shuffle the rest of the
+    // line -- `Operators.length` on the number's own text is what says whether
+    // the pad is needed.
+    private void clockText(seconds) { // warp
+        _hu = Operators.math("floor", seconds / 60);
+        _ht = join("", _hu);
+        if (Operators.length(_ht) < 2) {
+            _ht = join("0", _ht);
+        }
+        _hu = Operators.math("floor", seconds) % 60;
+        _hv = join("", _hu);
+        if (Operators.length(_hv) < 2) {
+            _hv = join("0", _hv);
+        }
+        _hu = Operators.math("floor", (seconds - Operators.math("floor", seconds)) * 100);
+        _hz = join("", _hu);
+        if (Operators.length(_hz) < 2) {
+            _hz = join("0", _hz);
+        }
+        _ht = join(_ht, join(":", join(_hv, join(".", _hz))));
+    }
+
+    // The first `n` characters of `s` into `_ht`, or all of it when it is
+    // shorter. A title or a lyric line is arbitrary text from a file and the
+    // pen font draws until the string ends, so anything longer than the stage
+    // would run off the edge and cost strokes on every rebuild.
+    private void cutText(s, n) { // warp
+        _ht = s;
+        if (Operators.length(s) > n) {
+            _ht = "";
+            _hv = 1;
+            repeat (n) {
+                _ht = join(_ht, Operators.letterOf(_hv, s));
+                _hv += 1;
+            }
+        }
+    }
+
+    private void measureFps() {
+        // The example measures the frame rate the same way -- frames over the
+        // time they took -- and `Piano.ticks` is the loop's own counter, reset
+        // by each measurement.
+        _now = Sensing.daysSince2000();
+        _d = (_now - Piano.clock) * 86400;
+        if (_d > 0) {
+            // The frame rate is the loop's, not the repaint's: the picture is
+            // deliberately throttled to Piano.redraw and would otherwise
+            // report itself as the engine's speed.
+            Piano.fps = Operators.math("ceiling", Piano.ticks / _d);
+        }
+        Piano.clock = _now;
+        Piano.ticks = 0;
+        // Notes a second over the last whole second. Measured on the wall clock
+        // because that is what a second is to the machine -- the song's own
+        // seconds run slower when the player cannot keep up, and the point of
+        // this number is to show that. It lives here and not in the HUD because
+        // the debug page reads it too, and the HUD is not drawn while the debug
+        // page is up.
+        _sec = Sensing.timer();
+        if (_sec - Piano.npsAt >= 1) {
+            Player.nps = Player.notesPlayed - Piano.npsNote;
+            Piano.npsNote = Player.notesPlayed;
+            Piano.npsAt = _sec;
+        }
+    }
+
+    metadata greenFlag pos 0,0;
+    public void greenFlag() {
+        Looks.switchBackdrop("dark");
+        Piano.total = Operators.round(Song.ticks * 60 / (16 * Song.tempo));
+        Piano.clock = Sensing.daysSince2000();
+        // The green flag restarts the project timer at 0, but `Piano.drawn`
+        // still holds the last frame of the *previous* run -- so the repaint
+        // gate below, which compares the two, would sit there subtracting a
+        // larger number from a smaller one and draw nothing at all until the
+        // timer caught up. A played song leaves it minutes ahead.
+        Piano.drawn = -1;
+        // The page starts closed; the knobs themselves are the user's, and a
+        // song restarted from the green flag keeps them.
+        Set.open = 0;
+        Set.held = "";
+        Pen.eraseAll();
+        _frame = 0;
+        Piano.ticks = 0;
+        while (1) {
+            Piano.ticks += 1;
+            settingsPoll();
+            if (Set.open == 1) {
+                // The settings page owns the layer while it is up. It is painted
+                // when something changes, plus twice a second for the live line
+                // -- a full terminal screen every frame would be four thousand
+                // pen strokes, which is the whole 3D view and then some.
+                _now = Sensing.timer();
+                if (Set.dirty == 1 || _now - Set.painted >= 0.5) {
+                    Set.dirty = 0;
+                    Set.painted = _now;
+                    settingsPage();
+                    _frame += 1;
+                }
+            } else {
+                // One repaint a frame, and how many frames a second is decided
+                // by the wall clock rather than by `wait 0.016`: a `wait` with
+                // a duration is retried by the sequencer until it elapses, which
+                // spends the frame's whole work budget doing nothing. `wait 0`
+                // yields exactly one frame and costs nothing.
+                _now = Sensing.timer();
+                if (_now - Piano.drawn >= Piano.redraw) {
+                    Piano.drawn = _now;
+                    clearStage();
+                    if (Set.keys == 1) {
+                        drawKeys(0);
+                        drawKeys(1);
+                    }
+                    drawNotes();
+                    hitLine();
+                    _frame += 1;
+                    measureFps();
+                    // The text is drawn last and has no paper: the picture above
+                    // is the background, and the layer is cleared whole at the
+                    // top of every repaint, so the overlay is simply redrawn
+                    // rather than erased and redrawn. The debug page replaces
+                    // the HUD -- it is the same numbers with the mixer beside
+                    // them, and two blocks on one corner would fight.
+                    if (Set.debug == 1) {
+                        dbgPage();
+                    } elif (Set.hud == 1) {
+                        hud();
+                    }
+                }
+            }
+            Control.wait(0);
+        }
+    }
+
+    // The terminal is the rv64 console's, and the page on top of it is this
+    // player's. Both are body includes: a pen layer belongs to one sprite and
+    // Scratch cannot call a block on another one.
+    include "terminal.inc.jsw"
+    include "settings.jsw"
+}

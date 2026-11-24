@@ -1,0 +1,1270 @@
+/* ---- the x87 ------------------------------------------------------------
+ * An 80387 with eight registers, its control word, its status word and the
+ * three memory formats -- a body include of `class Cpu`, because the registers
+ * belong to a core and the decode belongs to its instruction loop.
+ *
+ * The registers hold Scratch numbers, which *are* IEEE doubles. An 8087
+ * register is eighty bits, so this is a 387 with a fifty-two-bit fraction and
+ * an explicit integer bit of one; that is stated rather than hidden, and it is
+ * what makes every operation exactly what `tools/i386_ref.py` computes, because
+ * both do double arithmetic on the same values in the same order. The extra
+ * eleven bits a real chip keeps are the price of a machine whose registers are
+ * numbers.
+ *
+ * The raw patterns are only needed where memory is: `fld`/`fst` of m32fp,
+ * m64fp and m80fp, and `fnsave`. Those are built from powers of two -- which are
+ * exactly representable, so multiplying and dividing by them is exact -- and
+ * from `floor`, because this language has no bitwise operators. The table is
+ * `X.fpow2`, every power of two a double can name, built once at the first
+ * escape and shared by every core. */
+
+private fpSt = [0, 0, 0, 0, 0, 0, 0, 0];
+private fpEmpty = [1, 1, 1, 1, 1, 1, 1, 1];
+private fpTop = 0;                      // which slot st(0) is: `st(i)` rotates
+private fpCw = 0x037F;                  // round to nearest, every exception masked
+private fpC0 = 0;
+private fpC1 = 0;
+private fpC2 = 0;
+private fpC3 = 0;
+private fpSf = 0;                       // a stack fault happened
+private fpEs = 0;                       // ... and is summarised in the status word
+private fpIp = 0;                       // what a save remembers
+ /* ---- the values a language without an infinity needs ---------------
+   *
+   * There is no literal for either, and `1 / 0` is what JavaScript -- and so
+ * Scratch -- answers, so it is computed rather than spelled. The divisor is
+ * a variable, not a literal, because a compiler is entitled to fold a
+ * constant division and this one would raise. */
+    private void fpInf() { // warp
+        _fz = 0;
+        v = 1 / _fz;
+    }
+
+    private void fpNan() { // warp
+        _fz = 0;
+        _fn = 1 / _fz;
+        v = _fn - _fn;
+    }
+ /* ---- the register stack --------------------------------------------
+   *
+   * `st(i)` is a rotation, not an offset: a push moves the *name* of the top,
+ * which is why every access works the slot out again. */
+    private void fpSlot(i) { // warp
+        v = (fpTop + i) % 8;
+    }
+
+    private void fpGet(i) { // warp
+        fpSlot(i);
+        v = fpSt.get(v + 1);
+    }
+
+    private void fpPut(i, value) { // warp
+        fpSlot(i);
+        fpSt.set(v + 1, value);
+        fpEmpty.set(v + 1, 0);
+    }
+
+    private void fpIsEmpty(i) { // warp
+        fpSlot(i);
+        v = fpEmpty.get(v + 1);
+    }
+
+    private void fpPush(value) { // warp
+        fpTop = (fpTop + 7) % 8;
+        if (fpEmpty.get(fpTop + 1) == 0) {
+            fpSf = 1;                   // over the top: the stack fault the
+            fpEs = 1;                   // chip reports instead of faulting
+            fpC1 = 1;
+        }
+        fpSt.set(fpTop + 1, value);
+        fpEmpty.set(fpTop + 1, 0);
+    }
+
+    private void fpPop() { // warp
+        _fpV = fpSt.get(fpTop + 1);
+        if (fpEmpty.get(fpTop + 1) == 1) {
+            fpSf = 1;
+            fpEs = 1;
+            fpC1 = 1;
+            fpNan();
+            _fpV = v;
+        }
+        fpEmpty.set(fpTop + 1, 1);
+        fpTop = (fpTop + 1) % 8;
+        v = _fpV;
+    }
+
+    private void fpDrop(i) { // warp
+        fpSlot(i);
+        fpEmpty.set(v + 1, 1);
+        if (i == 0) { fpTop = (fpTop + 1) % 8; }
+    }
+
+    private void fpStatus() { // warp
+        v = fpTop * 2048 + fpC3 * 16384 + fpC2 * 1024 + fpC1 * 512 + fpC0 * 256 + fpSf * 64 + fpEs * 128;
+    }
+
+    private void fpRoundMode() { // warp
+        v = Operators.math("floor", fpCw / 1024) % 4;
+    }
+ /* C3 equal, C2 unordered, C0 less than -- the three bits every `fcom`
+ * sequence reads out with `fnstsw` and `sahf`. */
+    private void fpCompare(left, right) { // warp
+        fpC0 = 0;
+        fpC2 = 0;
+        fpC3 = 0;
+        if (left != left) { fpC0 = 1; fpC2 = 1; fpC3 = 1; return; }
+        if (right != right) { fpC0 = 1; fpC2 = 1; fpC3 = 1; return; }
+        if (left < right) { fpC0 = 1; return; }
+        if (left == right) { fpC3 = 1; }
+    }
+ /* ---- powers of two, and what they are for -------------------------
+   *
+   * `FPOW2[k]` is 2^(k - 1074): every power of two a double can name, from
+ * the smallest denormal to the largest finite. Built by halving and then
+ * doubling one, so every entry is exact and identical to the table the
+ * Python model builds. */
+    private void fpTable() { // warp
+        if (X.fpow2.length() > 0) { return; }
+        _ftV = 1;
+        _ftI = 0;
+        while (_ftI < 1074) {
+            _ftV = _ftV / 2;
+            _ftI += 1;
+        }
+        _ftI = 0;
+        while (_ftI < 2098) {
+            X.fpow2.add(_ftV);
+            _ftV = _ftV * 2;
+            _ftI += 1;
+        }
+    }
+
+    private void fpPow2(e) { // warp
+        _fpK = e + 1074;
+        if (_fpK < 0) { v = 0; return; }
+        if (_fpK > 2097) { fpInf(); return; }
+        v = X.fpow2.get(_fpK + 1);
+    }
+ /* floor(log2(value)), by bisecting the table: a logarithm is not reliable
+ * at a boundary, and this is eleven comparisons either way. */
+    private void fpExpOf(value) { // warp
+        _feLo = 0;
+        _feHi = 2097;
+        while (_feLo < _feHi) {
+            _feMid = Operators.math("floor", (_feLo + _feHi + 1) / 2);
+            if (X.fpow2.get(_feMid + 1) <= value) {
+                _feLo = _feMid;
+            } else {
+                _feHi = _feMid - 1;
+            }
+        }
+        v = _feLo - 1074;
+    }
+ /* ---- memory, a byte at a time ------------------------------------- */
+    private void fpLoad(at, n) { // warp
+        _flI = 0;
+        _flV = 0;
+        _flScale = 1;
+        while (_flI < n) {
+            rdb(at + _flI);
+            _flV = _flV + v * _flScale;
+            _flScale = _flScale * 256;
+            _flI += 1;
+        }
+        v = _flV;
+    }
+
+    private void fpByte(at) { // warp
+        rdb(at);
+    }
+ /* Two dwords, low first -- which is how every format wider than a number
+ * has to be written, because the pieces are exact and the whole is not. */
+    private void fpWord2(at, low, high) { // warp
+        fpStore(at, 4, low);
+        fpStore(at + 4, 4, high);
+    }
+
+    private void fpStore(at, n, value) { // warp
+        _fsI = 0;
+        _fsV = value;
+        while (_fsI < n) {
+            wrb(at + _fsI, _fsV % 256);
+            _fsV = Operators.math("floor", _fsV / 256);
+            _fsI += 1;
+        }
+    }
+ /* ---- the three formats --------------------------------------------
+   *
+   * m32fp and m64fp are IEEE binary32 and binary64; m80fp is binary80, with
+ * an explicit integer bit. Decoding reads the fields out with `%` and
+ * `floor` and multiplies by a power of two; encoding bisects the table for
+ * the exponent and then scales the fraction into whole bits. */
+    private void fpF32At(at) { // warp
+        fpLoad(at, 4);
+        _fb0 = v % 256;
+        _fb1 = Operators.math("floor", v / 256) % 256;
+        _fb2 = Operators.math("floor", v / 65536) % 256;
+        _fb3 = Operators.math("floor", v / 16777216) % 256;
+        _fSign = 1;
+        if (_fb3 >= 128) { _fSign = -1; }
+        _fExp = (_fb3 % 128) * 2 + Operators.math("floor", _fb2 / 128);
+        _fMant = (_fb2 % 128) * 65536 + _fb1 * 256 + _fb0;
+        if (_fExp >= 255) {
+            if (_fMant > 0) { fpNan(); return; }
+            fpInf();
+            v = _fSign * v;
+            return;
+        }
+        if (_fExp == 0) {
+            fpPow2(-149);
+            v = _fSign * _fMant * v;
+            return;
+        }
+        fpPow2(_fExp - 127);
+        v = _fSign * (1 + _fMant / 8388608) * v;
+    }
+
+    private void fpF32To(at, value) { // warp
+        _fSign = 0;
+        _fV = value;
+        if (_fV < 0) {
+            _fSign = 128;
+            _fV = 0 - _fV;
+        }
+        if (_fV != _fV) { fpStore(at, 4, 192 * 65536 + 255 * 16777216); return; }
+        fpInf();
+        _fInf = v;
+        if (_fV == _fInf) { fpStore(at, 4, 128 * 65536 + (127 + _fSign) * 16777216); return; }
+        if (_fV == 0) { fpStore(at, 4, _fSign * 16777216); return; }
+        fpExpOf(_fV);
+        _fExp = v;
+        if (_fExp > 127) { fpStore(at, 4, 128 * 65536 + (127 + _fSign) * 16777216); return; }
+        if (_fExp < -126) {
+            fpPow2(-149);
+            _fMant = Operators.math("floor", _fV / v + 0.5);
+            fpStore(at, 4, _fMant % 256 + Operators.math("floor", _fMant / 256) % 256 * 256 + Operators.math("floor", _fMant / 65536) * 65536 + _fSign * 16777216);
+            return;
+        }
+        fpPow2(_fExp);
+        _fMant = Operators.math("floor", (_fV / v - 1) * 8388608 + 0.5);
+        if (_fMant >= 8388608) {
+            _fMant = 0;
+            _fExp += 1;
+            if (_fExp > 127) { fpStore(at, 4, 128 * 65536 + (127 + _fSign) * 16777216); return; }
+        }
+        _fExp += 127;
+        fpStore(at, 4, _fMant % 256 + Operators.math("floor", _fMant / 256) % 256 * 256 + ((_fExp % 2) * 128 + Operators.math("floor", _fMant / 65536)) * 65536 + (_fSign + Operators.math("floor", _fExp / 2)) * 16777216);
+    }
+
+    private void fpF64At(at) { // warp /* Eight bytes cannot go through `fpLoad`: a number that big is past * the fifty-three bits a Scratch number holds exactly, so the fields * are taken apart a byte at a time and each piece is exact on its own. */
+        fpByte(at);
+        _fb0 = v;
+        fpByte(at + 1);
+        _fb1 = v;
+        fpByte(at + 2);
+        _fb2 = v;
+        fpByte(at + 3);
+        _fb3 = v;
+        fpByte(at + 4);
+        _fb4 = v;
+        fpByte(at + 5);
+        _fb5 = v;
+        fpByte(at + 6);
+        _fb6 = v;
+        fpByte(at + 7);
+        _fb7 = v;
+        _fSign = 1;
+        if (_fb7 >= 128) { _fSign = -1; }
+        _fExp = (_fb7 % 128) * 16 + Operators.math("floor", _fb6 / 16);
+        _fMant = (_fb6 % 16) * 281474976710656 + _fb5 * 1099511627776 + _fb4 * 4294967296 + _fb3 * 16777216 + _fb2 * 65536 + _fb1 * 256 + _fb0;
+        if (_fExp >= 2047) {
+            if (_fMant > 0) { fpNan(); return; }
+            fpInf();
+            v = _fSign * v;
+            return;
+        }
+        if (_fExp == 0) {
+            fpPow2(-1074);
+            v = _fSign * _fMant * v;
+            return;
+        }
+        fpPow2(_fExp - 1023);
+        v = _fSign * (1 + _fMant / 4503599627370496) * v;
+    }
+
+    private void fpF64To(at, value) { // warp
+        _fSign = 0;
+        _fV = value;
+        if (_fV < 0) {
+            _fSign = 128;
+            _fV = 0 - _fV;
+        }
+        if (_fV != _fV) { fpWord2(at, 0, 2146959360); return; }
+        fpInf();
+        _fInf = v;
+        if (_fV == _fInf) {
+            fpWord2(at, 0, 2146435072 + (_fSign / 128) * 2147483648);
+            return;
+        }
+        if (_fV == 0) { fpWord2(at, 0, (_fSign / 128) * 2147483648); return; }
+        fpExpOf(_fV);
+        _fExp = v;
+        if (_fExp > 1023) {
+            fpWord2(at, 0, 2146435072 + (_fSign / 128) * 2147483648);
+            return;
+        }
+        if (_fExp < -1022) {                                   // denormal
+            fpPow2(-1074);
+            _fMant = _fV / v;
+            fpWord2(at, _fMant % 4294967296,
+                    Operators.math("floor", _fMant / 4294967296) % 1048576
+                    + (_fSign / 128) * 2147483648);
+            return;
+        }
+        fpPow2(_fExp);
+        _fMant = Operators.math("floor", (_fV / v - 1) * 4503599627370496 + 0.5);
+        if (_fMant >= 4503599627370496) {
+            _fMant = 0;
+            _fExp += 1;
+            if (_fExp > 1023) {
+                fpWord2(at, 0, 2146435072 + (_fSign / 128) * 2147483648);
+                return;
+            }
+        }
+        _fExp += 1023;
+        /* The high half is the mantissa's top twenty bits, the eleven-bit
+         * exponent above them and the sign on the end -- one dword, because a
+         * number past 2^53 is not exact and the two halves are. */
+        fpWord2(at, _fMant % 4294967296,
+                Operators.math("floor", _fMant / 4294967296) % 1048576
+                + _fExp * 1048576 + (_fSign / 128) * 2147483648);
+    }
+
+    private void fpF80At(at) { // warp
+        fpByte(at);
+        _fb0 = v;
+        fpByte(at + 1);
+        _fb1 = v;
+        fpByte(at + 2);
+        _fb2 = v;
+        fpByte(at + 3);
+        _fb3 = v;
+        fpByte(at + 4);
+        _fb4 = v;
+        fpByte(at + 5);
+        _fb5 = v;
+        fpByte(at + 6);
+        _fb6 = v;
+        fpByte(at + 7);
+        _fb7 = v;
+        fpByte(at + 8);
+        _fb8 = v;
+        fpByte(at + 9);
+        _fb9 = v;
+        _fSign = 1;
+        if (_fb9 >= 128) { _fSign = -1; }
+        _fExp = (_fb9 % 128) * 256 + _fb8;
+        if (_fExp >= 32767) {
+            if (_fb7 >= 128 && _fb7 % 128 == 0 && _fb6 == 0 && _fb5 == 0 && _fb4 == 0 && _fb3 == 0 && _fb2 == 0 && _fb1 == 0 && _fb0 == 0) {
+                fpInf();
+                v = _fSign * v;
+                return;
+            }
+            fpNan();
+            return;
+        }
+        _fMant = _fb7 * 72057594037927936 + _fb6 * 281474976710656 + _fb5 * 1099511627776 + _fb4 * 4294967296 + _fb3 * 16777216 + _fb2 * 65536 + _fb1 * 256 + _fb0;
+        if (_fExp == 0) {
+            fpPow2(-16445);
+            v = _fSign * _fMant * v;
+            return;
+        }
+        fpPow2(_fExp - 16383);
+        v = _fSign * (_fMant / 9223372036854775808) * v;
+    }
+
+    private void fpF80To(at, value) { // warp
+        _fSign = 0;
+        _fV = value;
+        if (_fV < 0) {
+            _fSign = 128;
+            _fV = 0 - _fV;
+        }
+        if (_fV != _fV) {
+            fpWord2(at, 0, 192 * 16777216);
+            fpStore(at + 8, 2, 255 * 256 + 32767);
+            return;
+        }
+        fpInf();
+        _fInf = v;
+        if (_fV == _fInf) {
+            fpWord2(at, 0, 2147483648);
+            fpStore(at + 8, 2, 255 * 256 + 32767 + _fSign * 32768);
+            return;
+        }
+        if (_fV == 0) {
+            fpWord2(at, 0, 0);
+            fpStore(at + 8, 2, _fSign * 32768);
+            return;
+        }
+        fpExpOf(_fV);
+        _fExp = v;
+        if (_fExp > 16383) {
+            fpWord2(at, 0, 2147483648);
+            fpStore(at + 8, 2, 255 * 256 + 32767 + _fSign * 32768);
+            return;
+        }
+        if (_fExp < -16382) {                                  // denormal extended
+            fpPow2(-16445);
+            _fMant = _fV / v;
+            fpWord2(at, _fMant % 4294967296, Operators.math("floor", _fMant / 4294967296));
+            fpStore(at + 8, 2, _fSign * 32768);
+            return;
+        } /* The mantissa is 1.fraction with the integer bit explicit. A double * has fifty-two fraction bits and the format has sixty-three, so the * low eleven are always zero -- which is what lets each half be an * exact thirty-two-bit integer. */
+        fpPow2(_fExp);
+        _fTop = (_fV / v - 1) * 2147483648;
+        _fHi = Operators.math("floor", _fTop);
+        _fLo = Operators.math("floor", (_fTop - _fHi) * 4294967296 + 0.5);
+        if (_fLo >= 4294967296) {
+            _fLo = 0;
+            _fHi += 1;
+        }
+        _fExp += 16383;
+        fpWord2(at, _fLo, _fHi + 2147483648);
+        fpStore(at + 8, 2, _fExp % 256 + (_fSign + Operators.math("floor", _fExp / 256)) * 256);
+    }
+ /* ---- integers, both ways ------------------------------------------ */
+    private void fpSignedAt(at, n) { // warp
+        fpLoad(at, n);
+        _fiBits = 1;
+        _fiI = 0;
+        while (_fiI < n * 8 - 1) {
+            _fiBits = _fiBits * 2;
+            _fiI += 1;
+        }
+        if (v >= _fiBits) { v = v - _fiBits * 2; }
+    }
+
+    private void fpToInt(value, bytes) { // warp
+        _fiBits = 1;
+        _fiI = 0;
+        while (_fiI < bytes * 8) {
+            _fiBits = _fiBits * 2;
+            _fiI += 1;
+        }
+        if (value != value) {
+            v = _fiBits / 2;
+            return;
+        }
+        fpInf();
+        if (value == v || value == 0 - v) {
+            if (value > 0) { v = _fiBits / 2; } else { v = 0 - _fiBits / 2; }
+            return;
+        }
+        fpRoundMode();
+        _fiMode = v;
+        if (_fiMode == 0) {
+            _fiV = Operators.math("floor", value + 0.5);
+        } elif (_fiMode == 1) {
+            _fiV = Operators.math("floor", value);
+        } elif (_fiMode == 2) {
+            _fiV = Operators.math("ceiling", value);
+        } else {
+            if (value >= 0) {
+                _fiV = Operators.math("floor", value);
+            } else {
+                _fiV = Operators.math("ceiling", value);
+            }
+        }
+        /* A sixty-four-bit destination is past the fifty-three bits a number
+         * holds, so the wrap happens where the two halves are written instead:
+         * `2^64 - 1234` is not a number this language can represent, and
+         * asking for it turned every negative store into zero. */
+        if (bytes < 8) {
+            _fiV = _fiV % _fiBits;
+            if (_fiV >= _fiBits / 2) { _fiV = _fiV - _fiBits; }
+        }
+        v = _fiV;
+    }
+ /* ---- the arithmetic ------------------------------------------------- */
+    private void fpDiv(a, b) { // warp
+        if (b == 0) {
+            if (a == 0 || a != a) { fpNan(); return; }
+            if (a < 0) { fpInf(); v = 0 - v; return; }
+            fpInf();
+            return;
+        }
+        v = a / b;
+    }
+ /* 0 add, 1 mul, 4 sub (left - right), 5 subr (right - left), 6 div,
+ * 7 divr; the two compare digits are not here because they pop. */
+    private void fpBinop(kind, left, right) { // warp
+        if (kind == 0) { v = left + right; return; }
+        if (kind == 1) { v = left * right; return; }
+        if (kind == 4) { v = left - right; return; }
+        if (kind == 5) { v = right - left; return; }
+        if (kind == 6) { fpDiv(left, right); return; }
+        fpDiv(right, left);
+    }
+ /* 0xD8 and 0xDE read their /digit in this order, 0xDC in the other:
+ * `fsubr` and `fsub` swap places there, which is the classic trap in this
+ * table. Written out rather than indexed, because a Scratch list index is a
+ * subtraction away either way. */
+    private void fpSwapKind(kind) { // warp
+        if (kind == 4) { v = 5; return; }
+        if (kind == 5) { v = 4; return; }
+        if (kind == 6) { v = 7; return; }
+        if (kind == 7) { v = 6; return; }
+        v = kind;
+    }
+
+    private void fpInit() { // warp
+        _fiI = 0;
+        while (_fiI < 8) {
+            fpSt.set(_fiI + 1, 0);
+            fpEmpty.set(_fiI + 1, 1);
+            _fiI += 1;
+        }
+        fpTop = 0;
+        fpCw = 0x037F;
+        fpC0 = 0;
+        fpC1 = 0;
+        fpC2 = 0;
+        fpC3 = 0;
+        fpSf = 0;
+        fpEs = 0;
+    }
+
+    private void fpSetFlags() { // warp
+        _ffZ = 0;
+        if (fpC3 == 1) { _ffZ = 1; }
+        _ffP = 0;
+        if (fpC2 == 1) { _ffP = 1; }
+        _ffC = 0;
+        if (fpC0 == 1) { _ffC = 1; }
+        setFlagTo(6, _ffZ);
+        setFlagTo(2, _ffP);
+        setFlagTo(0, _ffC);
+    }
+
+    private void fpTag() { // warp
+        _ftW = 0;
+        _ftI = 0;
+        while (_ftI < 8) {
+            fpSlot(_ftI);
+            if (fpEmpty.get(v + 1) == 1) {
+                _ftW = _ftW + X.pow2.get(_ftI * 2 + 1) * 3;
+            }
+            _ftI += 1;
+        }
+        v = _ftW;
+    }
+ /* ---- the escape page ------------------------------------------------
+   *
+   * 0xD8..0xDF. With mod = 3 the second byte names the operation as a whole,
+ * so `mreg` and `mrm` are its two halves rather than two operands. */
+    private void escape(op) { // warp
+        fpTable();
+        fpIp = ip - 1;                  // the escape byte, before the ModR/M
+        modrm();
+        _fOp = op;
+        _fReg = mreg;
+        _fRm = mrm;
+        if (mmod == 3) { fpRegForm(); return; }
+        phys(eseg, ea);
+        fpMemForm(v);
+    }
+
+    private void fpRegForm() { // warp
+        if (_fOp == 216) {                                     // D8
+            fpGet(0);
+            _fL = v;
+            fpGet(_fRm);
+            _fR = v;
+            if (_fReg == 2 || _fReg == 3) {
+                fpCompare(_fL, _fR);
+                fpC1 = 0;
+                if (_fReg == 3) { fpDrop(0); }
+                return;
+            }
+            fpBinop(_fReg, _fL, _fR);
+            fpPut(0, v);
+            return;
+        }
+        if (_fOp == 217) {                                     // D9
+            if (_fReg == 0) {                                  // fld st(i)
+                fpGet(_fRm);
+                fpPush(v);
+                return;
+            }
+            if (_fReg == 1) {                                  // fxch
+                fpGet(0);
+                _fL = v;
+                fpGet(_fRm);
+                _fR = v;
+                fpPut(0, _fR);
+                fpPut(_fRm, _fL);
+                return;
+            }
+            if (_fReg == 2 || _fReg == 3) {
+                if (_fRm != 0) { fpReserved(); }               // fnop is D9 D0
+                return;
+            }
+            if (_fReg == 4) { fpD9Unary(_fRm); return; }
+            if (_fReg == 5) { fpConstant(_fRm); return; }
+            if (_fReg == 6) { fpTranscendental(_fRm); return; }
+            fpD9Misc(_fRm);
+            return;
+        }
+        if (_fOp == 218) {                                     // DA
+            if (_fReg == 5 && _fRm == 1) {                     // DA E9: fucompp
+                fpGet(0);
+                _fL = v;
+                fpGet(1);
+                fpCompare(_fL, v);
+                fpDrop(0);
+                fpDrop(0);
+                return;
+            }
+            if (_fReg <= 3) {                                  // fcmovcc
+                fpCondition(_fReg);
+                if (v == 1) {
+                    fpGet(_fRm);
+                    fpPut(0, v);
+                }
+                return;
+            }
+            fpReserved();
+            return;
+        }
+        if (_fOp == 219) {                                     // DB
+            if (_fReg == 4 && _fRm == 2) {                     // fnclex
+                fpC0 = 0;
+                fpC1 = 0;
+                fpC2 = 0;
+                fpC3 = 0;
+                fpSf = 0;
+                fpEs = 0;
+                return;
+            }
+            if (_fReg == 4 && _fRm == 3) { fpInit(); return; }  // fninit
+            if (_fReg <= 3) {
+                fpCondition(_fReg);
+                if (v == 0) {
+                    fpGet(_fRm);
+                    fpPut(0, v);
+                }
+                return;
+            }
+            if (_fReg == 5 || _fReg == 6) {                     // fucomi / fcomi
+                fpGet(0);
+                _fL = v;
+                fpGet(_fRm);
+                fpCompare(_fL, v);
+                fpSetFlags();
+                return;
+            }
+            fpReserved();
+            return;
+        }
+        if (_fOp == 220) {                                     // DC /* `fadd st(i), st(0)`: the destination is the *other* register, * and the /digit is read in the swapped order here. */
+            if (_fReg == 2 || _fReg == 3) { fpReserved(); return; }
+            fpGet(_fRm);
+            _fL = v;
+            fpGet(0);
+            _fR = v;
+            fpSwapKind(_fReg);
+            fpBinop(v, _fL, _fR);
+            fpPut(_fRm, v);
+            return;
+        }
+        if (_fOp == 221) {                                     // DD
+            if (_fReg == 0) { fpDrop(_fRm); return; }           // ffree
+            if (_fReg == 2) {                                   // fst st(i): D0+i
+                fpGet(0);
+                _fL = v;
+                fpPut(_fRm, _fL);
+                return;
+            }
+            if (_fReg == 3) {                                   // fstp st(i): D8+i
+                fpGet(0);
+                _fL = v;
+                fpPut(_fRm, _fL);
+                fpDrop(0);
+                return;
+            }
+            if (_fReg == 4 && _fRm == 0) {                      // fnstsw ax
+                fpStatus();
+                putReg16(0, v);
+                return;
+            }
+            if (_fReg == 5 || _fReg == 6) {                     // fucom / fucomp
+                fpGet(0);
+                _fL = v;
+                fpGet(_fRm);
+                fpCompare(_fL, v);
+                if (_fReg == 6) { fpDrop(0); }
+                return;
+            }
+            fpReserved();
+            return;
+        }
+        if (_fOp == 222) {                                     // DE
+            if (_fReg == 3 && _fRm == 1) {                      // DE D9: fcompp
+                fpGet(0);
+                _fL = v;
+                fpGet(1);
+                fpCompare(_fL, v);
+                fpDrop(0);
+                fpDrop(0);
+                return;
+            }
+            if (_fReg == 5 && _fRm == 1) {                      // DE E9: fucompp
+                fpGet(0);
+                _fL = v;
+                fpGet(1);
+                fpCompare(_fL, v);
+                fpDrop(0);
+                fpDrop(0);
+                return;
+            }
+            if (_fReg == 2 || _fReg == 3) { fpReserved(); return; }
+            fpGet(_fRm);
+            _fL = v;
+            fpGet(0);
+            _fR = v;
+            fpSwapKind(_fReg);
+            fpBinop(v, _fL, _fR);
+            fpPut(_fRm, v);
+            fpDrop(0);                                          // the P forms pop
+            return;
+        }
+        if (_fOp == 223) {                                     // DF
+            if (_fReg == 4 && _fRm == 0) {                      // df e0: fnstsw ax
+                fpStatus();
+                putReg16(0, v);
+                return;
+            }
+            if (_fReg == 5 || _fReg == 6) {                     // fucomip / fcomip
+                fpGet(0);
+                _fL = v;
+                fpGet(_fRm);
+                fpCompare(_fL, v);
+                fpDrop(0);
+                fpSetFlags();
+                return;
+            }
+            fpReserved();
+            return;
+        }
+    }
+ /* The condition a `fcmov` reads: 0 = below (C0), 1 = equal (C3),
+ * 2 = below or equal, 3 = unordered (C2). `fcmovn` inverts it. */
+    private void fpCondition(which) { // warp
+        _fcV = 0;
+        if (which == 0 && fpC0 == 1) { _fcV = 1; }
+        if (which == 1 && fpC3 == 1) { _fcV = 1; }
+        if (which == 2 && (fpC0 == 1 || fpC3 == 1)) { _fcV = 1; }
+        if (which == 3 && fpC2 == 1) { _fcV = 1; }
+        v = _fcV;
+    }
+
+    private void fpConstant(rm) { // warp
+        if (rm == 0) { fpPush(1); return; }                    // fld1
+        if (rm == 1) { fpPush(3.321928094887362); return; }     // fldl2t
+        if (rm == 2) { fpPush(1.4426950408889634); return; }    // fldl2e
+        if (rm == 3) { fpPush(3.141592653589793); return; }     // fldpi
+        if (rm == 4) { fpPush(0.3010299956639812); return; }    // fldlg2
+        if (rm == 5) { fpPush(0.6931471805599453); return; }    // fldln2
+        fpPush(0);                                             // fldz
+    }
+
+    private void fpD9Unary(rm) { // warp
+        if (rm == 0) {                                          // fchs
+            fpGet(0);
+            fpPut(0, 0 - v);
+            return;
+        }
+        if (rm == 1) {                                          // fabs
+            fpGet(0);
+            _fL = v;
+            if (_fL < 0) { _fL = 0 - _fL; }
+            fpPut(0, _fL);
+            return;
+        }
+        if (rm == 4) {                                          // ftst
+            fpGet(0);
+            fpCompare(v, 0);
+            return;
+        }
+        if (rm == 5) {                                          // fxam
+            fpC1 = 0;
+            fpC0 = 0;
+            fpC2 = 0;
+            fpC3 = 0;
+            fpIsEmpty(0);
+            if (v == 1) {
+                fpC3 = 1;
+                fpC1 = 1;
+                return;
+            }
+            fpGet(0);
+            _fL = v;
+            if (_fL < 0) { fpC0 = 1; }
+            if (_fL == 0) { fpC3 = 1; return; }
+            fpInf();
+            if (_fL == v || _fL == 0 - v) {
+                fpC2 = 1;
+                fpC3 = 1;
+                return;
+            }
+            if (_fL != _fL) { fpC3 = 1; }
+            return;
+        }
+        fpReserved();
+    }
+
+    private void fpTranscendental(rm) { // warp
+        if (rm == 6) { fpTop = (fpTop + 1) % 8; return; }        // fdecstp
+        if (rm == 7) { fpTop = (fpTop + 7) % 8; return; }        // fincstp
+        fpGet(0);
+        _fL = v;
+        if (rm == 0) {                                          // f2xm1
+            fpPut(0, Operators.math("e ^", _fL * 0.6931471805599453) - 1);
+            return;
+        }
+        if (rm == 1) {                                          // fyl2x
+            fpGet(1);
+            _fR = v;
+            fpPop();
+            _fLog = Operators.math("ln", v);
+            if (_fLog != _fLog) { fpNan(); fpPut(0, v); return; }
+            fpPut(0, _fR * _fLog / 0.6931471805599453);
+            return;
+        }
+        if (rm == 2) {                                          // fptan
+            _fTan = _fL * 0;
+            if (_fL != _fL) {
+                fpNan();
+                return;
+            }
+            fpPut(0, Operators.math("tan", _fL));
+            fpPush(1);
+            return;
+        }
+        if (rm == 3) {                                          // fpatan
+            fpGet(1);
+            _fR = v;
+            fpPop();
+            _fAtan = Operators.math("atan", v / _fR);
+            if (_fR < 0) {
+                if (v >= 0) { _fAtan = _fAtan + 3.141592653589793; } else { _fAtan = _fAtan - 3.141592653589793; }
+            }
+            fpPut(0, _fAtan);
+            return;
+        }
+        if (rm == 4) {                                          // fxtract /* st(0) = the exponent, and the significand is pushed on top of it: * two separate writes, because the push moves the top. */
+            fpGet(0);
+            _fL = v;
+            if (_fL == 0 || _fL != _fL) {
+                fpPut(0, _fL);
+                fpPush(_fL);
+                return;
+            }
+            _fA = _fL;
+            if (_fA < 0) { _fA = 0 - _fA; }
+            fpExpOf(_fA);
+            _fX = v;
+            fpPow2(_fX);
+            _fM = _fL / v;
+            fpPut(0, _fX);
+            fpPush(_fM);
+            return;
+        }
+        if (rm == 5) {                                          // fprem1
+            fpGet(1);
+            _fR = v;
+            fpGet(0);
+            fpRemainder(v, _fR);
+            fpPut(0, v);
+            return;
+        }
+        fpReserved();
+    }
+ /* The remainder with the *dividend's* sign -- which is what `fprem` means
+ * and what `%` does not do here. */
+    private void fpRemainder(left, right) { // warp
+        if (right == 0 || right != right || left != left) { fpNan(); return; }
+        _frL = left;
+        if (_frL < 0) { _frL = 0 - _frL; }
+        _frR = right;
+        if (_frR < 0) { _frR = 0 - _frR; }
+        _frV = _frL % _frR;
+        if (left < 0) { _frV = 0 - _frV; }
+        v = _frV;
+    }
+
+    private void fpD9Misc(rm) { // warp
+        /* `D9 F8`-`D9 FF`: the second half of the one-argument page, indexed
+         * from zero -- `fdecstp` above is index 6 of the *other* half, which is
+         * `D9 F6`. Reading these as the low nibble of the byte is the mistake
+         * this table invites. */
+        if (rm == 0) {                                          // fprem
+            fpGet(1);
+            _fR = v;
+            fpGet(0);
+            fpRemainder(v, _fR);
+            fpPut(0, v);
+            return;
+        }
+        if (rm == 1) {                                          // fyl2xp1
+            fpGet(1);
+            _fR = v;
+            fpPut(0, _fR * Operators.math("ln", _fL + 1) / 0.6931471805599453);
+            return;
+        }
+        if (rm == 2) {                                          // fsqrt
+            fpGet(0);
+            if (v < 0) {
+                fpC0 = 1;
+                fpC2 = 1;
+                fpC3 = 1;
+                fpNan();
+                fpPut(0, v);
+                return;
+            }
+            fpPut(0, Operators.math("sqrt", v));
+            return;
+        }
+        if (rm == 3) {                                          // fsincos
+            fpGet(0);
+            _fL = v;
+            fpPut(0, Operators.math("cos", _fL));
+            fpPush(Operators.math("sin", _fL));
+            return;
+        }
+        if (rm == 4) {                                          // frndint
+            fpGet(0);
+            fpToInt(v, 8);
+            fpPut(0, v);
+            return;
+        }
+        if (rm == 5) {                                          // fscale
+            fpGet(1);
+            _fR = Operators.math("floor", v);
+            fpGet(0);
+            _fL = v;
+            fpPow2(_fR);
+            fpPut(0, _fL * v);
+            return;
+        }
+        if (rm == 6) {                                          // fsin
+            fpGet(0);
+            fpPut(0, Operators.math("sin", v));
+            return;
+        }
+        if (rm == 7) {                                          // fcos
+            fpGet(0);
+            fpPut(0, Operators.math("cos", v));
+            return;
+        }
+        fpReserved();
+    }
+
+
+    private void fpMemForm(address) { // warp
+        _fAddr = address;
+        if (_fOp == 216) {                                      // D8: m32fp
+            fpF32At(_fAddr);
+            fpArithMemory(v);
+            return;
+        }
+        if (_fOp == 217) {                                      // D9
+            if (_fReg == 0) {
+                fpF32At(_fAddr);
+                fpPush(v);
+                return;
+            }
+            if (_fReg == 2 || _fReg == 3) {
+                fpGet(0);
+                fpF32To(_fAddr, v);
+                if (_fReg == 3) { fpDrop(0); }
+                return;
+            }
+            if (_fReg == 5) {
+                fpLoad(_fAddr, 2);
+                fpCw = v;
+                return;
+            }
+            if (_fReg == 7) { fpStore(_fAddr, 2, fpCw); return; }
+            if (_fReg == 4) { fpEnvLoad(_fAddr); return; }
+            if (_fReg == 6) { fpEnvSave(_fAddr); return; }
+            fpReserved();
+            return;
+        }
+        if (_fOp == 218) {                                      // DA: m32int
+            fpSignedAt(_fAddr, 4);
+            fpArithMemory(v);
+            return;
+        }
+        if (_fOp == 219) {                                      // DB
+            if (_fReg == 0) {
+                fpSignedAt(_fAddr, 4);
+                fpPush(v);
+                return;
+            }
+            if (_fReg == 2 || _fReg == 3) {
+                fpGet(0);
+                fpToInt(v, 4);
+                fpStore(_fAddr, 4, v % 4294967296);
+                if (_fReg == 3) { fpDrop(0); }
+                return;
+            }
+            if (_fReg == 5) {
+                fpF80At(_fAddr);
+                fpPush(v);
+                return;
+            }
+            if (_fReg == 7) {
+                fpGet(0);
+                fpF80To(_fAddr, v);
+                fpDrop(0);
+                return;
+            }
+            fpReserved();
+            return;
+        }
+        if (_fOp == 220) {                                      // DC: m64fp
+            fpF64At(_fAddr);
+            _fR = v;
+            fpGet(0);
+            _fL = v;
+            fpSwapKind(_fReg);
+            if (_fReg == 2 || _fReg == 3) {
+                fpCompare(_fL, _fR);
+                if (_fReg == 3) { fpDrop(0); }
+                return;
+            }
+            fpBinop(v, _fL, _fR);
+            fpPut(0, v);
+            return;
+        }
+        if (_fOp == 221) {                                      // DD
+            if (_fReg == 0) {
+                fpF64At(_fAddr);
+                fpPush(v);
+                return;
+            }
+            if (_fReg == 2 || _fReg == 3) {
+                fpGet(0);
+                fpF64To(_fAddr, v);
+                if (_fReg == 3) { fpDrop(0); }
+                return;
+            }
+            if (_fReg == 4) { fpRestore(_fAddr); return; }
+            if (_fReg == 6) { fpSave(_fAddr); return; }
+            if (_fReg == 7) {
+                fpStatus();
+                fpStore(_fAddr, 2, v);
+                return;
+            }
+            fpReserved();
+            return;
+        }
+        if (_fOp == 222) {                                      // DE: m16int
+            fpSignedAt(_fAddr, 2);
+            fpArithMemory(v);
+            return;
+        }
+        if (_fOp == 223) {                                      // DF
+            if (_fReg == 0) {
+                fpSignedAt(_fAddr, 2);
+                fpPush(v);
+                return;
+            }
+            if (_fReg == 2 || _fReg == 3) {
+                fpGet(0);
+                fpToInt(v, 2);
+                fpStore(_fAddr, 2, v % 65536);
+                if (_fReg == 3) { fpDrop(0); }
+                return;
+            }
+            if (_fReg == 4) {                                   // fbld
+                /* Eighteen packed digits, most significant last, with the sign
+                 * in the top nibble of the tenth byte. */
+                _fVal = 0;
+                _fI = 8;
+                while (_fI >= 0) {
+                    fpByte(_fAddr + _fI);
+                    _fB = v;
+                    _fVal = _fVal * 100 + Operators.math("floor", _fB / 16) * 10 + _fB % 16;
+                    _fI = _fI - 1;
+                }
+                fpByte(_fAddr + 9);
+                if (Operators.math("floor", v / 16) % 16 == 13) { _fVal = 0 - _fVal; }
+                fpPush(_fVal);
+                return;
+            }
+            if (_fReg == 6) {                                   // fbstp
+                fpGet(0);
+                _fNeg = 0;
+                if (v < 0) { _fNeg = 208; }
+                fpToInt(v, 8);
+                _fVal = v;
+                if (_fVal < 0) { _fVal = 0 - _fVal; }
+                _fI = 0;
+                while (_fI < 9) {
+                    _fA2 = Operators.math("floor", _fVal / 10) % 10;
+                    _fB2 = _fVal % 10;
+                    fpStore(_fAddr + _fI, 1, _fA2 * 16 + _fB2);
+                    _fVal = Operators.math("floor", _fVal / 100);
+                    _fI += 1;
+                }
+                fpStore(_fAddr + 9, 1, _fNeg);
+                fpDrop(0);
+                return;
+            }
+            if (_fReg == 5) {
+                fpLoad(_fAddr, 4);
+                _fLo = v;
+                fpLoad(_fAddr + 4, 4);
+                _fHi = v;
+                _fV = _fHi * 4294967296 + _fLo;
+                if (_fHi >= 2147483648) { _fV = _fV - 18446744073709551616; }
+                fpPush(_fV);
+                return;
+            }
+            if (_fReg == 7) {                                   // fistp qword
+                fpGet(0);
+                _fNeg = 0;
+                if (v < 0) { _fNeg = 1; }
+                fpToInt(v, 8);
+                _fV = v;
+                if (_fV < 0) { _fV = 0 - _fV; }
+                _fLo = _fV % 4294967296;
+                _fHi = Operators.math("floor", _fV / 4294967296);
+                if (_fNeg == 1) {
+                    /* Two's complement, done on the halves: the whole
+                     * sixty-four-bit negation is not a number this can hold. */
+                    if (_fLo == 0) {
+                        _fHi = 4294967296 - _fHi;
+                    } else {
+                        _fHi = 4294967295 - _fHi;
+                        _fLo = 4294967296 - _fLo;
+                    }
+                    _fHi = _fHi % 4294967296;
+                }
+                fpStore(_fAddr, 4, _fLo);
+                fpStore(_fAddr + 4, 4, _fHi);
+                fpDrop(0);
+                return;
+            }
+            fpReserved();
+            return;
+        }
+    }
+ /* The §/digit arithmetic a memory operand takes: `fsub` and `fsubr` are
+ * the two that a table like this gets wrong, and the top of the stack is
+ * the destination in every case. */
+    private void fpArithMemory(right) { // warp
+        if (_fReg == 2) {
+            fpGet(0);
+            fpCompare(v, right);
+            return;
+        }
+        if (_fReg == 3) {
+            fpGet(0);
+            fpCompare(v, right);
+            fpDrop(0);
+            return;
+        }
+        fpGet(0);
+        fpBinop(_fReg, v, right);
+        fpPut(0, v);
+    }
+ /* ---- the environment, which is where a save begins ------------------- */
+    private void fpEnvSave(at) { // warp
+        /* `fnstenv`: fourteen bytes with a sixteen-bit operand size and
+         * twenty-eight with a thirty-two. Every field is one operand-size slot
+         * wide, which is the whole difference between the two forms. */
+        _fkStep = 2;
+        if (dsz == 4) { _fkStep = 4; }
+        fpStatus();
+        _fkStatus = v;
+        fpTag();
+        _fkTag = v;
+        fpStore(at, 2, fpCw);
+        fpStore(at + _fkStep, 2, _fkStatus);
+        fpStore(at + _fkStep * 2, 2, _fkTag);
+        fpStore(at + _fkStep * 3, _fkStep, fpIp);
+        fpStore(at + _fkStep * 4, 2, 61440);
+        fpStore(at + _fkStep * 5, _fkStep, 0);
+        fpStore(at + _fkStep * 6, 2, 0);
+    }
+
+    private void fpEnvLoad(at) { // warp
+        _fkStep = 2;
+        if (dsz == 4) { _fkStep = 4; }
+        fpLoad(at, 2);
+        fpCw = v;
+        fpLoad(at + _fkStep, 2);
+        _fkStatus = v;
+        fpTop = Operators.math("floor", _fkStatus / 2048) % 8;
+        fpC3 = Operators.math("floor", _fkStatus / 16384) % 2;
+        fpC2 = Operators.math("floor", _fkStatus / 1024) % 2;
+        fpC1 = Operators.math("floor", _fkStatus / 512) % 2;
+        fpC0 = Operators.math("floor", _fkStatus / 256) % 2;
+        fpSf = Operators.math("floor", _fkStatus / 64) % 2;
+        fpEs = Operators.math("floor", _fkStatus / 128) % 2;
+    }
+
+    /* `fnsave` and `frstor`: the environment followed by the eight registers
+     * in extended precision, which is the only way a program can hand the whole
+     * FPU state to memory and get it back. `fnsave` leaves the chip as it comes
+     * out of the factory, which is why a save does not have to be paired with a
+     * `finit`. */
+    private void fpSave(at) { // warp
+        fpEnvSave(at);
+        fpLoad(at + _fkStep * 2, 2);
+        _fkTag = v;
+        _fkBase = at + _fkStep * 7;
+        _fkI = 0;
+        while (_fkI < 8) {
+            if (Operators.math("floor", _fkTag / X.pow2.get(_fkI * 2 + 1)) % 4 == 3) {
+                fpF80To(_fkBase + _fkI * 10, 0);
+            } else {
+                fpGet(_fkI);
+                fpF80To(_fkBase + _fkI * 10, v);
+            }
+            _fkI += 1;
+        }
+        fpInit();                                   // `fnsave` re-initialises
+    }
+
+    private void fpRestore(at) { // warp
+        fpEnvLoad(at);
+        fpLoad(at + _fkStep * 2, 2);
+        _fkTag = v;
+        _fkBase = at + _fkStep * 7;
+        _fkI = 0;
+        while (_fkI < 8) {
+            if (Operators.math("floor", _fkTag / X.pow2.get(_fkI * 2 + 1)) % 4 == 3) {
+                fpSlot(_fkI);
+                fpSt.set(v + 1, 0);
+                fpEmpty.set(v + 1, 1);
+            } else {
+                /* The image names the registers from st(0) outwards, and the
+                 * top came back with the status word, so index i is st(i). */
+                fpF80At(_fkBase + _fkI * 10);
+                fpPut(_fkI, v);
+            }
+            _fkI += 1;
+        }
+    }
+
+    /* A form the table does not implement: the same interrupt 7 the machine
+     * raised before it had an FPU at all, and what the Python model raises. */
+    private void fpReserved() { // warp
+        interrupt(7);
+    }

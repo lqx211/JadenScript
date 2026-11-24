@@ -155,6 +155,7 @@ CMOS_DEFAULTS = {
     0x19: 0x00,          # hard disk 0 type
     0x30: 0x00,          # our boot counter
     0x31: 0x00,          # our POST result
+    0x2D: 0x03,          # boot order: CD-ROM first, which is what ships
     0x32: 0x20,          # century
     0x34: 0x01,          # emulation: on, so the board has a clock to report
     0x35: 0x01,          # battery: fitted
@@ -310,6 +311,12 @@ class Pit:
         self.latched = [None, None, None]   # counts held by a latch command
         self.status = [None, None, None]    # status bytes held the same way
         self.hi = [None, None, None]        # the high byte of a lo/hi read
+        #: Each counter's OUT pin. Only counter 2's is visible, in bit 5 of port
+        #: 0x61, and a guest does look: GRUB calibrates the TSC by loading the
+        #: counter, opening its gate, then polling that bit for 55 ms.
+        self.out = [1, 1, 1]
+        #: Counter 2 counts only while its gate (port 0x61 bit 0) is high.
+        self.gate2 = True
         self.cmd = 0                      # the control word being written
         self.cmd_bytes = 0
 
@@ -336,6 +343,10 @@ class Pit:
             return
         self.access[channel] = access if access else self.access[channel]
         self.mode[channel] = (value >> 1) & 7
+        if channel == 2:
+            # a mode write drives the pin: low for the one-shot modes, high for
+            # the square-wave ones
+            self.out[2] = 0 if self.mode[2] in (0, 1) else 1
         self.bcd[channel] = value & 1
         self.next_byte[channel] = 0
         if access == 0:                   # latch the count for a read
@@ -359,6 +370,8 @@ class Pit:
             self.reload[channel] = 0x10000
         self.count[channel] = self.reload[channel]
         self.hi[channel] = None           # a reload starts a fresh read
+        if channel == 2:
+            self.out[2] = 0 if self.mode[2] in (0, 1) else 1
 
     def status_byte(self, channel: int) -> int:
         """What the 8254 hands back when the read-back command asks for it:
@@ -395,6 +408,10 @@ class Pit:
         count, which is what raises an interrupt."""
         fired = 0
         for i in range(3):
+            # a gated-off counter holds its value, which is what makes waiting
+            # on the pin mean anything
+            if i == 2 and not self.gate2:
+                continue
             self.count[i] -= 1
             if self.count[i] > 0:
                 continue
@@ -402,6 +419,9 @@ class Pit:
             fired |= 1 << i
             if self.mode[i] in (0, 1):
                 self.count[i] = 0x10000   # one shot: the output stays high
+                self.out[i] = 1
+            else:
+                self.out[i] ^= 1          # a square wave: the pin changes
         return fired
 
     def to_terminal(self) -> int:
@@ -440,6 +460,306 @@ class Segments(list):
         self.machine.cache_segment(index, value)
 
 
+# ----------------------------------------------------------------------
+# the x87
+# ----------------------------------------------------------------------
+#: Every power of two a double can name, from 2^-1074 to 2^1023. Built rather
+#: than written out, because a power of two is exactly representable and
+#: multiplying by one is therefore exact -- which is the only way a decode and
+#: an encode agree bit for bit in two languages that both use doubles. Each
+#: machine builds the same table at power-on: `FPOW2[k]` is `2 ** (k - 1074)`.
+FPOW2 = [2.0 ** (k - 1074) for k in range(2098)]
+
+
+def _pow2(exponent: int) -> float:
+    k = exponent + 1074
+    if k < 0:
+        return 0.0
+    if k > 2097:
+        return float("inf")
+    return FPOW2[k]
+
+
+def _exponent_of(value: float) -> int:
+    """floor(log2(value)), found by bisecting the table rather than by trusting
+    a logarithm to land on the right side of a boundary. Eleven comparisons, and
+    the same eleven in both machines."""
+    low, high = 0, 2097
+    while low < high:
+        middle = (low + high + 1) // 2
+        if FPOW2[middle] <= value:
+            low = middle
+        else:
+            high = middle - 1
+    return low - 1074
+
+
+def _word_of(bits: list[int], count: int) -> int:
+    word = 0
+    for index in range(count):
+        word |= bits[index] << (8 * index)
+    return word
+
+
+def _bytes_at(m, address, count: int) -> list[int]:
+    """`count` bytes of memory, in the order the patterns are written."""
+    return [m.read(address + k, 1) for k in range(count)]
+
+
+def _f32_value(b) -> float:
+    """A single-precision pattern, as a number."""
+    b0, b1, b2, b3 = b[0], b[1], b[2], b[3]
+    sign = -1.0 if b3 >= 128 else 1.0
+    exponent = (b3 % 128) * 2 + b2 // 128
+    mantissa = (b2 % 128) * 65536 + b1 * 256 + b0
+    if exponent == 255:
+        return sign * float("inf") if mantissa == 0 else float("nan")
+    if exponent == 0:
+        return sign * mantissa * _pow2(-149)
+    return sign * (1.0 + mantissa / 8388608.0) * _pow2(exponent - 127)
+
+
+def _f32_bits(value: float) -> list[int]:
+    """... and back. Ties round away from zero rather than to even: both
+    machines compute it the same way, and no program can tell the difference
+    from the real chip."""
+    sign = 0
+    if value < 0:
+        sign, value = 128, -value
+    if value != value:
+        return [0, 0, 192, 255]
+    if value == float("inf"):
+        return [0, 0, 128, sign + 127]
+    if value == 0:
+        return [0, 0, 0, sign]
+    exponent = _exponent_of(value)
+    if exponent > 127:
+        return [0, 0, 128, sign + 127]
+    if exponent < -126:                                   # denormal
+        mantissa = int(value / _pow2(-149) + 0.5)
+        return [mantissa % 256, mantissa // 256 % 256, mantissa // 65536, sign]
+    mantissa = int((value / _pow2(exponent) - 1.0) * 8388608.0 + 0.5)
+    if mantissa >= 8388608:
+        mantissa, exponent = 0, exponent + 1
+        if exponent > 127:
+            return [0, 0, 128, sign + 127]
+    exponent += 127
+    return [mantissa % 256, mantissa // 256 % 256,
+            exponent % 2 * 128 + mantissa // 65536, sign + exponent // 2]
+
+
+def _f64_value(b) -> float:
+    sign = -1.0 if b[7] >= 128 else 1.0
+    exponent = (b[7] % 128) * 16 + b[6] // 16
+    mantissa = ((b[6] % 16) * 281474976710656 + b[5] * 1099511627776
+                + b[4] * 4294967296 + b[3] * 16777216
+                + b[2] * 65536 + b[1] * 256 + b[0])
+    if exponent == 2047:
+        return sign * float("inf") if mantissa == 0 else float("nan")
+    if exponent == 0:
+        return sign * mantissa * _pow2(-1074)
+    return sign * (1.0 + mantissa / 4503599627370496.0) * _pow2(exponent - 1023)
+
+
+def _f64_bits(value: float) -> list[int]:
+    sign = 0
+    if value < 0:
+        sign, value = 128, -value
+    if value != value:
+        return [0, 0, 0, 0, 0, 0, 248, 127]
+    if value == float("inf"):
+        return [0, 0, 0, 0, 0, 0, 240, sign + 127]
+    if value == 0:
+        return [0, 0, 0, 0, 0, 0, 0, sign]
+    exponent = _exponent_of(value)
+    if exponent > 1023:
+        return [0, 0, 0, 0, 0, 0, 240, sign + 127]
+    if exponent < -1022:                                  # denormal
+        mantissa = value / _pow2(-1074)
+        rest = []
+        for _ in range(7):
+            rest.append(int(mantissa) % 256)
+            mantissa = mantissa // 256
+        return rest + [sign]
+    mantissa = int((value / _pow2(exponent) - 1.0) * 4503599627370496.0 + 0.5)
+    if mantissa >= 4503599627370496:
+        mantissa, exponent = 0, exponent + 1
+        if exponent > 1023:
+            return [0, 0, 0, 0, 0, 0, 240, sign + 127]
+    exponent += 1023
+    rest = []
+    for _ in range(6):
+        rest.append(int(mantissa) % 256)
+        mantissa = mantissa // 256
+    rest.append(mantissa % 16 + (exponent % 16) * 16)
+    rest.append(sign + exponent // 16)
+    return rest
+
+
+def _f80_value(b) -> float:
+    """A ten-byte extended number: a 64-bit mantissa with an explicit integer
+    bit, eleven more bits than a double holds. The value *is* a double here, so
+    the low bits of a loaded pattern are dropped -- the documented cost of an
+    FPU whose registers are Scratch numbers."""
+    mantissa = (b[7] * 72057594037927936 + b[6] * 281474976710656
+                + b[5] * 1099511627776 + b[4] * 4294967296
+                + b[3] * 16777216 + b[2] * 65536 + b[1] * 256 + b[0])
+    sign = -1.0 if b[9] >= 128 else 1.0
+    exponent = (b[9] % 128) * 256 + b[8]
+    if exponent == 32767:
+        if mantissa == 1 << 63:
+            return sign * float("inf")
+        return float("nan")
+    if exponent == 0:
+        return sign * mantissa * _pow2(-16445)
+    return sign * (mantissa / 9223372036854775808.0) * _pow2(exponent - 16383)
+
+
+def _f80_bits(value: float) -> list[int]:
+    sign = 0
+    if value < 0:
+        sign, value = 128, -value
+    if value != value:
+        return [0] * 7 + [192, 255, 127]
+    if value == float("inf"):
+        return [0] * 7 + [128, 255, sign + 127]
+    if value == 0:
+        return [0] * 9 + [sign]
+    exponent = _exponent_of(value)
+    if exponent < -16382:                                 # denormal extended
+        mantissa = value / _pow2(-16445)
+        low = int(mantissa % 4294967296)
+        high = int(mantissa // 4294967296)
+        return [low % 256, low // 256 % 256, low // 65536 % 256,
+                low // 16777216 % 256, high % 256, high // 256 % 256,
+                high // 65536 % 256, high // 16777216 % 256, 0, sign]
+    if exponent > 16383:
+        return [0] * 7 + [128, 255, sign + 127]
+    # The mantissa is 1.fraction with the integer bit explicit. A double has 52
+    # fraction bits and the extended format has 63, so the low eleven are always
+    # zero -- which is what lets each half be an exact 32-bit integer.
+    top = (value / _pow2(exponent) - 1.0) * _pow2(31)
+    high = int(top)                                       # the top 31 fraction bits
+    low = int((top - high) * _pow2(32) + 0.5)
+    if low >= 4294967296:
+        low, high = 0, high + 1
+    exponent += 16383
+    return [low % 256, low // 256 % 256, low // 65536 % 256, low // 16777216 % 256,
+            high % 256, high // 256 % 256, high // 65536 % 256,
+            high // 16777216 % 256 + 128, exponent % 256, sign + exponent // 256]
+
+
+class Fpu:
+    """An 80387's eight registers and the three words a program reads back.
+
+    The registers hold Scratch/Python numbers: IEEE doubles. An 8087 register is
+    eighty bits, so this is a 387 with a short mantissa, and that is stated
+    rather than hidden -- see `docs/I386.md`. What it buys is that every
+    operation is *exactly* what the other machine does, because both do double
+    arithmetic on the same values in the same order.
+    """
+
+    def __init__(self) -> None:
+        self.st = [0.0] * 8
+        self.empty = [True] * 8
+        self.top = 0
+        self.cw = 0x037F                  # round to nearest, every exception masked
+        self.c0 = self.c1 = self.c2 = self.c3 = 0
+        self.sf = 0                       # stack fault
+        self.es = 0                       # ... and its summary bit
+        self.ip = 0                       # what a save remembers
+        self.dp = 0
+
+    # ---- the register stack ----
+    def at(self, index: int) -> int:
+        """`st(i)` is a rotation, not an offset: a push moves the *name* of the
+        top, which is why `st(i)` must be computed every time."""
+        return (self.top + index) % 8
+
+    def get(self, index: int = 0) -> float:
+        return self.st[self.at(index)]
+
+    def set(self, index: int, value: float) -> None:
+        slot = self.at(index)
+        self.st[slot] = value
+        self.empty[slot] = False
+
+    def is_empty(self, index: int = 0) -> bool:
+        return self.empty[self.at(index)]
+
+    def push(self, value: float) -> None:
+        self.top = (self.top - 1) % 8
+        slot = self.top
+        if not self.empty[slot]:          # over the top of the stack
+            self.sf, self.es, self.c1 = 1, 1, 1
+        self.st[slot] = value
+        self.empty[slot] = False
+
+    def pop(self) -> float:
+        slot = self.top
+        value = self.st[slot]
+        if self.empty[slot]:
+            self.sf, self.es, self.c1 = 1, 1, 1
+            value = float("nan")
+        self.empty[slot] = True
+        self.top = (self.top + 1) % 8
+        return value
+
+    def drop(self, index: int = 0) -> None:
+        self.empty[self.at(index)] = True
+        if index == 0:
+            self.top = (self.top + 1) % 8
+
+    # ---- the words ----
+    def status(self) -> int:
+        return ((self.top << 11) | (self.c3 << 14) | (self.c2 << 10)
+                | (self.c1 << 9) | (self.c0 << 8) | (self.sf << 6) | (self.es << 7))
+
+    def round_mode(self) -> int:
+        return (self.cw // 1024) % 4
+
+    def to_integer(self, value: float, size: int) -> int:
+        """Round the way the control word says, then wrap to the width the
+        destination has -- which is what the real thing does, invalid operand
+        and all."""
+        mode = self.round_mode()
+        if value != value or value in (float("inf"), float("-inf")):
+            bits = size * 8
+            return (1 << (bits - 1)) if value != value or value > 0 else -(1 << (bits - 1))
+        if mode == 0:
+            rounded = math.floor(value + 0.5)
+        elif mode == 1:
+            rounded = math.floor(value)
+        elif mode == 2:
+            rounded = math.ceil(value)
+        else:
+            rounded = math.floor(value) if value >= 0 else math.ceil(value)
+        # A sixty-four-bit destination is past the fifty-three bits a Scratch
+        # number holds, so the wrap happens where the two halves are written.
+        # `2^64 - 1234` is not a number that language can represent, and asking
+        # for it turned every negative store into zero -- in one machine only.
+        if size < 8:
+            bits = size * 8
+            rounded = int(rounded) % (1 << bits)
+            if rounded >= (1 << (bits - 1)):
+                rounded -= 1 << bits
+        return int(rounded)
+
+    def compare(self, left: float, right: float) -> None:
+        """C3 equal, C2 unordered, C0 less than -- the three bits every
+        `fcom`/`fucom` sequence reads out with `fnstsw` and `sahf`."""
+        self.c0 = self.c2 = self.c3 = 0
+        if left != left or right != right:
+            self.c0 = self.c2 = self.c3 = 1
+        elif left < right:
+            self.c0 = 1
+        elif left == right:
+            self.c3 = 1
+
+    def store_status_codes(self, flags: bool) -> int:
+        return self.status()
+
+
 class Machine:
     """A 386 with 1 MiB of RAM, a text plane and an interrupt table."""
 
@@ -457,6 +777,17 @@ class Machine:
         self.ldtr = 0
         self.tr = 0
         self.pe = False
+        #: A20: bit 20 of every physical address. A 386 wakes up with the gate
+        #: shut; the BIOS opens it at POST, and a guest closes and opens it
+        #: again to reach the high memory area, so the model starts open and
+        #: port 0x92 still controls it.
+        self.a20 = True
+        #: The CGA's control ports: 0x3D9 is the colour select, and 0x3DA is the
+        #: status register a guest polls to wait for a retrace. Nothing here
+        #: paints, so the select is only stored -- the Scratch machine's display
+        #: sprite is what turns it into pixels.
+        self.cga_ctl = 0
+        self.cga_flip = 0
         self.dsz = 2                 # default operand size of the code we run
         self.ipmask = 0xFFFF
         self.spmask = 0xFFFF
@@ -532,6 +863,9 @@ class Machine:
         self.error = ""
         self.out = []
         self.keys = []
+        #: the last command written to the 8042's command port, which is what
+        #: `in 0x64` reports alongside the output buffer's own bit
+        self.kb_cmd = 0
         self.ports = {}
         self.ticks = 0
         self.reset_pending = False
@@ -571,12 +905,15 @@ class Machine:
         self.pic2 = Pic(0x70)
         self.pic2.imr = 0xFF
         self.pit_acc = 0
+        self.pit_up = 0            # 0x5BD/0x5BE: the 8254's input count
+        self.pit_up_latch = 0
         # COM1: a 16550 with a loopback that goes to this process instead of to
         # a wire. `serial` is what a guest wrote, which is how a Linux boot is
         # watched rather than guessed at.
         self.msr = {}
         self.serial = bytearray()
         self.serial_in = bytearray()
+        self.fpu = Fpu()
         self.uart = bytearray(8)          # THR/IER/IIR-FCR/LCR/MCR/LSR/MSR/SCR
         self.uart[3] = 0x03               # LCR: 8 bits, no parity, one stop
         for reg, value in CMOS_DEFAULTS.items():
@@ -584,11 +921,32 @@ class Machine:
 
     # ---- memory ------------------------------------------------------
 
+    def gate(self, addr: int) -> int:
+        """A20, the gate on bit 20 of a physical address.
+
+        With the gate shut every address above a megabyte folds back onto the
+        first one, in protected mode as well as real mode: the gate is a wire
+        on the address bus, not a mode. That fold is the whole reason the HMA
+        trick works -- ``0xFFFF:0x0010`` is the byte at zero with the gate shut
+        and the byte at a megabyte with it open.
+        """
+        if self.a20:
+            return addr & 0xFFFF_FFFF
+        return (addr & 0xFFFFF) | (addr & ~0x1F_FFFF)
+
     def phys(self, seg, off):
         """seg is an index into the six segment registers, not a selector."""
+        return self.gate(self.address_of(seg, off))
+
+    def address_of(self, seg, off):
+        """The physical address before the gate looks at it."""
         lin = (self.sbase(seg) + off) & 0xFFFF_FFFF
         if not self.pe:
-            return lin & 0xFFFFF          # real mode wraps at a megabyte
+            # Real mode wraps at a megabyte only because the gate is shut: the
+            # same 0xFFFF:0x0010 reaches extended memory on a 386 with A20 open,
+            # which is what the HMA trick depends on. The gate itself is applied
+            # to whatever this returns.
+            return lin
         # Protected mode is where extended memory starts. A flat descriptor and
         # paging off means a linear address is a physical one, untruncated:
         # that is how a kernel clears its own BSS at 30 MB before it has any
@@ -611,13 +969,22 @@ class Machine:
     # ---- paging ------------------------------------------------------
 
     def translate(self, lin: int) -> int:
-        """Two levels, four kilobytes a page. A missing entry is a page fault:
-        interrupt 14, with the address that caused it left in CR2."""
+        """Two levels: four kilobytes a page, or four megabytes when the
+        directory entry says so and CR4.PSE allows it. A missing entry is a
+        page fault: interrupt 14, with the address that caused it in CR2.
+
+        The four-megabyte form is not an optimisation to skip: a 32-bit Linux
+        builds its first page table out of them, because one directory entry
+        then covers the mapping the kernel runs in, and it will not boot on a
+        CPU that cannot do it.
+        """
         pde_at = (self.cr[3] & ~0xFFF) + ((lin >> 22) & 0x3FF) * 4
         pde = self.fetch_physical(pde_at)
         if not pde & 1:
             self.page_fault(lin)
             return 0
+        if pde & 0x80 and self.cr[4] & 0x10:          # PS, with CR4.PSE open
+            return (pde & 0xFFC0_0000) + (lin & 0x3F_FFFF)
         pte_at = (pde & ~0xFFF) + ((lin >> 12) & 0x3FF) * 4
         pte = self.fetch_physical(pte_at)
         if not pte & 1:
@@ -643,6 +1010,8 @@ class Machine:
         pde = self.fetch_physical(pde_at)
         if not pde & 1:
             return False
+        if pde & 0x80 and self.cr[4] & 0x10:
+            return True
         pte_at = (pde & ~0xFFF) + ((lin >> 12) & 0x3FF) * 4
         return bool(self.fetch_physical(pte_at) & 1)
 
@@ -890,8 +1259,14 @@ class Machine:
         """IDENTIFY DEVICE, with the capacity the drive really has: words 60
         and 61 are the LBA28 sector count, and a driver believes them."""
         out = list(ATA_IDENT)
-        out[59] = self.ata_sectors & 0xFFFF      # word 60: capacity, low half
-        out[60] = (self.ata_sectors >> 16) & 0xFFFF   # word 61: the high half
+        # the list is word 0 first, so words 60 and 61 are at those indexes.
+        # They were written one early -- words 59 and 60 -- which a driver that
+        # asks the drive its size reads as zero.
+        out[60] = self.ata_sectors & 0xFFFF      # word 60: capacity, low half
+        out[61] = (self.ata_sectors >> 16) & 0xFFFF   # word 61: the high half
+        # word 255 is the checksum of the other 255, and a drive that edits its
+        # capacity and not the checksum is a drive a driver rejects
+        out[255] = (0x1_0000 - (sum(out[:255]) & 0xFFFF)) & 0xFFFF
         return out
 
     def _ata_load(self) -> None:
@@ -1086,8 +1461,11 @@ class Machine:
                 return self.uart[1]              # divisor, high
             return self.uart[1]                  # interrupt enable
         if index == 2:
-            # nothing here raises an interrupt, so "no interrupt pending" is
-            # the truth; an FIFO is enabled if the guest asked for one
+            # IIR: bit 0 clear means a source is asking, and the low nibble says
+            # which. Only the receiver is modelled -- see `kbd_irq` -- so the
+            # answer is either "received data available" or "nothing pending".
+            if self.serial_in and self.uart[1] & 0x01:
+                return 0x04
             return 0x01 if not (self.uart[2] & 1) else 0xC1
         if index == 5:
             lsr = 0x60                           # THRE and TEMT: both empty
@@ -1101,7 +1479,10 @@ class Machine:
             if self._uart_dlab():
                 self.uart[0] = value             # divisor, low
                 return
-            if self.uart[4] & 0x10:              # MCR loopback: nobody hears it
+            if self.uart[4] & 0x10:
+                # MCR bit 4 is the loopback the wire is not: the byte comes
+                # straight back as received data. Every 8250 probe does this.
+                self.serial_in.append(value & 0xFF)
                 return
             self.serial.append(value & 0xFF)
             self.out.append(value & 0xFF)          # and the old debug log
@@ -1125,6 +1506,10 @@ class Machine:
         return self.port_in(port, 1) | (self.port_in(port, 1) << 8)
 
     def port_in(self, port, size):
+        if port == 0x5BD:                 # the clock, low byte, and latch
+            return self.pit_up_read(False)
+        if port == 0x5BE:                 # ... and the high byte of that latch
+            return self.pit_up_read(True)
         if NIC_IO <= port < NIC_IO + 256:
             return self.nic_register(port - NIC_IO, size)
         if self.UART_IO <= port < self.UART_IO + 8:
@@ -1142,7 +1527,13 @@ class Machine:
         if port == PIC_SLAVE + 1:
             return self.pic2.imr
         if port == 0x61:                  # the speaker port: timer 2's gate
-            return self.ports.get(0x61, 0)
+            # bits 0..3 are what was written, bit 4 is the DRAM refresh toggle,
+            # and bit 5 is counter 2's own output -- the one a calibrating guest
+            # watches
+            value = self.ports.get(0x61, 0) & 0x1F
+            value |= (self.pit.out[2] & 1) << 5
+            value |= ((self.pit_up >> 4) & 1) << 4
+            return value
         if port == 0x5BC:                 # how open the gate is
             return self.ports.get(0x61, 0) & 3
         if port in (0x5BA, 0x5BB):        # the tone the speaker is making
@@ -1174,6 +1565,14 @@ class Machine:
             return self.pci_addr & 0xFFFFFFFF
         if 0xCFC <= port <= 0xCFF:
             return self.pci_read(port - 0xCFC, size)
+        if port == 0x3DA:
+            # status register 1: bit 0 during a horizontal retrace, bit 3 during
+            # a vertical one. A guest waiting for the retrace to *end* would
+            # spin for ever on a constant, so the two bits follow each read.
+            self.cga_flip ^= 1
+            return self.cga_flip * 9
+        if port == 0x92:
+            return 0x02 if self.a20 else 0x00
         if port == 0x5A0:
             return self.cores
         if port == 0x5AB:
@@ -1243,6 +1642,21 @@ class Machine:
             return 0x01 if self.keys else 0
         return self.ports.get(port, 0xFF)
 
+    def pending_keys(self) -> int:
+        """How many keys the machine has not consumed yet.
+
+        Two places hold one: the controller's own queue, which is what DP
+        injects into, and the BIOS's ring at 0x41A, which is where the
+        controller's bytes go once POST has run. A test that waits for the
+        guest to *take* its keystrokes has to look at both -- the ring is
+        filled from the controller in one go, so an empty controller no longer
+        means the firmware has seen everything.
+        """
+        head = self.read(0x41A, 2)
+        tail = self.read(0x41C, 2)
+        ring = ((tail - head) % 32) // 2
+        return len(self.keys) + ring
+
     def speaker_hz(self) -> int:
         """What the speaker sounds like: channel 2's divisor, behind a gate.
 
@@ -1254,6 +1668,18 @@ class Machine:
             return 0
         divisor = self.pit.reload[2] or 0x10000
         return PIT_HZ // divisor
+
+    def pit_up_read(self, high: bool) -> int:
+        """The 8254's input count, one byte at a time.
+
+        The low byte latches the high one, so a sixteen-bit read of a running
+        counter cannot come back split across a carry -- the same reason a real
+        8254 has a latch command.
+        """
+        if not high:
+            self.pit_up_latch = self.pit_up
+            return self.pit_up_latch & 0xFF
+        return (self.pit_up_latch >> 8) & 0xFF
 
     def port_out(self, port, value, size):
         if NIC_IO <= port < NIC_IO + 256:
@@ -1298,6 +1724,26 @@ class Machine:
             if 1 <= (value & 0xFF) <= self.cores:
                 self.core_sel = value & 0xFF
             return
+        if port in (0x3D8, 0x3D9):        # the CGA's mode and colour select
+            if port == 0x3D9:
+                self.cga_ctl = value & 0xFF
+            return
+        if port == 0x92:                  # System Control Port A
+            # bit 1 is the A20 gate and bit 0 asks for a reset without a reset
+            # line; that pair is how a loader gets past the megabyte.
+            self.a20 = bool(value & 0x02)
+            if value & 0x01:
+                self.reset_pending = True
+            return
+        if port == 0x64:                  # the 8042's command port
+            # 0xFE is the pulse-reset command: a real board restarts on the
+            # spot, and a bootkit that has finished with the machine uses it.
+            # The command byte still latches, because the next read of the
+            # status port is entitled to see it.
+            self.kb_cmd = value & 0xFF
+            if value & 0xFF == 0xFE:
+                self.reset_pending = True
+            return
         if port == 0x5A8:                 # the clock the board should report
             self.cpu_base = value & 0xFF
             return
@@ -1316,7 +1762,12 @@ class Machine:
                 self.perf_factor = value & 0xFF
             return
         if port == 0x5AD:                 # the guest's clock, per cent
-            if 10 <= (value & 0xFF) <= 255:
+            # 5 per cent is the last entry of the setup's table, and the
+            # machine takes it; a floor of ten here dropped exactly that row,
+            # so picking it changed the guest's clock on the board and not in
+            # the model. Zero is refused on both sides: a stopped clock is not
+            # a rate.
+            if 1 <= (value & 0xFF) <= 255:
                 self.time_rate = value & 0xFF
             return
         if port == 0x5AE:                 # how many cores there should be
@@ -1386,6 +1837,17 @@ class Machine:
         if port == 0x71:
             self.cmos[self.cmos_index & 0x7F] = value & 0xFF
             return
+        if port == 0x61:
+            was_open = self.pit.gate2
+            now_open = bool(value & 0x01)
+            self.pit.gate2 = now_open
+            if now_open and not was_open:
+                # a rising edge on the gate reloads the counter and drops the
+                # pin; GRUB's whole wait depends on that ordering
+                self.pit.count[2] = self.pit.reload[2]
+                self.pit.out[2] = 0
+            elif not now_open:
+                self.pit.out[2] = 0
         if port == 0x402:
             # the port QEMU and SeaBIOS agree to use for debug output
             self.out.append(value & 0xFF)
@@ -1408,7 +1870,7 @@ class Machine:
             value |= self.fetch8() << (8 * i)
         return value
 
-    def modrm(self, seg=SEG_DS, addr_size=2):
+    def modrm(self, seg=SEG_DS, addr_size=2, physical=True):
         """ModR/M -> (mod, reg, rm, address). Register operands share the
         number: on x86 `rm` is a register when mod is 3 and a memory operand
         otherwise, which is why the two live in one field.
@@ -1418,6 +1880,12 @@ class Machine:
         are 32 bits wide.  The 16-bit form is a fixed table of base and index
         registers instead, so the two are written out separately rather than
         forced through one formula.
+
+        ``physical=False`` returns the effective address *before* it becomes a
+        physical one, which is what `lea` wants: it computes an offset and never
+        touches memory, so paging must not be applied to the answer. Ask for the
+        physical address with paging on and `lea eax, [ebp-0xb0]` in a kernel's
+        high half comes back as the low-half address the page tables map it to.
         """
         byte = self.fetch8()
         mod = byte >> 6
@@ -1426,7 +1894,7 @@ class Machine:
         if mod == 3:
             return mod, reg, rm, None
         if addr_size == 4:
-            return mod, reg, rm, self.phys_32(seg, mod, rm)
+            return mod, reg, rm, self.phys_32(seg, mod, rm, physical)
         base = {0: 3, 1: 3, 2: 5, 3: 5, 4: 6, 5: 7, 6: 5, 7: 3}[rm]
         index = {0: 6, 1: 7, 2: 6, 3: 7}.get(rm)
         if rm == 6 and mod == 0:
@@ -1443,9 +1911,10 @@ class Machine:
                 off += sext(self.fetch8(), 8)
             elif mod == 2:
                 off += self.fetch16()
-        return mod, reg, rm, self.phys(seg, off & 0xFFFF)
+        ea = off & 0xFFFF
+        return mod, reg, rm, self.phys(seg, ea) if physical else ea
 
-    def phys_32(self, seg, mod, rm):
+    def phys_32(self, seg, mod, rm, physical=True):
         """The 32-bit ModR/M addressing forms, SIB included."""
         off = 0
         if rm == 4:                                # a SIB byte follows
@@ -1471,7 +1940,8 @@ class Machine:
             off += sext(self.fetch8(), 8)
         elif mod == 2:
             off += self.fetch32()
-        return self.phys(seg, off & 0xFFFF_FFFF)
+        ea = off & 0xFFFF_FFFF
+        return self.phys(seg, ea) if physical else ea
 
     def rm_read(self, mod, rm, addr, size):
         if mod == 3:
@@ -1596,9 +2066,21 @@ class Machine:
         if self.pit_acc < PIT_DIV:
             return
         self.pit_acc = 0
+        #: The 8254's input count since power-on, as 0x5BD/0x5BE report it.
+        #: The clock *is* this number here, so it is what `int 15h ah=86`
+        #: polls: a wait costs about the instructions the clock says it should.
+        self.pit_up = (self.pit_up + 1) & 0xFFFF
         fired = self.pit.tick()
         if fired & 1:
-            self.raise_irq(0)
+            # The 8259 holds one request per line, so a wrap that arrives while
+            # IRQ0 is already asking would be lost -- and a guest that spends a
+            # wait with interrupts off comes back to a clock that has not moved.
+            # A request that finds its line already asking is counted here.
+            if self.pic.irr & 1:
+                tick = int.from_bytes(self.ram[0x46C:0x470], "little")
+                self.ram[0x46C:0x470] = ((tick + 1) & 0xFFFFFFFF).to_bytes(4, "little")
+            else:
+                self.raise_irq(0)
 
     def service_irq(self) -> None:
         """An interrupt is taken between instructions, and only when the
@@ -1846,6 +2328,7 @@ class Machine:
         self.tlb_page = -1
         self.ldtr = 0
         self.tr = 0
+        self.fpu = Fpu()
         self.pe = False
         self.dsz = 2
         self.ipmask = 0xFFFF
@@ -1871,6 +2354,16 @@ class Machine:
         if self.reset_pending:
             self.reset()
             return
+        # The two lines a person types into: IRQ1 from the 8042 while its
+        # output buffer holds a byte (up until the guest reads port 0x60), and
+        # IRQ4 from the 16550 while a received byte is waiting and the guest has
+        # enabled that interrupt in IER. Both are levels, not edges, so asking
+        # again costs nothing. They are asked *before* the halted check because
+        # a sleeping core is exactly the one an arriving byte has to wake.
+        if self.keys:
+            self.raise_irq(1)
+        if self.serial_in and self.uart[1] & 0x01:
+            self.raise_irq(4)
         if self.halted:
             self.idle()
             return
@@ -2072,7 +2565,9 @@ def execute(m):
             m.loadseg(reg, value)
         return
     if op == 0x8D:
-        mod, reg, rm, addr = m.modrm(seg, addr_size)
+        # the effective address, not the physical one: `lea` is arithmetic on a
+        # segment-relative offset and nothing else
+        mod, reg, rm, addr = m.modrm(seg, addr_size, physical=False)
         m.setreg(reg, addr if addr is not None else 0, size)
         return
     if op == 0x8F:
@@ -2481,11 +2976,533 @@ def execute(m):
         two_byte(m, size, seg, addr_size)
         return
     if 0xD8 <= op <= 0xDF:
-        # no coprocessor is fitted, so the escape traps: interrupt 7, exactly
-        # what a 386SX does when a program tries to use a 387 that is not there
-        m.interrupt(7)
+        escape(m, op, size, seg, addr_size)
         return
     raise NotImplementedError(f"opcode {op:#04x} at {m.eip - 1:04x}")
+
+
+# ----------------------------------------------------------------------
+# the 387's opcode page
+# ----------------------------------------------------------------------
+def _fdiv(left: float, right: float) -> float:
+    """Division as the chip does it rather than as Python does: zero over zero
+    is a NaN, a non-zero over zero is an infinity, and neither is an exception
+    on a machine that masks every exception by default."""
+    if right == 0:
+        if left == 0 or left != left:
+            return float("nan")
+        negative = (left < 0) != (right < 0)
+        return float("-inf") if negative else float("inf")
+    return left / right
+
+
+def _fpu_binop(kind: int, left: float, right: float) -> float | None:
+    """The six arithmetic forms, and `None` for the two that only compare."""
+    if kind == 0:
+        return left + right
+    if kind == 1:
+        return left * right
+    if kind == 4:
+        return left - right
+    if kind == 5:
+        return right - left
+    if kind == 6:
+        return _fdiv(left, right)
+    if kind == 7:
+        return _fdiv(right, left)
+    return None
+
+
+#: 0xD8 and 0xDE read their /digit in this order, 0xDC in the other: `fsubr`
+#: and `fsub` swap places there, which is the classic trap in this table.
+_SWAPPED = {0: 0, 1: 1, 4: 5, 5: 4, 6: 7, 7: 6}
+
+
+def escape(m, op: int, size: int, seg, addr_size: int) -> None:
+    """One x87 instruction: the escape byte, the ModR/M, and the operand."""
+    fpu = m.fpu
+    fpu.ip = m.eip - 1                   # the escape byte, before the ModR/M
+    mod, reg, rm, address = m.modrm(seg=seg, addr_size=addr_size)
+    if mod == 3:
+        _escape_reg(m, fpu, op, reg, rm)
+    else:
+        _escape_mem(m, fpu, op, reg, address, size)
+
+
+def _escape_reg(m, fpu: "Fpu", op: int, reg: int, rm: int) -> None:
+    """The register forms. With mod = 3 the second byte names the operation as
+    a whole, so `reg` and `rm` are its two halves rather than two operands."""
+    if op == 0xD8:
+        left, right = fpu.get(0), fpu.get(rm)
+        if reg in (2, 3):
+            fpu.compare(left, right)
+            fpu.c1 = 0
+            if reg == 3:
+                fpu.drop(0)
+            return
+        fpu.set(0, _fpu_binop(reg, left, right))
+        return
+    if op == 0xD9:
+        if reg == 0:
+            fpu.push(fpu.get(rm))
+        elif reg == 1:
+            left, right = fpu.get(0), fpu.get(rm)
+            fpu.set(0, right)
+            fpu.set(rm, left)
+        elif reg in (2, 3):
+            if rm != 0:
+                raise NotImplementedError("x87 reserved")
+        elif reg == 4:
+            _escape_d9_unary(fpu, rm)
+        elif reg == 5:
+            fpu.push(_CONSTANTS[rm])
+        elif reg == 6:
+            _escape_d9_transcendental(fpu, rm)
+        else:
+            _escape_d9_misc(fpu, rm)
+        return
+    if op == 0xDA:
+        if reg == 5 and rm == 1:                     # DA E9: FUCOMPP
+            fpu.compare(fpu.get(0), fpu.get(1))
+            fpu.drop(0)
+            fpu.drop(0)
+            return
+        if reg == 0:                                 # DA C0: FCMOVB st,st(i)
+            if fpu.c0:
+                fpu.set(0, fpu.get(rm))
+            return
+        if reg == 1:
+            if fpu.c3:                               # FCMOVE
+                fpu.set(0, fpu.get(rm))
+            return
+        if reg == 2:
+            if fpu.c0 or fpu.c3:                     # FCMOVBE
+                fpu.set(0, fpu.get(rm))
+            return
+        if reg == 3:
+            if fpu.c2:                               # FCMOVU
+                fpu.set(0, fpu.get(rm))
+            return
+        raise NotImplementedError("x87 reserved")
+    if op == 0xDB:
+        if reg == 4 and rm == 2:                     # DB E2: FNCLEX
+            fpu.c0 = fpu.c1 = fpu.c2 = fpu.c3 = 0
+            fpu.sf = fpu.es = 0
+            return
+        if reg == 4 and rm == 3:                     # DB E3: FNINIT
+            _fpu_init(fpu)
+            return
+        if reg in (0, 1, 2, 3):                      # FCMOVNcc
+            cond = (not fpu.c0, fpu.c3, fpu.c0 or fpu.c3, fpu.c2)[reg]
+            if cond:
+                fpu.set(0, fpu.get(rm))
+            return
+        if reg in (5, 6):                            # FUCOMI / FCOMI
+            fpu.compare(fpu.get(0), fpu.get(rm))
+            _set_compare_flags(m, fpu)
+            return
+        raise NotImplementedError("x87 reserved")
+    if op == 0xDC:
+        if reg == 2 or reg == 3:                     # reserved on a 387
+            raise NotImplementedError("x87 reserved")
+        kind = _SWAPPED[reg]
+        left, right = fpu.get(rm), fpu.get(0)
+        value = _fpu_binop(kind, left, right)
+        if value is None:
+            raise NotImplementedError("x87 reserved")
+        fpu.set(rm, value)
+        return
+    if op == 0xDD:
+        if reg == 0:                                 # FFREE
+            fpu.drop(rm)
+        elif reg == 2:
+            fpu.set(rm, fpu.get(0))                  # FST st(i): D0+i
+        elif reg == 3:
+            value = fpu.get(0)                       # FSTP st(i): D8+i
+            fpu.set(rm, value)
+            fpu.drop(0)
+        elif reg == 4 and rm == 0:                   # DD E0: FNSTSW AX
+            m.setreg(0, fpu.status(), 2)
+        elif reg == 5:
+            fpu.compare(fpu.get(0), fpu.get(rm))     # FUCOM
+        elif reg == 6:
+            fpu.compare(fpu.get(0), fpu.get(rm))     # FUCOMP
+            fpu.drop(0)
+        else:
+            raise NotImplementedError("x87 reserved")
+        return
+    if op == 0xDE:
+        if reg == 3 and rm == 1:                     # DE D9: FCOMPP
+            fpu.compare(fpu.get(0), fpu.get(1))
+            fpu.drop(0)
+            fpu.drop(0)
+            return
+        if reg == 5 and rm == 1:                     # DE E9: FUCOMPP
+            fpu.compare(fpu.get(0), fpu.get(1))
+            fpu.drop(0)
+            fpu.drop(0)
+            return
+        if reg in (2, 3):
+            raise NotImplementedError("x87 reserved")
+        value = _fpu_binop(_SWAPPED[reg], fpu.get(rm), fpu.get(0))
+        if value is None:
+            raise NotImplementedError("x87 reserved")
+        fpu.set(rm, value)
+        fpu.drop(0)                                  # the P forms pop
+        return
+    if op == 0xDF:
+        if reg == 4 and rm == 0:                     # DF E0: FNSTSW AX
+            m.setreg(0, fpu.status(), 2)
+            return
+        if reg in (5, 6):                            # FUCOMIP / FCOMIP
+            fpu.compare(fpu.get(0), fpu.get(rm))
+            fpu.drop(0)
+            _set_compare_flags(m, fpu)
+            return
+        raise NotImplementedError("x87 reserved")
+    raise NotImplementedError(f"x87 escape {op:#04x}")
+
+
+#: `fld1`, `fldl2t`, `fldl2e`, `fldpi`, `fldlg2`, `fldln2`, `fldz` — the seven
+#: constants `D9 E8`-`D9 EE` push. They are literals here rather than computed,
+#: because the real chip's constants are correct to the last bit.
+_CONSTANTS = [
+    1.0,                                      # E8 fld1
+    3.32192809488736234787,                   # E9 fldl2t
+    1.44269504088896340736,                   # EA fldl2e
+    3.14159265358979323846,                   # EB fldpi
+    0.30102999566398119521,                   # EC fldlg2
+    0.69314718055994530942,                   # ED fldln2
+    0.0,                                      # EE fldz
+]
+
+
+def _fpu_init(fpu: "Fpu") -> None:
+    """`fninit`: every register empty, the top at zero, and the control word
+    back to round-to-nearest with every exception masked."""
+    fpu.st = [0.0] * 8
+    fpu.empty = [True] * 8
+    fpu.top = 0
+    fpu.cw = 0x037F
+    fpu.c0 = fpu.c1 = fpu.c2 = fpu.c3 = 0
+    fpu.sf = fpu.es = 0
+
+
+def _set_compare_flags(m, fpu: "Fpu") -> None:
+    """`fcomi` and friends leave the answer in EFLAGS as well as in the status
+    word: ZF = equal, PF = unordered, CF = less."""
+    m.set_flag(FLAG_ZF, fpu.c3 == 1)
+    m.set_flag(FLAG_PF, fpu.c2 == 1)
+    m.set_flag(FLAG_CF, fpu.c0 == 1)
+
+
+def _escape_d9_unary(fpu: "Fpu", rm: int) -> None:
+    if rm == 0:                                  # FCHS
+        fpu.set(0, -fpu.get(0))
+    elif rm == 1:                                # FABS
+        fpu.set(0, abs(fpu.get(0)))
+    elif rm == 4:                                # FTST
+        fpu.compare(fpu.get(0), 0.0)
+    elif rm == 5:                                # FXAM
+        value = fpu.get(0)
+        fpu.c1 = fpu.c0 = fpu.c2 = fpu.c3 = 0
+        if fpu.is_empty(0):
+            fpu.c3, fpu.c1, fpu.c0 = 1, 1, 0
+        else:
+            fpu.c0 = 1 if value < 0 else 0
+            if value == 0:
+                fpu.c3 = 1
+            elif value in (float("inf"), float("-inf")):
+                fpu.c2, fpu.c3 = 1, 1
+            elif value != value:
+                fpu.c3 = 1
+    else:
+        raise NotImplementedError("x87 reserved")
+
+
+def _escape_d9_transcendental(fpu: "Fpu", rm: int) -> None:
+    value = fpu.get(0)
+    if rm == 0:                                  # F2XM1
+        fpu.set(0, math.exp(value * 0.69314718055994530942) - 1.0)
+    elif rm == 1:                                # FYL2X
+        second = fpu.get(1)
+        argument = fpu.pop()
+        if argument < 0 or argument != argument:
+            fpu.set(0, float("nan"))
+        else:
+            fpu.set(0, second * math.log(argument) / 0.6931471805599453)
+    elif rm == 2:                                # FPTAN
+        angle = value
+        fpu.set(0, math.tan(angle))
+        fpu.push(1.0)
+    elif rm == 3:                                # FPATAN
+        second = fpu.get(1)
+        ratio = fpu.pop() / second if second else float("inf")
+        angle = math.atan(ratio)
+        if second < 0:
+            angle = angle + math.pi if ratio >= 0 else angle - math.pi
+        fpu.set(0, angle)
+    elif rm == 4:                                # FXTRACT
+        exponent = _exponent_of(abs(value)) if value else 0
+        mantissa = value / _pow2(exponent) if value else 0.0
+        fpu.set(0, float(exponent))
+        fpu.push(mantissa)
+    elif rm == 5:                                # FPREM1
+        fpu.set(0, _fprem(fpu.get(0), fpu.get(1)))
+    elif rm == 6:                                # FDECSTP
+        fpu.top = (fpu.top + 1) % 8
+    elif rm == 7:                                # FINCSTP
+        fpu.top = (fpu.top - 1) % 8
+    else:
+        raise NotImplementedError("x87 reserved")
+
+
+def _fprem(left: float, right: float) -> float:
+    """The remainder with the *dividend's* sign, which is what `fprem` means
+    and what `%` does not do here."""
+    if right == 0 or right != right or left != left:
+        return float("nan")
+    remainder = abs(left) % abs(right)
+    if left < 0:
+        remainder = -remainder
+    return remainder
+
+
+def _escape_d9_misc(fpu: "Fpu", rm: int) -> None:
+    """`D9 F8`-`D9 FF`: the second half of the one-argument page."""
+    if rm == 0:                                  # FPREM
+        fpu.set(0, _fprem(fpu.get(0), fpu.get(1)))
+        return
+    if rm == 1:                                  # FYL2XP1
+        value = fpu.get(0)
+        fpu.set(0, fpu.get(1) * math.log(value + 1.0) / 0.6931471805599453)
+        return
+    if rm == 2:                                  # FSQRT
+        value = fpu.get(0)
+        if value < 0:
+            fpu.c0 = fpu.c2 = fpu.c3 = 1
+            fpu.set(0, float("nan"))
+        else:
+            fpu.set(0, math.sqrt(value))
+        return
+    if rm == 3:                                  # FSINCOS
+        sine = math.sin(fpu.get(0))
+        fpu.set(0, math.cos(fpu.get(0)))
+        fpu.push(sine)
+        return
+    if rm == 4:                                  # FRNDINT
+        fpu.set(0, float(fpu.to_integer(fpu.get(0), 8)))
+        return
+    if rm == 5:                                  # FSCALE
+        scale = math.floor(fpu.get(1))
+        fpu.set(0, fpu.get(0) * _pow2(int(scale)))
+        return
+    if rm == 6:                                  # FSIN
+        fpu.set(0, math.sin(fpu.get(0)))
+        return
+    if rm == 7:                                  # FCOS
+        fpu.set(0, math.cos(fpu.get(0)))
+        return
+    raise NotImplementedError("x87 reserved")
+
+
+def _escape_mem(m, fpu: "Fpu", op: int, reg: int, address: int, size: int) -> None:
+    """The memory forms. Each escape byte has its own operand width, and 0xDC
+    reads its /digit in the other order -- see `_SWAPPED`."""
+    if op == 0xD8 or op == 0xDC:
+        width = 4 if op == 0xD8 else 8
+        value = (_f64_value(_bytes_at(m, address, 8)) if width == 8
+                 else _f32_value(_bytes_at(m, address, 4)))
+        kind = reg if op == 0xD8 else _SWAPPED[reg]
+        if reg == 2:
+            fpu.compare(fpu.get(0), value)
+        elif reg == 3:
+            fpu.compare(fpu.get(0), value)
+            fpu.drop(0)
+        else:
+            fpu.set(0, _fpu_binop(kind, fpu.get(0), value))
+        return
+    if op == 0xD9:
+        if reg == 0:
+            fpu.push(_f32_value(_bytes_at(m, address, 4)))
+        elif reg == 2:
+            m.write(address, _word_of(_f32_bits(fpu.get(0)), 4), 4)
+        elif reg == 3:
+            m.write(address, _word_of(_f32_bits(fpu.get(0)), 4), 4)
+            fpu.drop(0)
+        elif reg == 5:
+            fpu.cw = m.read(address, 2)
+        elif reg == 7:
+            m.write(address, fpu.cw, 2)
+        elif reg == 4:
+            _fpu_restore(m, fpu, address, size)
+        elif reg == 6:
+            _fpu_save(m, fpu, address, size)
+        else:
+            raise NotImplementedError("x87 reserved")
+        return
+    if op == 0xDA or op == 0xDE:
+        width = 4 if op == 0xDA else 2
+        raw = m.read(address, width)
+        if raw >= 1 << (width * 8 - 1):
+            raw -= 1 << (width * 8)
+        if reg == 2:
+            fpu.compare(fpu.get(0), float(raw))
+        elif reg == 3:
+            fpu.compare(fpu.get(0), float(raw))
+            fpu.drop(0)
+        else:
+            fpu.set(0, _fpu_binop(reg, fpu.get(0), float(raw)))
+        return
+    if op == 0xDB:
+        if reg == 0:
+            raw = m.read(address, 4)
+            if raw >= 1 << 31:
+                raw -= 1 << 32
+            fpu.push(float(raw))
+        elif reg == 2 or reg == 3:
+            m.write(address, fpu.to_integer(fpu.get(0), 4) & 0xFFFF_FFFF, 4)
+            if reg == 3:
+                fpu.drop(0)
+        elif reg == 5:
+            fpu.push(_f80_value(_bytes_at(m, address, 10)))
+        elif reg == 7:
+            bits = _f80_bits(fpu.get(0))
+            for k in range(10):
+                m.write(address + k, bits[k], 1)
+            fpu.drop(0)
+        else:
+            raise NotImplementedError("x87 reserved")
+        return
+    if op == 0xDD:
+        if reg == 0:
+            fpu.push(_f64_value(_bytes_at(m, address, 8)))
+        elif reg == 2 or reg == 3:
+            bits = _f64_bits(fpu.get(0))
+            for k in range(8):
+                m.write(address + k, bits[k], 1)
+            if reg == 3:
+                fpu.drop(0)
+        elif reg == 4:
+            _fpu_restore(m, fpu, address, size)
+        elif reg == 6:
+            _fpu_save(m, fpu, address, size)
+        elif reg == 7:
+            m.write(address, fpu.status(), 2)
+        else:
+            raise NotImplementedError("x87 reserved")
+        return
+    if op == 0xDF:
+        if reg == 0:
+            raw = m.read(address, 2)
+            if raw >= 1 << 15:
+                raw -= 1 << 16
+            fpu.push(float(raw))
+        elif reg == 2 or reg == 3:
+            m.write(address, fpu.to_integer(fpu.get(0), 2) & 0xFFFF, 2)
+            if reg == 3:
+                fpu.drop(0)
+        elif reg == 4:                           # FBLD: eighteen packed digits
+            raw = _bytes_at(m, address, 10)
+            value = 0.0
+            for index in range(8, -1, -1):
+                value = value * 100.0 + (raw[index] >> 4) * 10.0 + (raw[index] & 0x0F)
+            if (raw[9] >> 4) & 0x0F == 0x0D:
+                value = -value
+            fpu.push(value)
+        elif reg == 6:                           # FBSTP
+            value = abs(fpu.to_integer(fpu.get(0), 8))
+            raw = [0] * 10
+            for index in range(9):
+                # packed BCD: the high nibble is the more significant digit
+                raw[index] = int(value // 10) % 10 * 16 + int(value) % 10
+                value = math.floor(value / 100)
+            raw[9] = 0xD0 if fpu.get(0) < 0 else 0
+            for index in range(10):
+                m.write(address + index, raw[index], 1)
+            fpu.drop(0)
+        elif reg == 5:
+            low = m.read(address, 4)
+            high = m.read(address + 4, 4)
+            raw = high * 4294967296.0 + low
+            if high >= 1 << 31:
+                raw -= 18446744073709551616.0
+            fpu.push(raw)
+        elif reg == 7:
+            value = fpu.to_integer(fpu.get(0), 8)
+            low = value % 4294967296
+            high = math.floor(value / 4294967296) % 4294967296
+            m.write(address, low, 4)
+            m.write(address + 4, high, 4)
+            fpu.drop(0)
+        else:
+            raise NotImplementedError("x87 reserved")
+        return
+    raise NotImplementedError(f"x87 escape {op:#04x}")
+
+
+def _fpu_env_save(m, fpu: "Fpu", address: int, size: int) -> None:
+    """`fnstenv`, fourteen bytes with a sixteen-bit operand size and
+    twenty-eight with a thirty-two. Every field is one operand-size slot wide,
+    which is the whole difference between the two forms."""
+    step = 2 if size == 2 else 4
+    m.write(address + 0 * step, fpu.cw, 2)
+    m.write(address + 1 * step, fpu.status(), 2)
+    m.write(address + 2 * step, _fpu_tag(fpu), 2)
+    m.write(address + 3 * step, fpu.ip, step)
+    m.write(address + 4 * step, 0xF000, 2)
+    m.write(address + 5 * step, fpu.dp, step)
+    m.write(address + 6 * step, 0, 2)
+
+
+def _fpu_env_load(m, fpu: "Fpu", address: int, size: int) -> None:
+    step = 2 if size == 2 else 4
+    fpu.cw = m.read(address, 2)
+    status = m.read(address + 1 * step, 2)
+    fpu.top = (status // 2048) % 8
+    fpu.c3 = (status // 16384) % 2
+    fpu.c2 = (status // 1024) % 2
+    fpu.c1 = (status // 512) % 2
+    fpu.c0 = (status // 256) % 2
+    fpu.sf = (status // 64) % 2
+    fpu.es = (status // 128) % 2
+
+
+def _fpu_save(m, fpu: "Fpu", address: int, size: int) -> None:
+    """`fnsave`: the environment, then the eight registers in extended
+    precision, and then the chip is as it comes out of the factory."""
+    _fpu_env_save(m, fpu, address, size)
+    step = 2 if size == 2 else 4
+    base = address + 7 * step
+    tag = _fpu_tag(fpu)
+    for index in range(8):
+        empty = (tag >> (2 * index)) & 3 == 3
+        bits = [0] * 10 if empty else _f80_bits(fpu.get(index))
+        for k in range(10):
+            m.write(base + index * 10 + k, bits[k], 1)
+    _fpu_init(fpu)
+
+
+def _fpu_restore(m, fpu: "Fpu", address: int, size: int) -> None:
+    _fpu_env_load(m, fpu, address, size)
+    step = 2 if size == 2 else 4
+    base = address + 7 * step
+    tag = m.read(address + 2 * step, 2)
+    for index in range(8):
+        if (tag >> (2 * index)) & 3 == 3:
+            fpu.drop(index)
+        else:
+            fpu.set(index, _f80_value(_bytes_at(m, base + index * 10, 10)))
+
+
+def _fpu_tag(fpu: "Fpu") -> int:
+    """The tag word, two bits a register: 3 is empty, 0 a valid number."""
+    word = 0
+    for index in range(8):
+        if not fpu.empty[fpu.at(index)]:
+            continue
+        word |= 3 << (index * 2)
+    return word
 
 
 def branch_condition(m, cond):
@@ -2617,13 +3634,21 @@ def two_byte(m, size, seg, addr_size=2):
         if mod == 3:
             return
         if reg in (0, 1):                        # sgdt / sidt
+            # Six bytes either way: the limit, then a base the 386 stores in
+            # full even when the operand size is sixteen. A kernel reads its own
+            # table back this way, so a store the machine cannot make is a
+            # disagreement that shows up as a KeyError three bytes wide.
             table = m.gdtr if reg == 0 else m.idtr
             limit, base = table
-            m.write(addr, limit, 2)
-            m.write(addr + 2, base, 4 if size == 4 else 3)
+            m.write(addr, limit & 0xFFFF, 2)
+            m.write(addr + 2, base & 0xFFFF, 2)
+            m.write(addr + 4, (base >> 16) & 0xFFFF, 2)
         elif reg in (2, 3):                      # lgdt / lidt
             limit = m.read(addr, 2)
-            base = m.read(addr + 2, 4 if size == 4 else 3)
+            if size == 4:
+                base = m.read(addr + 2, 4)
+            else:                                # the 286's twenty-four bits
+                base = m.read(addr + 2, 2) | (m.read(addr + 4, 1) << 16)
             if reg == 2:
                 m.gdtr = [base, limit]
             else:
@@ -2660,8 +3685,8 @@ def two_byte(m, size, seg, addr_size=2):
                 m.write_cr0(m.getreg(rm, 4))
             elif reg < 5:
                 m.cr[reg] = m.getreg(rm, 4)
-                if reg == 3:
-                    m.tlb_page = -1       # a new table: the last page is gone
+                if reg in (3, 4):          # a new table, or a new page size
+                    m.tlb_page = -1
         return
     if 0x80 <= op <= 0x8F:
         rel = m.fetch32() if size == 4 else m.fetch16()
@@ -2776,6 +3801,16 @@ def two_byte(m, size, seg, addr_size=2):
                 index -= 1
         m.setreg(reg, index, size)
         return
+    if 0x40 <= op <= 0x4F:
+        # cmovcc: the move that may not move. A 686-class kernel is built with
+        # them -- the early page-table code picks between two pointers this way
+        # -- and the source is read whether or not the condition holds, so that
+        # the fault a bad read causes is the same either way.
+        mod, reg, rm, addr = m.modrm(seg, addr_size)
+        value = m.rm_read(mod, rm, addr, size)
+        if branch_condition(m, op & 0x0F):
+            m.setreg(reg, value, size)
+        return
     if op in (0xB0, 0xB1):
         # cmpxchg: compare the accumulator with the destination, and either
         # store the source or load the accumulator. The compare-and-swap an
@@ -2800,6 +3835,25 @@ def two_byte(m, size, seg, addr_size=2):
         m.rm_write(mod, rm, addr, m.alu(0, dest, source, osize), osize)
         m.setreg(reg, dest, osize)
         return
+    if op in (0x02, 0x03):
+        # lar / lsl: the rights byte or the limit behind a selector, handed
+        # back as a value. A loader asks before it loads -- "is this selector a
+        # 4K-granular code segment?" -- instead of faulting on a bad guess.
+        mod, reg, rm, addr = m.modrm(seg, addr_size)
+        selector = m.rm_read(mod, rm, addr, size) & 0xFFFF
+        value = 0
+        if selector & ~7:
+            _base, limit, access, flags = m.descriptor(selector)
+            if op == 0x02:
+                value = access | (flags << 8)
+            else:
+                value = (limit << 12) | 0xFFF if flags & 0x8 else limit
+        # A null selector is a #GP on the real chip and ZF=0 here: neither
+        # machine has a #GP path, and a guest that asks about a null selector
+        # is asking for a no either way.
+        m.setreg(reg, value, size)
+        m.set_flag(FLAG_ZF, bool(selector & ~7))
+        return
     if op == 0x06:                           # clts: no task-switch bit to clear
         return
     if op == 0xA2:                           # cpuid: say what we are
@@ -2814,10 +3868,11 @@ def two_byte(m, size, seg, addr_size=2):
             m.reg[0] = 0x0683
             m.reg[1] = 0x0000                     # EBX: no brand, no cache info
             m.reg[2] = 0x0000                     # ECX: no SSE, no PAE
-            # EDX: tsc, msr, cx8, cmov -- and *not* fpu, because there is no
-            # x87 here yet: advertising it would have the kernel run fninit on
-            # a chip that raises #UD for it, at the first context switch.
-            m.reg[2] = (1 << 4) | (1 << 5) | (1 << 8) | (1 << 15)
+            # EDX: fpu, tsc, msr, cx8, cmov. The fpu bit was clear for as long
+            # as the escape page raised interrupt 7; `escape()` is that FPU now.
+            # `fxsr` (bit 24) stays clear on purpose: this machine offers
+            # `fnsave`/`frstor` for a context switch, not `fxsave`.
+            m.reg[2] = 1 | (1 << 4) | (1 << 5) | (1 << 8) | (1 << 15)
         else:
             m.reg[0] = m.reg[1] = m.reg[2] = m.reg[3] = 0
         return

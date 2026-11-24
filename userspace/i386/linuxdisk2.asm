@@ -28,7 +28,11 @@ ELFSEC   equ 0x8000               ; the kernel's first sector, read by the BIOS
 DAP      equ dap
 KLBA     equ klba
 KSEC     equ ksec
-ENTRY    equ entry
+KENTER   equ kenter
+KOFF     equ koff
+ILBA     equ ilba
+ISEC     equ isec
+IADDR    equ iaddr
 ATALBA   equ atalba
 ATADST   equ atadst
 ATABAT   equ atabat
@@ -100,24 +104,8 @@ start:
         test    al, al
         jnz     .copy
 
-        ; ---- setup_header, the part of boot_params the kernel reads first
         mov     ax, ZP_SEG
         mov     es, ax
-        mov     word  [es:0x1FE], 0xAA55      ; boot_flag
-        mov     dword [es:0x202], 0x53726448  ; hdr: 'HdrS'
-        mov     word  [es:0x206], 0x020F      ; protocol 2.15
-        mov     byte  [es:0x210], 0xFF        ; type_of_loader: undefined
-        mov     byte  [es:0x211], 0x01        ; loadflags: LOADED_HIGH
-        mov     dword [es:0x214], 0           ; code32_start, patched below
-        mov     dword [es:0x218], 0           ; no initramfs yet
-        mov     dword [es:0x21C], 0
-        mov     word  [es:0x224], 0x8000      ; heap_end_ptr: real mode only
-        mov     dword [es:0x228], CMDLINE     ; cmd_line_ptr
-        mov     dword [es:0x22C], 0x37FFFFFF  ; initrd_addr_max
-        mov     dword [es:0x230], 0x100000    ; kernel_alignment
-        mov     byte  [es:0x234], 1           ; relocatable_kernel
-        mov     dword [es:0x238], 2047        ; cmdline_size
-        mov     byte  [es:0x1EF], 0xFF        ; sentinel
 
         ; ---- screen_info: the console asks the card what it was, even with a
         ;      serial console on the command line
@@ -128,7 +116,6 @@ start:
         mov     word  [es:0x0E], 25           ; lines
         mov     byte  [es:0x0F], 1            ; orig_video_isVGA
         mov     word  [es:0x10], 16           ; points
-        mov     word  [es:0x20A], 0xFFFF      ; vid_mode: leave the card alone
 
         ; ---- where the kernel is: patched in by the image builder, so the
         ;      loader never has to know how big a kernel is
@@ -136,11 +123,26 @@ start:
         mov     [KLBA], eax
         mov     eax, [patch + 8]
         mov     [KSEC], eax
+        mov     eax, [patch + 16]
+        mov     [KOFF], eax             ; the payload starts this far in
+        mov     eax, [patch + 12]
+        mov     [KENTER], eax
+        mov     eax, [patch + 20]
+        mov     [ILBA], eax
+        mov     eax, [patch + 24]
+        mov     [ISEC], eax
+        mov     eax, [patch + 28]
+        mov     [IADDR], eax
 
-        ; ---- the first sector of the kernel: its ELF header and program
-        ;      headers, which is all the loader needs to know to place it
+        ; ---- the first sector of the image: the setup header the kernel
+        ;      describes itself with
         mov     word  [DAP + 0], 16           ; size of this packet
-        mov     word  [DAP + 2], 1            ; one sector
+        ; two sectors, not one: the setup header runs from 0x1F1 to 0x270 --
+        ; `HdrS`, `code32_start`, `initrd_addr_max` and `init_size` are all past
+        ; 0x200 -- so half of it is in the sector after the boot sector. Copying
+        ; one sector's worth put zeros in `init_size`, which is a decompressor
+        ; told it has no memory to work in.
+        mov     word  [DAP + 2], 2            ; two sectors
         mov     word  [DAP + 4], ELFSEC       ; offset in the segment
         mov     word  [DAP + 6], 0            ; segment
         mov     eax, [KLBA]
@@ -151,6 +153,38 @@ start:
         mov     ah, 0x42                      ; read, the EDD way
         int     0x13
         jc      disk_failed
+
+        ; ---- the setup header, copied out of the kernel's own boot sector --
+        ;      after that sector has been read. It was copied *before* the read
+        ;      for a while, which looks like a working loader: the bytes land in
+        ;      boot_params and a stub that only checks `code32_start` (written
+        ;      later, by us) says everything is fine. What it actually copied
+        ;      was whatever the BIOS had left at 0x8000, so `init_size` -- how
+        ;      much memory the decompressor is allowed to use -- was a number
+        ;      the loader invented.
+        mov     ax, ZP_SEG
+        mov     es, ax
+        xor     ax, ax
+        mov     ds, ax
+        mov     si, ELFSEC + 0x1F1
+        mov     di, 0x1F1
+        mov     cx, 0x80                ; through init_size, at 0x264
+        rep     movsb                   ; DS:SI -> ES:DI, four bytes a step
+
+        ; ---- and now the fields that are *ours*, because the copy above just
+        ;      overwrote them with the kernel's own (zero) placeholders:
+        ;      `cmd_line_ptr` was written before the copy for a while, which is
+        ;      a command line the kernel never sees -- no console, no serial.
+        mov     ax, ZP_SEG
+        mov     es, ax
+        mov     byte  [es:0x210], 0xFF        ; type_of_loader: undefined
+        or      byte  [es:0x211], 0x81        ; LOADED_HIGH | CAN_USE_HEAP
+        mov     word  [es:0x224], 0x8000      ; heap_end_ptr: real mode only
+        mov     dword [es:0x228], CMDLINE     ; cmd_line_ptr
+        mov     dword [es:0x218], 0           ; no initramfs yet
+        mov     dword [es:0x21C], 0
+        mov     byte  [es:0x1EF], 0xFF        ; sentinel
+        mov     word  [es:0x20A], 0xFFFF      ; vid_mode: leave the card alone
 
         ; ---- a flat pair of descriptors, then protected mode with paging off
         mov     ax, GD_SEG
@@ -187,54 +221,56 @@ pm32:
         mov     ss, ax
         mov     esp, 0x90000
 
-        mov     edx, [0x8018]          ; e_entry
-        mov     [ENTRY], edx
-        mov     [ZEROPAGE + 0x214], edx ; code32_start is the entry, not a guess
-
-        ; every program header in the first sector: a kernel has three, and
-        ; anything with more than fits in 512 bytes says so by being wrong
-        mov     esi, [0x801C]          ; e_phoff
-        movzx   ecx, word [0x802C]     ; e_phnum
-        add     esi, ELFSEC
-        add     ecx, 0
-        jz      kernel_ready
-.phdr:
-        cmp     dword [esi], 1         ; PT_LOAD
-        jne     .next
-        ; keep the header, because the ATA loop below needs its registers
-        push    ecx
-        push    esi
-        mov     eax, [esi + 4]         ; p_offset
-        mov     edi, [esi + 12]        ; p_paddr: where it must live
-        mov     ecx, [esi + 16]        ; p_filesz: bytes on the disk
-        mov     ebx, [esi + 20]        ; p_memsz: bytes once placed
-        shr     eax, 9                 ; sectors into the image
-        add     eax, [KLBA]
+        ; ---- the kernel, in one piece, where its own decompressor expects to
+        ;      be. What the image holds is the protected-mode part of a
+        ;      bzImage: the stub that unpacks the payload, with the compressed
+        ;      stream behind it at the offset that stub was built against. It
+        ;      is loaded contiguously and entered at the address the header
+        ;      names, exactly as a BIOS loader would, because the stub sets up
+        ;      its own page tables and needs nothing from us but the zero page.
+        ;
+        ;      Loading the *decompressed* vmlinux instead -- the obvious thing,
+        ;      and what this did first -- is a machine that runs a kernel at
+        ;      its link address with no page tables: the first %fs: access
+        ;      reads a linear address there is no memory at, and the kernel
+        ;      triple faults before it prints a character.
+        mov     eax, [KENTER]
+        mov     [ZEROPAGE + 0x214], eax ; code32_start, as the header says
+        mov     edi, eax
+        mov     ecx, [KSEC]            ; the payload's own sector count
+        shl     ecx, 9                 ; sectors to bytes
+        mov     eax, [KLBA]
+        add     eax, [KOFF]            ; past the setup stub
         call    load_sectors
-        pop     esi
-        mov     eax, [esi + 20]        ; p_memsz
-        sub     eax, [esi + 16]        ; ... minus what was on the disk
-        jbe     .done
-        mov     ecx, eax
-        xor     eax, eax
-        rep     stosb                  ; the BSS part: zero, not whatever
-.done:
-        pop     ecx
-.next:
-        add     esi, 32                ; the size of an ELF32 program header
-        dec     ecx
-        jnz     .phdr
+
+        ; ---- the initramfs, and the two numbers boot_params needs for it.
+        ;      Without one the kernel has no /init to run and stops with
+        ;      "VFS: Unable to mount root fs"; with one it unpacks this and
+        ;      executes the program inside it.
+        mov     ecx, [ISEC]
+        test    ecx, ecx
+        jz      .no_initrd
+        shl     ecx, 9
+        mov     edi, [IADDR]
+        mov     eax, [ILBA]
+        call    load_sectors
+        mov     eax, [IADDR]
+        mov     [ZEROPAGE + 0x218], eax ; initrd_addr
+        mov     eax, [ISEC]
+        shl     eax, 9
+        mov     [ZEROPAGE + 0x21C], eax ; initrd_size
+.no_initrd:
 
 kernel_ready:
         push    0                      ; a defined EFLAGS, not the loader's
         popfd
         mov     esp, 0x90000
-        mov     esi, ZEROPAGE          ; the protocol's one argument
-        mov     eax, 0x2BADB002        ; ... and its one magic number
+        mov     esi, ZEROPAGE          ; boot_params, the protocol's one
+        mov     eax, 0x2BADB002        ; argument, and its magic number
         mov     ebx, 0
         mov     ebp, 0
         mov     edi, 0
-        jmp     [ENTRY]
+        jmp     [KENTER]
 
 ; load_sectors -- eax = first lba, edi = where it goes, ecx = how many bytes.
 ; ATA PIO, one sector at a time: 0x1F3..0x1F6 name the sector, 0x1F2 says how
@@ -362,7 +398,10 @@ ssave:  db      0
 msg_hello:  db "linuxdisk: ", 0
 msg_pm:     db "protected mode", 13, 10, 0
 msg_nodisk: db "no kernel sector", 13, 10, 0
-cmdline:    db "console=ttyS0,115200 earlyprintk=serial,ttyS0,115200", 0
+; Two consoles on purpose: tty0 is the card this machine paints, so whatever
+; the kernel says is on the stage where someone can see it, and ttyS0 is the
+; same text in `X.serialText` for anything reading the machine from outside.
+cmdline:    db "console=tty0 console=ttyS0,115200 earlyprintk=serial,ttyS0,115200", 0
 
 gdt:
         dq      0
@@ -377,16 +416,25 @@ gdt_end:
 gdtr:   dw      0
         dd      0
 
-        ; the image builder looks for this marker and writes the next two
+        ; the image builder looks for this marker and writes the next three
         ; dwords: nothing loads a kernel from a fixed address any more
 klba:   dd      9                      ; patched by the image builder
 ksec:   dd      0
-entry:  dd      0
+kenter: dd      0x100000               ; ... and the address it is entered at
+koff:   dd      0                      ; the payload's first sector in the image
+ilba:   dd      0                      ; the initramfs' first lba
+isec:   dd      0                      ; ... and how many sectors
+iaddr:  dd      0x4000000              ; ... and where it goes
 atalba: dd      0
 atadst: dd      0
 atabat: dd      0
 dap:    times   16 db 0
 
 patch:  dd      'KSDL'
-        dd      9                      ; the kernel's first lba
-        dd      0                      ; how many sectors it is
+        dd      9                      ; the kernel image's first lba
+        dd      0                      ; how many sectors the payload is
+        dd      0x100000               ; ... and where it is entered
+        dd      0                      ; ... and how many setup sectors to skip
+        dd      0                      ; the initramfs' first lba
+        dd      0                      ; ... how many sectors it is
+        dd      0x4000000              ; ... and where it goes

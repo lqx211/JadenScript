@@ -1,0 +1,959 @@
+public v127 = 72;
+public v155 = 9;
+public v98 = 8;
+public v105 = 20;
+public v58 = -1;
+public v12 = 54;
+public v49 = 47;
+public v200 = 116;
+public v73 = 123;
+public v140 = 25;
+public v89 = 22;
+public v161 = 93;
+public v11 = 71;
+public v45 = 4;
+public v118 = 41;
+public v102 = 57;
+public v56 = 0;
+public v119 = 0;
+public v120 = 9;
+public v126 = 2;
+public v198 = 34;
+public v24 = 38;
+public v78 = 36;
+public v185 = 56;
+public v52 = 52;
+public v62 = 0;
+public v43 = 11;
+public v135 = 19;
+public v1 = 53;
+public v187 = 71;
+public v154 = 31;
+public v139 = 56;
+public v164 = 27;
+public v204 = 125;
+public v194 = 115;
+public v72 = 69;
+public v111 = 24;
+public v124 = 3;
+public v146 = 0;
+public v35 = 63;
+public v6 = 0;
+public v48 = 16;
+public v195 = 11;
+public v128 = 66;
+public v8 = 19;
+public v151 = 113;
+public v159 = 26;
+public v134 = -1;
+public v55 = 106;
+public v23 = 65;
+public v103 = 61;
+public v138 = 1;
+public v181 = 67;
+public v173 = 0;
+public v110 = 3;
+public v183 = -1;
+public v19 = 0;
+public v84 = 6;
+public v65 = 35;
+public v112 = 14;
+public v85 = 122;
+public v165 = 64;
+public v76 = 12;
+public v37 = 23;
+public v188 = 0;
+public v182 = 60;
+public v160 = 18;
+public v177 = 2;
+public v131 = 28;
+public v22 = 3;
+public v122 = 10240;
+public v26 = 26;
+public v46 = 20;
+public v91 = 10;
+public v191 = 58;
+public v64 = 44;
+public v190 = 7;
+public v166 = 33;
+public v47 = 118;
+public v59 = 13;
+public v168 = 50;
+public v60 = 35;
+public v178 = 17;
+public v33 = 52;
+public v201 = 62;
+public v79 = 53;
+public v42 = 39;
+public v189 = 117;
+public v117 = 126;
+public v109 = 51;
+public v193 = 0;
+public v68 = 22;
+public v83 = 40;
+public v71 = 31;
+public v93 = 31;
+public v61 = 5;
+public v141 = 10240;
+public v123 = 48;
+public v25 = 30;
+public v179 = 119;
+public v69 = 51;
+public v184 = 25;
+public v203 = 10;
+public v38 = 8;
+public v75 = 4;
+public v96 = 15;
+public v28 = 59;
+public v63 = 42;
+public v158 = 6;
+public v207 = 32;
+public v170 = 46;
+public v41 = 44;
+public v174 = 37;
+public v27 = 16;
+public v34 = 14;
+public v192 = 49;
+public v99 = 52;
+public v97 = 124;
+public v31 = 37;
+public v15 = 21;
+public v57 = 80;
+public v70 = 6;
+public v44 = 1;
+public v40 = 13;
+public v153 = 24;
+public v152 = 23;
+public v121 = 55;
+public v169 = 50;
+public v3 = 26;
+public v51 = 0;
+public v180 = 18;
+public v162 = 0;
+public v130 = 112;
+public v17 = 2;
+public v86 = 1;
+public v0 = 29;
+public v67 = 32;
+public v94 = 129;
+public v87 = 4;
+public v167 = 5;
+public v129 = 27;
+public v156 = 63;
+public v81 = 21;
+public v171 = 68;
+public v7 = 17;
+public v14 = 24;
+public v50 = 5;
+public v106 = 15;
+public v2 = 11;
+public v137 = 34;
+public v9 = 128;
+public v176 = 127;
+public v116 = 25;
+public v142 = 43;
+public v172 = 7;
+public v5 = 12;
+public v20 = 120;
+public v95 = 0;
+public v107 = 57;
+public v32 = 15;
+public v10 = 121;
+public v136 = -1;
+public v132 = 114;
+public v114 = 2;
+public v66 = 45;
+public v74 = 107;
+public v77 = 16;
+public v163 = 38;
+public v108 = ["4686", "iPBSNCPe", "buffer_sample", "Nlnfr", "-170.332", "patch_scene", "5206b15802115d7bcbb7d41d", "stage_track", "6241ee9c2f36", "Etjl", "Xjjevcgx", "costume sector", "93274", "166.153", "sprite note", "tick_stage", "voice_mixer", "frame_engine", "bank flag", "6fef5dd4", "559016", "982", "-115.444", "loop frame", "sector tick"];
+public v113 = ["lNOXH", "IpVJFhiWp", "29d34045b78ba23b", "1342433", "tjlWhSs", "frame_engine", "9942745", "bank435", "pen98", "gxdGdAwFj", "sample frame", "20117", "728", "FCVET"];
+public v149 = ["3403", "track_sector", "pen_buffer", "9d34045b", "voice scene", "loop_buffer", "engine clone", "-125.473", "ohtiVlOE", "f9d6beef", "-79.876", "costume sprite", "wxnLXnAP", "e7d33566598b", "pQaHwYCcP", "1342433", "LDAUP", "reset888", "6cb04f2ee48ea30c", "-65.437", "channel_sector", "patch591", "track374", "loop buffer", "reset442", "voice_kernel", "53", "omsBIjgCy"];
+public v13 = ["mixer sample", "559016", "kernel stage", "Xjjevcgx", "9486", "frame_engine", "kernel284", "Etjl", "sprite note", "93274", "channel70", "buffer869", "iPBSNCPe", "6fef5dd4", "5206b15802115d7bcbb7d41d", "sector engine"];
+public v30 = ["dCijxkv", "27.720", "137.625", "stage876", "-42.787", "engine_loop", "tick_stage", "dbee1d600b4f", "79.040", "kernel298", "JecdIlZU", "lBHW", "40.196", "121.189", "lnnkXZtM", "-70.571", "DQBiNfkKs", "flag185", "pen voice", "370be10d95e7", "WJbmxdlq", "3a23fe72", "frame_patch", "7958", "-96.046", "kernel_sector", "note clone", "track track", "FTRKIsDkI", "fHxSz", "ZizuSjla"];
+public v133 = [];
+public v175 = ["WJbmxdlq", "JecdIlZU", "325", "stage_loop", "kernel_sector", "stage876", "hwxxWXWH", "137.625", "track66", "732", "tick_stage", "FTRKIsDkI", "-96.046", "aINAj"];
+public v18 = [0];
+public v82 = [0, 1, 51, 35, 25, 26, 2, 93, 56, 19, -1, 13];
+public v29 = [1, 51, 35, 13, 25, 0, 2, -1, 11, 37, 36, 29];
+import "assets/lists/v53.jsa";
+import "assets/lists/v80.jsa";
+public v144 = ["nLPhkj", "sector797", "frame_engine", "EiAtsIeNA", "5dc0765246fd", "kernel_loop", "4733", "sprite91", "FCVET", "728", "d93935265636b87380493c3a", "1342433", "sICGyVpg", "7f3ff906fa6e7c72", "bank435", "tjlWhSs", "fJeAYpfnZ", "962", "pen98", "29d34045b78ba23b", "20117", "frame buffer"];
+import "assets/lists/v145.jsa";
+import "assets/lists/v90.jsa";
+import "assets/lists/v100.jsa";
+public v148 = ["track track", "patch_stage", "9d34045b", "track374", "DQBiNfkKs", "xggvfGgE", "40.196", "1342433", "3403", "lBHW", "27.720", "370be10d95e7", "pen_buffer", "3769d43ec46fb7c9", "YjXFHX", "kernel298", "79.040", "-70.571", "engine633", "dCijxkv", "-99.522", "lnnkXZtM", "121.189", "note clone", "costume sprite"];
+public v196 = [0];
+import "assets/lists/v197.jsa";
+public v150 = [];
+
+metadata default Stage.v146 at 5,5 0x0 hidden;
+
+stage: costume=0, volume=100, layer=0, tempo=60, video="on", videoTransparency=50;
+stage {
+    metadata p19 pos 0,0;
+    private void p19(g2kBvk, lhggsZ, soKSPs) {
+        if (v177 > v105) {
+            v193 = v51;
+        } else {
+            v193 += "";
+        }
+        if (v64 > v40) {
+            v173 = "";
+        } else {
+            v173 += "";
+        }
+        v175.add(v52);
+    }
+
+    metadata p37 pos 0,800;
+    private void p37(mey2pu, FTOoHQ) { // proccode p37 %b %b
+        v173 = "";
+        v173 += v87;
+        if (!mey2pu) {
+            v136 += v86;
+        }
+        v136 = "";
+        if (!FTOoHQ) {
+            v17 += "";
+        }
+        if (v142 > v37) {
+            v17 = "";
+        } else {
+            v17 += "";
+        }
+    }
+
+    metadata p39 pos 0,2400;
+    private void p39(CmQzYx, Zn8j00, kjj1rL) { // proccode p39 %b %b %s
+        v95 += v134;
+        if (!Zn8j00) {
+            v95 += "";
+        }
+        v136 = "";
+        v173 = kjj1rL;
+        repeat (6) {
+            v95 += "";
+        }
+        if (!Zn8j00) {
+            v136 += "";
+        }
+        v17 += "";
+        v17 = kjj1rL;
+    }
+
+    metadata p20 pos 0,2400;
+    private void p20(XfWVK3, WPHozH, sJFO62) {
+        if (v126 > v46) {
+            v166 = v62;
+        } else {
+            v166 += "";
+        }
+        if (v41 > v59) {
+            v83 = "";
+        } else {
+            v83 += "";
+        }
+        v196.add(v33);
+    }
+
+    metadata p38 pos 0,3200;
+    private void p38(ypQGGD, y6KRYg) { // proccode p38 %s %b
+        v77 = "";
+        v195 += v75;
+        v7 = ypQGGD;
+        v53.add(join(v167, v187));
+        v90.add(join(v153, v93));
+        if (!y6KRYg) {
+            v134 += v138;
+        }
+    }
+
+    metadata p16 pos 0,4800;
+    private void p16(mGPZ8H, HOMGVV, Dgs848) { // proccode p16 %b %b %s
+        v137 += v58;
+        if (!HOMGVV) {
+            v3 += "";
+        }
+        repeat (5) {
+            v83 += "";
+        }
+        v170 = Dgs848;
+        repeat (6) {
+            v60 += "";
+        }
+        if (!HOMGVV) {
+            v37 += "";
+        }
+        v131 += "";
+        v131 = Dgs848;
+    }
+
+    metadata p35 pos 0,4800;
+    private void p35(lv1sY5) { // proccode p35 %b
+        v150.add(join(v99, v114));
+        v80.add(join(v35, v124));
+        v47 += v183;
+        if (v140 > v159) {
+            v135 = v19;
+        } else {
+            v135 += "";
+        }
+        if (!lv1sY5) {
+            v34 += v44;
+        }
+    }
+
+    metadata p34 pos 0,6000;
+    private void p34(a6MWlm) { // proccode p34 %b
+        v82.add(join(v48, v32));
+        v46 += v45;
+        if (!a6MWlm) {
+            v58 += "";
+        }
+        v3 += v70;
+    }
+
+    metadata p22 pos 0,6000;
+    private void p22(xxdbxI) { // proccode p22 %b
+        v18.add(join(52, 2));
+        v196.add(join(63, 3));
+        v156 -= 1;
+        if (25 > 26) {
+            v121 = 0;
+        } else {
+            v121 += 2;
+        }
+        if (!xxdbxI) {
+            v70 += 1;
+        }
+    }
+
+    metadata p5 pos 0,7200;
+    private void p5(HucZVo, NKABXS) { // proccode p5 %s %b
+        v78 -= 1;
+        v70 = HucZVo;
+        v171 = 1;
+        v170 = HucZVo;
+        v156 -= 1;
+        v37 = HucZVo;
+    }
+}
+
+s1: name="s1", x=0, y=0, size=100, direction=90, show=1, costume=0, volume=100, layer=1, rotation="all", draggable=0;
+class s1 {
+    private v36 = 0;
+    private v88 = "w";
+    private v186 = 0;
+    private v4 = "r";
+    private v157 = "";
+    private v92 = "";
+    private v104 = "!";
+    private v54 = 0;
+    private v147 = "o";
+    private v101 = "";
+    private v21 = "";
+    private v206 = " ";
+    private v205 = "e";
+    private v125 = "l";
+    private v199 = "H";
+    private v115 = "d";
+    private v39 = "";
+    private v143 = [];
+
+    metadata greenFlag pos 48,64;
+    public void greenFlag() {
+        p11(v86, v51);
+    }
+
+    metadata p13 pos 1675,64;
+    private void p13(OdezKj) {
+        v162 = v62;
+        v53.set(OdezKj + v86, v100.get(v53.get(OdezKj + v51)));
+        v53.set(OdezKj + v177, v90.get(v53.get(OdezKj + v51)));
+        v53.set(OdezKj + v51, v53.get(OdezKj + v51) + v86);
+        if (v53.get(OdezKj + v86) == v86) {
+            p9(OdezKj);
+            p4();
+        } elif (v53.get(OdezKj + v86) == v177) {
+            p9(OdezKj);
+            v53.set(OdezKj + v51, v51);
+            Control.stopThisScript();
+        } elif (v53.get(OdezKj + v86) == v110) {
+            p30(OdezKj, v53.get(OdezKj + v38 + v51));
+        } elif (v53.get(OdezKj + v86) == v87) {
+            p2(OdezKj, v110);
+            Looks.say(v53.get(OdezKj + v110));
+        } elif (v53.get(OdezKj + v86) == v50) {
+            p30(OdezKj, v199);
+        } elif (v53.get(OdezKj + v86) == v84) {
+            p2(OdezKj, v38 + v86);
+        } elif (v53.get(OdezKj + v86) == v190) {
+            v143.add(v53.get(OdezKj + v38 + v86));
+        } elif (v53.get(OdezKj + v86) == v38) {
+            p30(OdezKj, v205);
+        } elif (v53.get(OdezKj + v86) == v155) {
+            p2(OdezKj, v38 + v177);
+        } elif (v53.get(OdezKj + v86) == v91) {
+            v143.add(v53.get(OdezKj + v38 + v177));
+        } elif (v53.get(OdezKj + v86) == v195) {
+            p2(OdezKj, v110);
+            v54 = v53.get(OdezKj + v110);
+        } elif (v53.get(OdezKj + v86) == v76) {
+            p30(OdezKj, v54);
+        } elif (v53.get(OdezKj + v86) == v40) {
+            p30(OdezKj, v95);
+        } elif (v53.get(OdezKj + v86) == v112) {
+            p2(OdezKj, v87);
+            p2(OdezKj, v110);
+            p30(OdezKj, v53.get(OdezKj + v110) > v53.get(OdezKj + v87));
+        } elif (v53.get(OdezKj + v86) == v96) {
+            p2(OdezKj, v110);
+            if (!v53.get(OdezKj + v110)) {
+                v53.set(OdezKj + v51, v53.get(OdezKj + v177));
+            }
+        } elif (v53.get(OdezKj + v86) == v77) {
+            p30(OdezKj, v125);
+        } elif (v53.get(OdezKj + v86) == v7) {
+            p2(OdezKj, v38 + v110);
+        } elif (v53.get(OdezKj + v86) == v160) {
+            v143.add(v53.get(OdezKj + v38 + v110));
+        } elif (v53.get(OdezKj + v86) == v135) {
+            p30(OdezKj, v136);
+        } elif (v53.get(OdezKj + v86) == v105) {
+            p2(OdezKj, v110);
+            v54 += v53.get(OdezKj + v110);
+        } elif (v53.get(OdezKj + v86) == v81) {
+            p9(OdezKj);
+            v53.set(OdezKj + v51, v53.get(OdezKj + v177));
+        } else {
+            v162 = v138;
+        }
+        if (v162 == v138) {
+            if (v53.get(OdezKj + v86) == v89) {
+                p30(OdezKj, v147);
+            } elif (v53.get(OdezKj + v86) == v37) {
+                p2(OdezKj, v38 + v87);
+            } elif (v53.get(OdezKj + v86) == v14) {
+                v143.add(v53.get(OdezKj + v38 + v87));
+            } elif (v53.get(OdezKj + v86) == v184) {
+                p30(OdezKj, v206);
+            } elif (v53.get(OdezKj + v86) == v3) {
+                p2(OdezKj, v38 + v50);
+            } elif (v53.get(OdezKj + v86) == v164) {
+                v143.add(v53.get(OdezKj + v38 + v50));
+            } elif (v53.get(OdezKj + v86) == v131) {
+                p30(OdezKj, v88);
+            } elif (v53.get(OdezKj + v86) == v0) {
+                p2(OdezKj, v38 + v84);
+            } elif (v53.get(OdezKj + v86) == v25) {
+                v143.add(v53.get(OdezKj + v38 + v84));
+            } elif (v53.get(OdezKj + v86) == v154) {
+                p2(OdezKj, v38 + v190);
+            } elif (v53.get(OdezKj + v86) == v67) {
+                v143.add(v53.get(OdezKj + v38 + v190));
+            } elif (v53.get(OdezKj + v86) == v166) {
+                p30(OdezKj, v4);
+            } elif (v53.get(OdezKj + v86) == v137) {
+                p2(OdezKj, v38 + v38);
+            } elif (v53.get(OdezKj + v86) == v60) {
+                v143.add(v53.get(OdezKj + v38 + v38));
+            } elif (v53.get(OdezKj + v86) == v78) {
+                p2(OdezKj, v38 + v155);
+            } elif (v53.get(OdezKj + v86) == v31) {
+                v143.add(v53.get(OdezKj + v38 + v155));
+            } elif (v53.get(OdezKj + v86) == v24) {
+                p30(OdezKj, v115);
+            } elif (v53.get(OdezKj + v86) == v42) {
+                p2(OdezKj, v38 + v91);
+            } elif (v53.get(OdezKj + v86) == v83) {
+                v143.add(v53.get(OdezKj + v38 + v91));
+            } elif (v53.get(OdezKj + v86) == v118) {
+                p30(OdezKj, v104);
+            } elif (v53.get(OdezKj + v86) == v63) {
+                p2(OdezKj, v38 + v195);
+            } elif (v53.get(OdezKj + v86) == v142) {
+                v143.add(v53.get(OdezKj + v38 + v195));
+            } elif (v53.get(OdezKj + v86) == v64) {
+                p30(OdezKj, v143.length());
+            } elif (v53.get(OdezKj + v86) == v66) {
+                p30(OdezKj, v101);
+            } elif (v53.get(OdezKj + v86) == v170) {
+                p30(OdezKj, v29.get(v53.get(OdezKj + v177)));
+            } elif (v53.get(OdezKj + v86) == v49) {
+                p2(OdezKj, v38 + v51);
+            } elif (v53.get(OdezKj + v86) == v123) {
+                p30(OdezKj, v143.get(v53.get(OdezKj + v38 + v51)));
+            } elif (v53.get(OdezKj + v86) == v192) {
+                p2(OdezKj, v87);
+                p2(OdezKj, v110);
+                p30(OdezKj, join(v53.get(OdezKj + v110), v53.get(OdezKj + v87)));
+            } elif (v53.get(OdezKj + v86) == v168) {
+                p2(OdezKj, v110);
+                v101 = v53.get(OdezKj + v110);
+            } elif (v53.get(OdezKj + v86) == v69) {
+                v143.delete(v53.get(OdezKj + v38 + v86));
+            } elif (v53.get(OdezKj + v86) == v52) {
+                p9(OdezKj);
+                p41(v53.get(OdezKj + v38 + v177));
+            } else {
+                v162 = v126;
+            }
+        }
+        if (v162 == v126) {
+            if (v53.get(OdezKj + v86) == v79) {
+                p30(OdezKj, v17);
+            } elif (v53.get(OdezKj + v86) == v12) {
+                p9(OdezKj);
+                p3(v53.get(OdezKj + v38 + v51));
+            } elif (v53.get(OdezKj + v86) == v121) {
+                p9(OdezKj);
+                p15();
+            } elif (v53.get(OdezKj + v86) == v139) {
+                p30(OdezKj, v53.get(OdezKj + v38 + v86));
+            } elif (v53.get(OdezKj + v86) == v102) {
+                p2(OdezKj, v110);
+                v17 = v53.get(OdezKj + v110);
+            } elif (v53.get(OdezKj + v86) == v191) {
+                v53.set(OdezKj + v51, v53.get(OdezKj + v177));
+            } elif (v53.get(OdezKj + v86) == v28) {
+                p2(OdezKj, v110);
+                v101 += v53.get(OdezKj + v110);
+            } elif (v53.get(OdezKj + v86) == v182) {
+                p2(OdezKj, v110);
+                v4 = v53.get(OdezKj + v110);
+            } elif (v53.get(OdezKj + v86) == v103) {
+                p2(OdezKj, v110);
+                v147 += v53.get(OdezKj + v110);
+            } elif (v53.get(OdezKj + v86) == v201) {
+                p2(OdezKj, v110);
+                p30(OdezKj, !v53.get(OdezKj + v110));
+            } elif (v53.get(OdezKj + v86) == v156) {
+                p2(OdezKj, v110);
+                v205 = v53.get(OdezKj + v110);
+            } elif (v53.get(OdezKj + v86) == v165) {
+                p2(OdezKj, v110);
+                v205 += v53.get(OdezKj + v110);
+            } elif (v53.get(OdezKj + v86) == v23) {
+                p2(OdezKj, v110);
+                v104 += v53.get(OdezKj + v110);
+            } elif (v53.get(OdezKj + v86) == v128) {
+                p2(OdezKj, v110);
+                v4 += v53.get(OdezKj + v110);
+            } elif (v53.get(OdezKj + v86) == v181) {
+                p2(OdezKj, v110);
+                v125 += v53.get(OdezKj + v110);
+            } else {
+                v53.set(OdezKj + v51, v51);
+                Control.stopThisScript();
+            }
+        }
+    }
+
+    metadata p41 pos 48,240;
+    private void p41(g6sd8h) {
+        p27(v110, v51, v86, g6sd8h, "", "");
+    }
+
+    metadata p3 pos 48,432;
+    private void p3(ahCNWS) {
+        p27(v84, v195, v86, ahCNWS, "", "");
+    }
+
+    metadata p15 pos 48,624;
+    private void p15() {
+        p27(v192, v110, v51, "", "", "");
+    }
+
+    metadata p4 pos 48,816;
+    private void p4() {
+        p27(v181, v86, v51, "", "", "");
+    }
+
+    metadata p1 pos 48,1008;
+    private void p1(jnZy6v, IGCtzM) { // proccode p1 %b %s
+        p27(v127, v86, v177, jnZy6v, IGCtzM, "");
+    }
+
+    metadata p8 pos 48,1200;
+    private void p8(WqmVT2, AHkdMm, bL6Fu4) { // proccode p8 %b %s %s
+        p27(v74, v51, v110, WqmVT2, AHkdMm, bL6Fu4);
+    }
+
+    metadata p30 pos 48,1392;
+    private void p30(SPVYO7, eN9F0X) {
+        p17(v138, v158, v126, SPVYO7, eN9F0X);
+    }
+
+    metadata p2 pos 48,1584;
+    private void p2(ChaVaJ, rcb8XE) {
+        p17(v153, v172, v126, ChaVaJ, rcb8XE);
+    }
+
+    metadata p12 pos 48,1776;
+    private void p12(MmQ1fx, eleeQK) {
+        p17(v109, v167, v126, MmQ1fx, eleeQK);
+    }
+
+    metadata p9 pos 48,1968;
+    private void p9(KhH2ku) {
+        if (v53.get(KhH2ku + v190) == v86) {
+            v53.set(KhH2ku + v190, v51);
+            Control.broadcast(v53.get(KhH2ku + v84));
+        }
+    }
+
+    metadata p10 pos 48,2336;
+    private void p10(EjgoUg) {
+        while (1) {
+            p13(EjgoUg);
+            if (v53.get(EjgoUg + v51) == v51) {
+                v133.add(EjgoUg);
+                Control.stopThisScript();
+            }
+        }
+    }
+
+    metadata p27 pos 48,2800;
+    private void p27(lxbjlF, oKeZcu, BHipAh, Ol1jnR, nbUeNZ, G8685p) {
+        if (v133.length() > v51) {
+            v186 = v133.get(v133.length());
+            v133.delete(v133.length());
+        } else {
+            if (v196.get(1) + v67 > v122) {
+                v196.set(1, v51);
+            }
+            v196.set(1, v196.get(1) + v67);
+            v186 = v196.get(1) - v67 + v86;
+        }
+        v53.set(v186 + v190, v51);
+        v53.set(v186, lxbjlF);
+        v53.set(v186 + v50, v186 + v38 + BHipAh + oKeZcu);
+        v53.set(v186 + v38, v51);
+        if (BHipAh > v51) {
+            v53.set(v186 + v38, Ol1jnR);
+        } else {
+            v53.set(v186 + v38, v51);
+        }
+        if (BHipAh > v86) {
+            v53.set(v186 + v155, nbUeNZ);
+        } else {
+            v53.set(v186 + v155, v51);
+        }
+        if (BHipAh > v177) {
+            v53.set(v186 + v91, G8685p);
+        } else {
+            v53.set(v186 + v91, v51);
+        }
+        p10(v186);
+    }
+
+    metadata p11 pos 48,4408;
+    private void p11(vq42wv, GaCzhE) {
+        if (v133.length() > v51) {
+            v186 = v133.get(v133.length());
+            v133.delete(v133.length());
+        } else {
+            if (v196.get(1) + v67 > v122) {
+                v196.set(1, v51);
+            }
+            v196.set(1, v196.get(1) + v67);
+            v186 = v196.get(1) - v67 + v86;
+        }
+        v53.set(v186 + v190, v51);
+        v53.set(v186, vq42wv);
+        v53.set(v186 + v50, v186 + v38 + GaCzhE);
+        v53.set(v186 + v38, v51);
+        p10(v186);
+    }
+
+    metadata p18 pos 48,5312;
+    private void p18(MHtlow, lOOrYk) { // proccode p18 %b %s
+        p17(v72, v126, v126, MHtlow, lOOrYk);
+    }
+
+    metadata p36 pos 48,5504;
+    private void p36(Dhv5Zy) { // proccode p36 %b
+        p17(v55, v62, v138, Dhv5Zy, "");
+    }
+
+    metadata p24 pos 48,5696;
+    private void p24(ijNt01, cbenzj) {
+        v80.set(ijNt01 + v167, v80.get(ijNt01 + v167) + v138);
+        v80.set(v80.get(ijNt01 + v167), cbenzj);
+    }
+
+    metadata p40 pos 48,5976;
+    private void p40(yRrF0z, vJKMer) {
+        v80.set(yRrF0z + vJKMer, v80.get(v80.get(yRrF0z + v167)));
+        v80.set(yRrF0z + v167, v80.get(yRrF0z + v167) - v138);
+    }
+
+    metadata p7 pos 48,6264;
+    private void p7(qwTxxh, Kb62wJ) {
+        p23(qwTxxh);
+        v80.set(qwTxxh + v158, Kb62wJ);
+        v80.set(qwTxxh + v172, v138);
+    }
+
+    metadata p23 pos 48,6568;
+    private void p23(hRvav8) {
+        if (v80.get(hRvav8 + v172) == v138) {
+            v80.set(hRvav8 + v172, v62);
+            Control.broadcast(v80.get(hRvav8 + v158));
+        }
+    }
+
+    metadata p29 pos 48,6936;
+    private void p29(Heeepb) {
+        v146 = v19;
+        v80.set(Heeepb + v138, v197.get(v80.get(Heeepb + v62)));
+        v80.set(Heeepb + v126, v145.get(v80.get(Heeepb + v62)));
+        v80.set(Heeepb + v62, v80.get(Heeepb + v62) + v138);
+        if (v80.get(Heeepb + v138) == v138) {
+            p24(Heeepb, v80.get(Heeepb + v98 + v62));
+        } elif (v80.get(Heeepb + v138) == v126) {
+            p24(Heeepb, v50);
+        } elif (v80.get(Heeepb + v138) == v22) {
+            p40(Heeepb, v75);
+            p40(Heeepb, v22);
+            p24(Heeepb, v80.get(Heeepb + v22) + v80.get(Heeepb + v75));
+        } elif (v80.get(Heeepb + v138) == v75) {
+            p40(Heeepb, v98 + v22);
+        } elif (v80.get(Heeepb + v138) == v167) {
+            p24(Heeepb, v53.get(v80.get(Heeepb + v98 + v22)));
+        } elif (v80.get(Heeepb + v138) == v158) {
+            p24(Heeepb, v86);
+        } elif (v80.get(Heeepb + v138) == v172) {
+            p40(Heeepb, v98 + v75);
+        } elif (v80.get(Heeepb + v138) == v98) {
+            p40(Heeepb, v98 + v126);
+        } elif (v80.get(Heeepb + v138) == v120) {
+            v53.set(v80.get(Heeepb + v98 + v126), v80.get(Heeepb + v98 + v75));
+        } elif (v80.get(Heeepb + v138) == v203) {
+            p40(Heeepb, v98 + v167);
+        } elif (v80.get(Heeepb + v138) == v2) {
+            p24(Heeepb, v53.get(v80.get(Heeepb + v98 + v167)));
+        } elif (v80.get(Heeepb + v138) == v5) {
+            p24(Heeepb, v80.get(Heeepb + v98 + v138));
+        } elif (v80.get(Heeepb + v138) == v59) {
+            p40(Heeepb, v98 + v172);
+        } elif (v80.get(Heeepb + v138) == v34) {
+            p40(Heeepb, v98 + v158);
+        } elif (v80.get(Heeepb + v138) == v106) {
+            v53.set(v80.get(Heeepb + v98 + v158), v80.get(Heeepb + v98 + v172));
+        } elif (v80.get(Heeepb + v138) == v27) {
+            p23(Heeepb);
+            v80.set(Heeepb + v62, v62);
+            Control.stopThisScript();
+        } elif (v80.get(Heeepb + v138) == v178) {
+            p24(Heeepb, v53.get(v80.get(Heeepb + v98 + v75)));
+        } elif (v80.get(Heeepb + v138) == v180) {
+            v53.set(v80.get(Heeepb + v98 + v126), v80.get(Heeepb + v98 + v167));
+        } elif (v80.get(Heeepb + v138) == v8) {
+            p24(Heeepb, v53.get(v80.get(Heeepb + v98 + v172)));
+        } elif (v80.get(Heeepb + v138) == v46) {
+            p40(Heeepb, v75);
+            p40(Heeepb, v22);
+            p24(Heeepb, v80.get(Heeepb + v22) - v80.get(Heeepb + v75));
+        } elif (v80.get(Heeepb + v138) == v15) {
+            p40(Heeepb, v98 + v98);
+        } elif (v80.get(Heeepb + v138) == v68) {
+            v53.set(v80.get(Heeepb + v98 + v158), v80.get(Heeepb + v98 + v98));
+        } elif (v80.get(Heeepb + v138) == v152) {
+            p23(Heeepb);
+            p9(v80.get(Heeepb + v98 + v126));
+        } elif (v80.get(Heeepb + v138) == v153) {
+            p24(Heeepb, v84);
+        } elif (v80.get(Heeepb + v138) == v116) {
+            v53.set(v80.get(Heeepb + v98 + v22), v80.get(Heeepb + v98 + v75));
+        } elif (v80.get(Heeepb + v138) == v26) {
+            p24(Heeepb, v190);
+        } elif (v80.get(Heeepb + v138) == v129) {
+            v53.set(v80.get(Heeepb + v98 + v167), v80.get(Heeepb + v98 + v158));
+        } elif (v80.get(Heeepb + v138) == v93) {
+            p40(Heeepb, v22);
+            if (!v80.get(Heeepb + v22)) {
+                v80.set(Heeepb + v62, v80.get(Heeepb + v126));
+            }
+        } elif (v80.get(Heeepb + v138) == v198) {
+            p24(Heeepb, v82.get(v80.get(Heeepb + v126)));
+        } elif (v80.get(Heeepb + v138) == v1) {
+            p40(Heeepb, v75);
+            p40(Heeepb, v22);
+            p24(Heeepb, v80.get(Heeepb + v22) > v80.get(Heeepb + v75));
+        } else {
+            v146 += v44;
+        }
+        if (v146 == "") {
+            if (v80.get(Heeepb + v138) == v107) {
+                v80.set(Heeepb + v62, v80.get(Heeepb + v126));
+            } elif (v80.get(Heeepb + v138) == v130) {
+                p40(Heeepb, v75);
+                p40(Heeepb, v22);
+                p24(Heeepb, join(v80.get(Heeepb + v22), v80.get(Heeepb + v75)));
+            } elif (v80.get(Heeepb + v138) == v151) {
+                v113.add(v80.get(Heeepb + v98 + v126));
+            } elif (v80.get(Heeepb + v138) == v132) {
+                p40(Heeepb, v22);
+                v12 = v80.get(Heeepb + v22);
+            } elif (v80.get(Heeepb + v138) == v194) {
+                p40(Heeepb, v22);
+                v88 = v80.get(Heeepb + v22);
+            } elif (v80.get(Heeepb + v138) == v200) {
+                p40(Heeepb, v22);
+                v88 += v80.get(Heeepb + v22);
+            } elif (v80.get(Heeepb + v138) == v189) {
+                p40(Heeepb, v22);
+                v17 = v80.get(Heeepb + v22);
+            } elif (v80.get(Heeepb + v138) == v47) {
+                v133.add(v80.get(Heeepb + v98 + v22));
+            } elif (v80.get(Heeepb + v138) == v179) {
+                p40(Heeepb, v22);
+                v177 = v80.get(Heeepb + v22);
+            } elif (v80.get(Heeepb + v138) == v20) {
+                p40(Heeepb, v22);
+                v38 = v80.get(Heeepb + v22);
+            } elif (v80.get(Heeepb + v138) == v10) {
+                p40(Heeepb, v22);
+                v38 += v80.get(Heeepb + v22);
+            } elif (v80.get(Heeepb + v138) == v85) {
+                p40(Heeepb, v22);
+                v182 = v80.get(Heeepb + v22);
+            } elif (v80.get(Heeepb + v138) == v73) {
+                p40(Heeepb, v22);
+                v103 += v80.get(Heeepb + v22);
+            } elif (v80.get(Heeepb + v138) == v97) {
+                p40(Heeepb, v22);
+                p24(Heeepb, !v80.get(Heeepb + v22));
+            } elif (v80.get(Heeepb + v138) == v204) {
+                p40(Heeepb, v22);
+                v39 += v80.get(Heeepb + v22);
+            } elif (v80.get(Heeepb + v138) == v117) {
+                p40(Heeepb, v22);
+                v168 = v80.get(Heeepb + v22);
+            } elif (v80.get(Heeepb + v138) == v176) {
+                p40(Heeepb, v22);
+                v201 += v80.get(Heeepb + v22);
+            } elif (v80.get(Heeepb + v138) == v9) {
+                p40(Heeepb, v22);
+                v6 = v80.get(Heeepb + v22);
+            } elif (v80.get(Heeepb + v138) == v94) {
+                p40(Heeepb, v22);
+                v6 += v80.get(Heeepb + v22);
+            } else {
+                v80.set(Heeepb + v62, v62);
+                Control.stopThisScript();
+            }
+        }
+    }
+
+    metadata p31 pos 160,18794;
+    private void p31(k4hE4Z) {
+        while (1) {
+            p29(k4hE4Z);
+            if (v80.get(k4hE4Z + v62) == v62) {
+                v150.add(k4hE4Z);
+                Control.stopThisScript();
+            }
+        }
+    }
+
+    metadata p17 pos 48,19136;
+    private void p17(xudU7s, lcHbxt, ip2ZvR, UxgvCt, UfUpyZ) {
+        if (v150.length() > v62) {
+            v36 = v150.get(v150.length());
+            v150.delete(v150.length());
+        } else {
+            if (v18.get(1) + v207 > v141) {
+                v18.set(1, v62);
+            }
+            v18.set(1, v18.get(1) + v207);
+            v36 = v18.get(1) - v207 + v138;
+        }
+        v80.set(v36 + v172, v62);
+        v80.set(v36, xudU7s);
+        v80.set(v36 + v167, v36 + v98 + ip2ZvR + lcHbxt);
+        v80.set(v36 + v98, v62);
+        if (ip2ZvR > v62) {
+            v80.set(v36 + v98, UxgvCt);
+        } else {
+            v80.set(v36 + v98, v62);
+        }
+        if (ip2ZvR > v138) {
+            v80.set(v36 + v120, UfUpyZ);
+        } else {
+            v80.set(v36 + v120, v62);
+        }
+        p31(v36);
+    }
+
+    metadata p33 pos 48,20512;
+    private void p33(Q4wHc1, xrWaHg) {
+        if (v150.length() > v62) {
+            v36 = v150.get(v150.length());
+            v150.delete(v150.length());
+        } else {
+            if (v18.get(1) + v207 > v141) {
+                v18.set(1, v62);
+            }
+            v18.set(1, v18.get(1) + v207);
+            v36 = v18.get(1) - v207 + v138;
+        }
+        v80.set(v36 + v172, v62);
+        v80.set(v36, Q4wHc1);
+        v80.set(v36 + v167, v36 + v98 + xrWaHg);
+        v80.set(v36 + v98, v62);
+        p31(v36);
+    }
+
+    metadata p6 pos 48,21416;
+    private void p6(N2tLTZ) {
+        v148.add(join(v61, v11));
+        v13.add(join(v111, v71));
+        v196.add(join(v171, v169));
+    }
+
+    metadata p32 pos 48,21704;
+    private void p32(MOgktE, ilKyyn) {
+        repeat (9) {
+            v182 += "";
+        }
+        repeat (9) {
+            v126 += "";
+        }
+        v141 = ilKyyn;
+        repeat (6) {
+            v206 += "";
+        }
+        v201 = ilKyyn;
+        v113.add(join(v57, v163));
+    }
+
+    metadata p26 pos 0,22504;
+    private void p26(DuuRJF) {
+        v101 = 0;
+        v90.add(join(24, 31));
+    }
+
+    metadata p21 pos 0,24504;
+    private void p21(aq7VEi) { // proccode p21 %b
+        v160 -= 1;
+        v29.add(join(92, 39));
+        if (!aq7VEi) {
+            v122 += 1;
+        }
+        repeat (6) {
+            v4 += 1;
+        }
+        if (!aq7VEi) {
+            v124 += 1;
+        }
+        repeat (5) {
+            v137 += 1;
+        }
+        if (!aq7VEi) {
+            v121 += 1;
+        }
+    }
+}

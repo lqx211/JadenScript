@@ -1,0 +1,145 @@
+// A character-cell terminal on the pen layer.
+//
+// The glyphs and the geometry are the console's from the rv64 and i386 projects:
+// `userspace/{rv64,i386}/display.jsw` paint a grid of 8 x 16 cells -- a 15 row
+// glyph and a blank row -- out of the CP437 bitmap in `assets/lists/font.jsa`,
+// and this is that grid on the pen layer instead of in a video buffer (80 x 30
+// cells at scale 1 is 60 x 22 here, because the stage is 480 x 360 and not
+// 640 x 480). The glyphs are the same bytes, pre-decoded into horizontal runs by
+// tools/font_runs.py, because the console walks 120 bits of a glyph box at run
+// time and a page of text cannot afford that. Added here: a cursor, an ink and a
+// paper colour, inverse video, a frame.
+//
+// It is a *body include*, not a module of its own: the piano class says
+// `include "terminal.inc.jsw"` inside its own braces, so the terminal's block
+// and variables land on the sprite that already owns the pen layer.
+// Scratch can only call a custom block on the sprite it is already running in,
+// and a pen layer belongs to one sprite, so a terminal that lives in its own
+// sprite would be unable to draw on the layer the page is painted onto.
+//
+// The grid is a screen, not a buffer: every write is pen strokes. A page is
+// therefore painted whole when it changes and left alone otherwise (see
+// settings.jsw); 22 rows of 60 characters is around four thousand strokes, which
+// is a fine one-off and far too much once per frame.
+
+public Term.size = 1;            // glyph scale: 1 = 8 x 15, the console's own size
+public Term.cols = 60;           // cells across, from the stage size and the scale
+public Term.rows = 21;
+public Term.col = 0;             // the cursor, 0-based
+public Term.row = 0;
+public Term.ink = "#c8d2dc";
+public Term.paper = "#0b0f13";
+public Term.text = "";           // the string builder's result
+/* A row is `Term.pitch` pixels, not the 16 a console uses. A CP437 glyph's ink
+ * is twelve rows deep -- capitals above the baseline, descenders four below --
+ * so the air between two lines is `pitch - 12`: none at twelve, four at sixteen,
+ * six at eighteen. Seventeen is the compromise: five pixels of air, and the
+ * stage still holds twenty-one rows on a 480 x 360 screen. */
+public Term.pitch = 17;          // pixels from one baseline to the next
+
+private _tX;
+private _tY;
+private _ti;
+
+// 480 x 360 of stage, cells of 8 x 16 pixels at scale 1.
+private void termScale(size) { // warp
+    Term.size = size;
+    Term.cols = Operators.math("floor", 480 / (8 * size));
+    Term.rows = Operators.math("floor", 360 / (Term.pitch * size));
+}
+
+// The glyph's top-left corner. A row is 16 x scale tall and the glyph fills 15
+// of it, which is the blank line the console leaves between rows.
+private void termAt(col, row) { // warp
+    _tX = -240 + col * 8 * Term.size;
+    _tY = 180 - 4 * Term.size - row * Term.pitch * Term.size;
+}
+
+private void termInk(ink) {
+    Term.ink = ink;
+}
+
+private void termCursor(col, row) {
+    Term.col = col;
+    Term.row = row;
+}
+
+// The whole stage in one colour: six 60 px bands, y +180 down to -180. Thick
+// pen lines are how a pen layer fills -- there is no rectangle block.
+private void termFill(hex) { // warp
+    Pen.setPenColor(hex);
+    Pen.setPenSize(60);
+    _tY = 150;
+    repeat (6) {
+        Motion.setXY(-240, _tY);
+        Pen.penDown();
+        Motion.x = 240;
+        Pen.penUp();
+        _tY -= 60;
+    }
+}
+
+// Inverse video for one row: a bar behind the text.
+private void termBar(col, row, cols, hex) { // warp
+    termAt(col, row);
+    Pen.setPenColor(hex);
+    Pen.setPenSize(16 * Term.size - 2);
+    Motion.setXY(_tX, _tY - 7 * Term.size);
+    Pen.penDown();
+    Motion.x = _tX + cols * 8 * Term.size;
+    Pen.penUp();
+}
+
+private void termWrite(message) { // warp
+    termAt(Term.col, Term.row);
+    text(message, _tX, _tY, Term.ink, Term.size);
+    Term.col += Operators.length(message);
+}
+
+private void termWriteAt(col, row, message) { // warp
+    Term.col = col;
+    Term.row = row;
+    termWrite(message);
+}
+
+// `ch` repeated n times, into Term.text: there is no `repeat string` block.
+private void termRepeat(ch, n) {
+    Term.text = "";
+    _ti = 0;
+    while (_ti < n) {
+        Term.text = join(Term.text, ch);
+        _ti += 1;
+    }
+}
+
+// `s` with spaces appended until it is n characters wide, into Term.text. Every
+// column in a page is built with this, so a field cannot shift a frame.
+private void termPad(s, n) {
+    Term.text = s;
+    while (Operators.length(Term.text) < n) {
+        Term.text = join(Term.text, " ");
+    }
+}
+
+// `s` right-aligned in n characters, into Term.text: numbers line up only if
+// their units do, and a field that grows by a digit must not move the frame.
+private void termRight(s, n) {
+    Term.text = s;
+    while (Operators.length(Term.text) < n) {
+        Term.text = join(" ", Term.text);
+    }
+}
+
+// A box of `cols` x `rows` cells with its top-left corner at (col, row). ASCII
+// only: the font carries the whole printable set, box-drawing glyphs it does not.
+private void termFrame(col, row, cols, rows) { // warp
+    termRepeat("-", cols - 2);
+    termWriteAt(col, row, join("+", join(Term.text, "+")));
+    termWriteAt(col, row + rows - 1, join("+", join(Term.text, "+")));
+    _ti = 1;
+    while (_ti < rows - 1) {
+        termWriteAt(col, row + _ti, "|");
+        termWriteAt(col + cols - 1, row + _ti, "|");
+        _ti += 1;
+    }
+}

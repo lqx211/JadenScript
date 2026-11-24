@@ -1,0 +1,483 @@
+// The settings page, drawn with the terminal in terminal.inc.jsw.
+//
+// The example project (userspace/MIDIPlayer_Example_3DKeyboard.sb3) keeps its
+// switches in Stage variables and every one this player also has is here:
+//
+//     FOV            -> FOV                    (its `FOV` / `Y`, both 150)
+//     発音時発光      -> GLOW ON NOTE-ON
+//     piano          -> KEYBOARD
+//     テキスト表示モード -> HUD
+//     発音時ラグ軽量化  -> (dropped: the note filter it toggled is gone -- every
+//                          note is played now, see core.jsw `dispatch`)
+//     Note speed     -> HORIZON + DEPTH        (it has one; the road here is
+//                                               two, see main.jsw)
+//
+// and the sound source, which the example does not have.
+//
+// DEFAULT is the sample bank: one clone per note playing its own sample, with
+// GM programs 0..7 taken from the 3D keyboard example's own 128 per-key piano
+// samples (make np5-piano) -- the timbre that project is known for, at the price
+// of a big sprite.
+//
+// SCRATCH is what the example does: `Music.playNote` with the music extension's
+// 21 instruments, capped at 30 notes at a time on scratch.mit.edu
+// (`CONCURRENCY_LIMIT`, enforced when `miscLimits` is on), so it is a comparison
+// mode, not the one to perform with. See native.jsw.
+//
+// The example's other switches have no switch here because there is nothing on
+// the other side of them: `Render mode` and `88key` are fixed (mode 3, all 128
+// keys), `option` and `play speed` are the song's own tempo (the clock reads
+// the tempo events), `白鍵と黒鍵` only recolours the keys, and program change is
+// always honoured.
+//
+// Keys: up/down move, left/right change, space toggles, s shows or hides the
+// page, enter closes it, q stops everything.
+
+private _sk;                       // the key down now
+private _s1;
+private _s2;
+private _sn;                       // the settings loop counter
+
+private void settingsOpen() {
+    Set.open = 1;
+    Set.dirty = 1;                 // paint it on the next frame, not in half a second
+}
+
+private void settingsClose() {
+    Set.open = 0;
+    // The stage is about to be repainted by the 3D loop, and its gate compares
+    // the clock with the time of its own last frame -- which the page did not
+    // touch. Losing a run's worth of minutes that way is a blank screen.
+    Piano.drawn = -1;
+}
+
+// One press is one action: the key is acted on when it goes down, not while it
+// stays down, so holding an arrow does not run the cursor off the page.
+private void settingsPoll() {
+    if (Load.ask == 1) {
+        Set.held = "";             // the input box owns the keyboard
+        return;
+    }
+    _sk = "";
+    if (Sensing.keyPressed("left arrow")) {
+        _sk = "l";
+    } elif (Sensing.keyPressed("right arrow")) {
+        _sk = "r";
+    } elif (Sensing.keyPressed("up arrow")) {
+        _sk = "u";
+    } elif (Sensing.keyPressed("down arrow")) {
+        _sk = "d";
+    } elif (Sensing.keyPressed("space")) {
+        _sk = "_";
+    } elif (Sensing.keyPressed("enter")) {
+        _sk = "e";
+    } elif (Sensing.keyPressed("s")) {
+        _sk = "s";
+    } elif (Sensing.keyPressed("q")) {
+        _sk = "q";
+    } elif (Sensing.keyPressed("d")) {
+        // `dbg`, not `D`: this language's `=` is the engine's, and the engine
+        // compares strings case-insensitively, so `"D" = "d"` is true and the
+        // letter would have shared a marker with the down arrow -- pressing the
+        // arrow down to move the cursor would have opened the debug page.
+        _sk = "dbg";
+    }
+    if (_sk == Set.held) {
+        return;
+    }
+    Set.held = _sk;
+    if (_sk == "") {
+        return;
+    }
+    if (_sk == "q") {
+        // Quit: the red button, but from the keyboard. The pen layer keeps the
+        // last frame, so the page stays up to be read.
+        Set.open = 0;
+        Control.stopAll();
+        return;
+    }
+    if (_sk == "s") {
+        if (Set.open == 1) {
+            settingsClose();
+        } else {
+            settingsOpen();
+        }
+        return;
+    }
+    if (_sk == "dbg") {
+        // The debug page is a read-out, so it can be up while a song plays: it
+        // takes the layer the settings page takes, and closes the page it
+        // overlaps with so only one of them is ever drawing.
+        if (Set.debug == 1) {
+            Set.debug = 0;
+        } else {
+            Set.debug = 1;
+            Set.open = 0;
+        }
+        Set.dirty = 1;
+        return;
+    }
+    if (_sk == "e") {
+        if (Set.open == 1) {
+            settingsClose();
+        }
+        return;
+    }
+    // The rest only mean something on the page: the arrows and space are not
+    // part of playing a song.
+    if (Set.open == 0) {
+        return;
+    }
+    if (_sk == "u") {
+        Set.cursor -= 1;
+        if (Set.cursor < 1) {
+            Set.cursor = Set.rows;
+        }
+        Set.dirty = 1;
+    } elif (_sk == "d") {
+        Set.cursor += 1;
+        if (Set.cursor > Set.rows) {
+            Set.cursor = 1;
+        }
+        Set.dirty = 1;
+    } elif (_sk == "l") {
+        settingsAdjust(-1);
+    } elif (_sk == "r") {
+        settingsAdjust(1);
+    } elif (_sk == "_") {
+        settingsToggle();
+    }
+}
+
+// The three numbers step by a tenth of their range and stop at the ends: a
+// horizon of one tick or ten thousand is a blank screen either way.
+private void settingsAdjust(dir) {
+    if (Set.cursor == 1) {
+        Piano.horizon += dir * 10;
+        if (Piano.horizon < 20) {
+            Piano.horizon = 20;
+        }
+        if (Piano.horizon > 1000) {
+            Piano.horizon = 1000;
+        }
+    } elif (Set.cursor == 2) {
+        Piano.depth += dir * 50;
+        if (Piano.depth < 100) {
+            Piano.depth = 100;
+        }
+        if (Piano.depth > 2000) {
+            Piano.depth = 2000;
+        }
+    } elif (Set.cursor == 3) {
+        Piano.fov += dir * 10;
+        if (Piano.fov < 50) {
+            Piano.fov = 50;
+        }
+        if (Piano.fov > 400) {
+            Piano.fov = 400;
+        }
+    } elif (Set.cursor == 8) {
+        Mix.master += dir * 5;
+        if (Mix.master < 0) {
+            Mix.master = 0;
+        }
+        if (Mix.master > 100) {
+            Mix.master = 100;
+        }
+        Mix.epoch += 1;
+    } elif (Set.cursor == 9) {
+        Mix.masterPan += dir * 10;
+        if (Mix.masterPan < -100) {
+            Mix.masterPan = -100;
+        }
+        if (Mix.masterPan > 100) {
+            Mix.masterPan = 100;
+        }
+        Mix.epoch += 1;
+    } elif (Set.cursor == 10) {
+        Mix.masterPitch += dir * 10;
+        if (Mix.masterPitch < -1200) {
+            Mix.masterPitch = -1200;
+        }
+        if (Mix.masterPitch > 1200) {
+            Mix.masterPitch = 1200;
+        }
+        Mix.epoch += 1;
+    } else {
+        // A switch changes on either arrow as well as on space: a list of
+        // booleans where left and right do nothing is a page that looks broken.
+        settingsToggle();
+    }
+    Set.dirty = 1;
+}
+
+private void settingsToggle() {
+    if (Set.cursor == 4) {
+        Set.sound = 1 - Set.sound;
+    } elif (Set.cursor == 5) {
+        Set.glow = 1 - Set.glow;
+    } elif (Set.cursor == 6) {
+        Set.keys = 1 - Set.keys;
+    } elif (Set.cursor == 7) {
+        Set.hud = 1 - Set.hud;
+    }
+    Set.dirty = 1;
+}
+
+private void settingsLabel(n) {
+    if (n == 1) {
+        Term.text = "HORIZON (TICKS)";
+    } elif (n == 2) {
+        Term.text = "DEPTH (UNITS)";
+    } elif (n == 3) {
+        Term.text = "FOV";
+    } elif (n == 4) {
+        Term.text = "SOUND MODE";
+    } elif (n == 5) {
+        Term.text = "GLOW ON NOTE-ON";
+    } elif (n == 6) {
+        Term.text = "KEYBOARD";
+    } elif (n == 7) {
+        Term.text = "HUD";
+    } elif (n == 8) {
+        Term.text = "VOLUME";
+    } elif (n == 9) {
+        Term.text = "PAN";
+    } else {
+        Term.text = "PITCH (SEMITONES)";
+    }
+}
+
+private void settingsValue(n) {
+    if (n == 1) {
+        Term.text = join("", Piano.horizon);
+    } elif (n == 2) {
+        Term.text = join("", Piano.depth);
+    } elif (n == 3) {
+        Term.text = join("", Piano.fov);
+    } elif (n == 4) {
+        if (Set.sound == 1) {
+            Term.text = "SCRATCH";
+        } else {
+            Term.text = "DEFAULT";
+        }
+    } elif (n == 8) {
+        Term.text = join("", Mix.master);
+    } elif (n == 9) {
+        // "L20" / "C" / "R35", the way a mixer writes it: a bare negative
+        // number beside a VOLUME row reads as something broken.
+        _s1 = "C";
+        if (Mix.masterPan < 0) {
+            _s1 = join("L", Operators.round(-1 * Mix.masterPan));
+        }
+        if (Mix.masterPan > 0) {
+            _s1 = join("R", Operators.round(Mix.masterPan));
+        }
+        Term.text = _s1;
+    } elif (n == 10) {
+        // Tenths to whole semitones, with a sign: 0 is "0", not "+0".
+        _s1 = join("", Operators.round(Mix.masterPitch / 10));
+        if (Mix.masterPitch > 0) {
+            _s1 = join("+", _s1);
+        }
+        Term.text = _s1;
+    } else {
+        _s1 = "OFF";
+        if (n == 5 && Set.glow == 1) {
+            _s1 = "ON";
+        }
+        if (n == 6 && Set.keys == 1) {
+            _s1 = "ON";
+        }
+        if (n == 7 && Set.hud == 1) {
+            _s1 = "ON";
+        }
+        Term.text = _s1;
+    }
+}
+
+// One row of the page: marker, label, value, and a bar behind the selected one.
+// The selected row is drawn in white on the bar; the rest in a grey that still
+// reads on the paper.
+private void settingsLine(n) { // warp
+    _s2 = "   ";
+    if (Set.cursor == n) {
+        _s2 = " > ";
+    }
+    settingsLabel(n);
+    _s1 = Term.text;
+    termPad(join(_s2, _s1), 26);
+    _s2 = Term.text;
+    settingsValue(n);
+    _s1 = Term.text;
+    termRight(_s1, 12);
+    termPad(join(_s2, Term.text), 50);
+    _s1 = Term.text;
+    if (Set.cursor == n) {
+        termBar(4, 4 + n, 52, "#1e3347");
+        termInk("#ffffff");
+    } else {
+        termInk("#9fb2c4");
+    }
+    termWriteAt(5, 4 + n, _s1);
+}
+
+private void settingsPage() { // warp
+    termScale(1);
+    termFill(Term.paper);
+    termInk("#3d556b");
+    // Nineteen rows tall, not seventeen: the three parameter rows are drawn at
+    // y = 12..14, and the live lines have to clear them.
+    termFrame(4, 2, 52, 18);
+    termInk("#ffffff");
+    termWriteAt(6, 3, "NOTE PLAYER V5  -  SETTINGS");
+    termInk("#5d7386");
+    termWriteAt(36, 3, "UP/DN MOVE");
+    // `_sn`, not a shared temporary: `settingsLine` rebuilds the strings, and a
+    // counter that is also a string scratch is a loop that never ends -- inside
+    // `// warp` that is the whole project, not a missing frame.
+    _sn = 1;
+    while (_sn <= Set.rows) {
+        settingsLine(_sn);
+        _sn += 1;
+    }
+    // The live line: what the player is doing while these knobs are turned.
+    _s1 = join("TICK ", join(Tick.tick, join("/", Song.ticks)));
+    _s1 = join(_s1, join("   NOTES ", Player.notesPlayed));
+    _s1 = join(_s1, join("   VOICES ", Player.voices));
+    termInk("#5d7386");
+    termWriteAt(6, 16, _s1);
+    _s1 = join("BPM ", join(Operators.round(Player.midiSpeed), join("   FPS ", Piano.fps)));
+    _s1 = join(_s1, join("   SKIPPED ", Player.skipped));
+    termWriteAt(6, 17, _s1);
+    termInk("#7f95a8");
+    termWriteAt(6, 18, "L/R CHANGE   SPACE TOGGLE   ENTER CLOSE");
+    termWriteAt(6, 19, "S HIDE PAGE   Q QUIT");
+}
+
+// ---- the debug page --------------------------------------------------------
+//
+// Sixty columns by twenty rows: the terminal's own size, measured from the stage
+// rather than assumed, so this page and the settings page can never disagree
+// about how wide a column is. It is drawn at the top left, where the HUD's clock
+// sits, and it is transparent -- the piano keeps playing behind it.
+//
+// The numbers are read straight out of the lists the player keeps -- this is a
+// read-out, not a second implementation. Two of the columns are permanently
+// zero on purpose: the converter bakes CC7/10/1/64/11 and nothing else, so
+// reverb, chorus, variation and the two bank bytes have no source yet. They are
+// printed anyway, because "the controller never arrived" and "the player drops
+// it" are different bugs and a blank column cannot tell them apart.
+
+// `seconds` as mm:ss.cc, into Term.text. Tens of seconds, because a debug page
+// that shows 00:00:00 while the song plays is worse than no page at all.
+private void dbgClock(seconds) {
+    _ds = Operators.round(seconds * 100);
+    _cs = _ds % 100;
+    _ss = Operators.math("floor", _ds / 100) % 60;
+    _mm = Operators.math("floor", _ds / 6000);
+    // A custom block cannot return a value here -- every method is a Scratch
+    // block -- so the pieces are joined as they are produced.
+    dbg2(_mm);
+    _dbg = Term.text;
+    dbg2(_ss);
+    _dbg = join(_dbg, join(":", Term.text));
+    dbg2(_cs);
+    Term.text = join(_dbg, join(".", Term.text));
+}
+
+// two digits, zero padded, into Term.text
+private void dbg2(n) {
+    _dn = Operators.round(n);
+    if (_dn < 10) {
+        Term.text = join("0", _dn);
+    } else {
+        Term.text = join("", _dn);
+    }
+}
+
+// `n` right-aligned in `w` columns, into Term.text
+private void dbgNum(n, w) {
+    termRight(join("", Operators.round(n)), w);
+}
+
+private void dbgPage() { // warp
+    termScale(1);
+    // No paper and no frame: this block is drawn *over* the scene, and the piano
+    // behind it is the point. The render loop clears the layer and paints the
+    // picture immediately before calling this, so the text is simply drawn again
+    // on top -- and because the layer is taken away every repaint, the read-out
+    // refreshes at the picture's rate rather than on a gate of its own.
+    //
+    // The five controller columns the converter does not bake are left out
+    // instead of printed as permanent zeros: a column that cannot move teaches
+    // nothing, and every glyph here is pen strokes over a moving photograph.
+    //
+    // The clock, the tick, the tempo and the skip counter on the first line.
+    termInk("#7f95a8");
+    dbgClock(Tick.tick * Tick.seconds);
+    _s1 = Term.text;
+    dbgClock(Song.ticks * Tick.seconds);
+    termWriteAt(0, 0, join(_s1, join("/", Term.text)));
+    termInk("#5d7386");
+    termWriteAt(18, 0, join(" TICK:", join(Tick.tick, join("/", Song.ticks))));
+    termWriteAt(34, 0, join(" BPM:", Operators.round(Player.midiSpeed)));
+    termWriteAt(45, 0, join(" SK:", Player.skipped));
+    // How fast it runs and how much it is holding, on the second.
+    termInk("#ffffff");
+    termWriteAt(0, 1, join("FPS:", Piano.fps));
+    termWriteAt(14, 1, join("NPS:", Operators.round(Player.nps)));
+    termWriteAt(23, 1, join("P:", Player.voices));
+    termInk("#5d7386");
+    termWriteAt(28, 1, join("MAX:", Player.maxVoices));
+    termWriteAt(40, 1, join("NOTES:", Player.notesPlayed));
+    // The sixteen channels. The header is built with the same padders the rows
+    // are, at the same widths, so a label cannot drift off the column under it.
+    termInk("#7f95a8");
+    termPad("Ch", 2);
+    _s1 = Term.text;
+    termRight("Voice", 6);
+    _s1 = join(_s1, Term.text);
+    termRight("Pitch", 7);
+    _s1 = join(_s1, Term.text);
+    termRight("Pan", 4);
+    _s1 = join(_s1, Term.text);
+    termRight("Exp", 4);
+    _s1 = join(_s1, Term.text);
+    termRight("Vol", 4);
+    _s1 = join(_s1, Term.text);
+    termRight("Mod", 4);
+    _s1 = join(_s1, Term.text);
+    termRight("Prgm", 5);
+    termWriteAt(0, 2, join(_s1, Term.text));
+    _i = 1;
+    while (_i <= 16) {
+        if (_i % 2 == 1) {
+            termInk("#e2ebf3");
+        } else {
+            termInk("#9fb4c6");
+        }
+        dbg2(_i);
+        _s1 = Term.text;
+        dbgNum(Mix.active.get(_i), 6);
+        _s1 = join(_s1, Term.text);
+        dbgNum(Mix.bend.get(_i), 7);
+        _s1 = join(_s1, Term.text);
+        dbgNum(Mix.pan.get(_i), 4);
+        _s1 = join(_s1, Term.text);
+        dbgNum(Mix.expr.get(_i), 4);
+        _s1 = join(_s1, Term.text);
+        dbgNum(Mix.vol.get(_i), 4);
+        _s1 = join(_s1, Term.text);
+        dbgNum(Mix.mod.get(_i), 4);
+        _s1 = join(_s1, Term.text);
+        dbgNum(Mix.prog.get(_i), 5);
+        _s1 = join(_s1, Term.text);
+        termWriteAt(0, _i + 2, _s1);
+        _i += 1;
+    }
+    termInk("#5d7386");
+    termWriteAt(0, 19, "D CLOSE  S SETTINGS  Q QUIT");
+    termWriteAt(30, 19, "Rvb/Crs/Vra/Bank: no source");
+}
+

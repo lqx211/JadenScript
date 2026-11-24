@@ -25,6 +25,13 @@
  * a list with a divide and a shift for every read; here a byte read is one
  * `Uint8Array` index, which is also why the TurboWarp build is the fast one.
  */
+/* Character code -> value, -1 for anything that is not a hex digit. A table
+ * lookup is the whole of the decoder: `parseInt` allocates a string and runs a
+ * parser for every byte, and an image is sixteen million bytes. */
+const HEX = new Int8Array(128).fill(-1);
+for (let i = 0; i < 10; i++) { HEX[48 + i] = i; }
+for (let i = 0; i < 6; i++) { HEX[97 + i] = 10 + i; HEX[65 + i] = 10 + i; }
+
 class I386Mem {
     constructor(runtime) {
         this.runtime = runtime;
@@ -32,6 +39,7 @@ class I386Mem {
         this.view = new DataView(this.buf.buffer);
         this.reads = 0;
         this.writes = 0;
+        this.badHex = 0;                // replies that were not `D <hex>`
     }
 
     getInfo() {
@@ -112,10 +120,16 @@ class I386Mem {
                     text: 'load hex [TEXT] into the disk at [ADDR]'
                 },
                 {
-                    opcode: 'diskwords',
+                    opcode: 'diskread16',
+                    blockType: Scratch.BlockType.REPORTER,
+                    text: 'disk word at [ADDR]',
+                    arguments: { ADDR: number(0) }
+                },
+                {
+                    opcode: 'diskcopy',
                     blockType: Scratch.BlockType.COMMAND,
-                    text: 'fill [LIST] with [COUNT] disk words at [ADDR]',
-                    arguments: { COUNT: number(256), ADDR: number(0) }
+                    text: 'copy [LEN] disk bytes at [LBA] to memory at [ADDR]',
+                    arguments: { LEN: number(512), LBA: number(0), ADDR: number(0) }
                 },
                 {
                     opcode: 'diskread8',
@@ -266,48 +280,85 @@ class I386Mem {
         return bytes;
     }
 
-    /* A reply from tools/i386_disk.py is `D <hex>`: one sector, or sixty-four
-     * of them if the request asked for that many. Decoding it here is the
-     * difference between a boot and an afternoon -- the same text parsed with
-     * `letterOf` in Scratch is a hundred thousand blocks a message.
+    /* A reply from tools/i386_disk.py is `D <hex>`: one sector, or as many as
+     * the request asked for. Decoding it here is the difference between a boot
+     * and an afternoon -- the same text parsed with `letterOf` in Scratch is a
+     * hundred thousand blocks a message, and `parseInt` twice a byte is a
+     * sixteen megabyte image decoded a character at a time.
      */
     hexload(args) {
         if (!this.disk) {
             return;
         }
-        let text = String(args.TEXT || "");
-        if (text.charCodeAt(0) === 68 && text.charCodeAt(1) === 32) {
-            text = text.slice(2);           // "D "
+        const text = String(args.TEXT === undefined ? "" : args.TEXT);
+        /* A reply, or nothing. Anything else used to be decoded anyway, and the
+         * only symptom of a caller that had its two arguments the wrong way
+         * round was a boot sector whose signature never arrived -- the pull
+         * counted every sector and the image stayed empty. */
+        if (text.charCodeAt(0) !== 68 || text.charCodeAt(1) !== 32) {
+            this.badHex += 1;
+            return;
         }
         const at = Number(args.ADDR) >>> 0;
-        const count = Math.min(text.length >> 1, this.disk.length - at);
-        for (let i = 0; i < count; i++) {
-            this.disk[at + i] = parseInt(text.substr(i * 2, 2), 16) || 0;
+        if (at >= this.disk.length) {
+            return;
+        }
+        const chars = text.length - 2;
+        const count = Math.min(chars >> 1, this.disk.length - at);
+        const table = HEX;
+        for (let i = 0, p = 2; i < count; i++, p += 2) {
+            const hi = table[text.charCodeAt(p)];
+            const lo = table[text.charCodeAt(p + 1)];
+            if (hi < 0 || lo < 0) {
+                this.badHex += 1;
+                return;
+            }
+            this.disk[at + i] = (hi << 4) | lo;
         }
         this.writes += count;
     }
 
-    /* One sector into the ATA data register, in one call. The data register
-     * hands the guest a word at a time, so the drive has to hold 256 of them;
-     * filling them with `diskread8` twice each is 768 blocks a sector, and
-     * thirty thousand sectors of that is a frozen tab, not a boot.
+    /* One word of the drive, the way the ATA data register hands it over: little
+     * endian, two bytes at a time, so the 0xAA55 at the end of a boot sector is
+     * the word 0xAA55 and not 0x55AA.
+     *
+     * The drive is read straight out of this buffer rather than copied into a
+     * Scratch list first. A list cannot be written from here -- the VM hands an
+     * extension the list's contents, not the list -- so a copy through one
+     * silently did nothing and every sector read back as zeros.
      */
-    diskwords(args) {
-        const list = args.LIST;
-        if (!this.disk || !list || typeof list.replace !== "function") {
+    diskread16(args) {
+        const at = Number(args.ADDR) >>> 0;
+        if (!this.disk || at + 1 >= this.disk.length) {
+            return 0;
+        }
+        this.reads += 2;
+        return this.disk[at] | (this.disk[at + 1] << 8);
+    }
+
+    /* A whole transfer, because a batch of sectors is one memcpy and eight
+     * thousand extension calls are not. The guest's own `rep insw` loop asks
+     * for a word at a time, which is right for a drive and wrong for sixteen
+     * megabytes: this copies the run straight into the machine's memory and
+     * the loop is skipped, not slowed down.
+     *
+     * ADDR is an offset into memory (above the first megabyte), never a linear
+     * address, and a request that runs off either end is clamped rather than
+     * thrown: a short image is the normal case at the end of a pull.
+     */
+    diskcopy(args) {
+        const from = Number(args.LBA) >>> 0;
+        const to = Number(args.ADDR) >>> 0;
+        const want = Math.max(0, Number(args.LEN) | 0);
+        if (!this.disk || !this.buf || want === 0) {
             return;
         }
-        const at = Number(args.ADDR) >>> 0;
-        const count = Math.max(0, Math.min(Number(args.COUNT) | 0, 0x10000));
-        const words = new Array(count);
-        for (let i = 0; i < count; i++) {
-            const p = at + i * 2;
-            words[i] = (p + 1 < this.disk.length)
-                ? (this.disk[p] | (this.disk[p + 1] << 8))
-                : 0;
+        const len = Math.min(want, this.disk.length - from, this.buf.length - to);
+        if (len <= 0) {
+            return;
         }
-        list.replace(1, words);
-        this.reads += count;
+        this.buf.set(this.disk.subarray(from, from + len), to);
+        this.reads += len;
     }
 
     diskread8(args) {

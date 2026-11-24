@@ -179,7 +179,9 @@ suWindow:
     pop     ax
     cmp     al, 0x53                ; Delete: the setup
     je      .setup
-    cmp     al, 0x3C                ; F2: the same
+    cmp     al, 0x0E                ; and Backspace is the same key
+    je      .setup                  ; on an Apple keyboard, whose Delete
+    cmp     al, 0x3C                ; sends this code; F2 is the same door
     je      .setup
     cmp     al, 0x32                ; M: the boot menu
     je      .menu
@@ -223,21 +225,35 @@ suWindow:
 suWait:
     push    bx
     push    cx
+    push    es
+    xor     bx, bx
+    mov     es, bx
     mov     bx, 12
 .round:
     mov     cx, 50000
 .poll:
+    ; the cheap path is the one that runs fifty thousand times a second: look
+    ; at the controller, and only when it has a byte is there anything to move
+    ; into the ring or to compare. Calling kbdFill unconditionally here cost
+    ; four times what this loop used to and made the countdown a job of work.
     in      al, 0x64
     test    al, 1
     jz      .next
-    in      al, 0x60                ; a scan code arrived
-    jmp     .out
+    call    kbdFill
+    mov     ax, [es:BDA_KB_HEAD]
+    cmp     ax, [es:BDA_KB_TAIL]
+    jne     .have
 .next:
     loop    .poll
     dec     bx
     jnz     .round
     xor     al, al
+    jmp     .out
+.have:
+    call    kbdGet                  ; never waits: a key is already in there
+    mov     al, ah                  ; the scan code is what suWindow compares
 .out:
+    pop     es
     pop     cx
     pop     bx
     ret
@@ -290,7 +306,7 @@ suLoad:
     call    cmos_read
     cmp     al, 3
     jbe     .bo_ok
-    xor     al, al
+    mov     al, 3                   ; a blank battery: CD first, as the board ships
 .bo_ok:
     mov     [es:SU_BUF + 8], al
     mov     al, 0x34                ; the emulation master switch
@@ -3730,6 +3746,15 @@ suPanelTop:
     mov     si, msg_su_hint
     mov     bl, SU_HEAD
     call    suPrint
+    ; and that an edit is only kept on the way out: every row says so, because
+    ; a panel that silently drops a changed value reads as a machine whose
+    ; battery does not work
+    mov     dl, SU_RX
+    mov     dh, SU_ROW0 + 4
+    call    suGoto
+    mov     si, msg_su_save_hint
+    mov     bl, SU_PAPER
+    call    suPrint
     pop     di
     pop     si
     pop     dx
@@ -4205,17 +4230,22 @@ put3:
     add     al, '0'
     jmp     putc
 
-; keyScan: wait for one make code, skipping the 0xE0 of an extended key
+; keyScan: wait for one key, and hand back its scan code in al.
+;
+; The ring does the bookkeeping now, so the 0xE0 of an extended key never
+; reaches a caller: an arrow is `48` with a zero ASCII, which is what the
+; menus compare against. This used to read the controller itself and skip an
+; `E0` -- a byte that never arrived, because the controller's queue was never
+; drained and the prefix stayed in it. The skip was dead code, and every
+; extended key worked only because nothing had ever made it necessary.
 keyScan:
-    in      al, 0x64
-    test    al, 1
-    jz      keyScan
-    in      al, 0x60
-    cmp     al, 0xE0
-    je      keyScan
-    cmp     al, 0xE1
-    je      keyScan
-    ret
+    call    kbdGet
+    xchg    al, ah
+    xor     ah, ah                  ; the caller gets a scan code in al and a
+    ret                             ; clear high half, not the ASCII beside it:
+                                    ; `add bx, ax` with an index in al and an
+                                    ; 0x0D in ah picks a device 3,328 bytes
+                                    ; past the end of the table
 
 ; ---------------------------------------------------------------------------
 ; the strings
@@ -4231,6 +4261,7 @@ msg_su_version: db "v0.4", 0
 msg_su_settings: db "Settings", 0
 msg_su_system:  db "System", 0
 msg_su_hint:    db "Enter edits it", 0
+msg_su_save_hint: db "Esc, then Save, keeps it", 0
 msg_su_cpu:     db "CPU: 80386 real mode", 0
 msg_su_mem:     db "Memory: ", 0
 msg_su_cores:   db "Cores: ", 0

@@ -1,0 +1,261 @@
+// One clone is one sounding note.
+//
+// Included inside every synth.* class by
+//   tools/sf2_bank.py build … --voice ../voice.inc.jsw
+// so each sample sprite carries its own copy of this script: a clone can only
+// run the code of the sprite it was cloned from.
+//
+// Why a clone per note and not a pool of reusable voices -- the pool was tried,
+// it is faster, and it is *audibly wrong*. Scratch's volume and pitch effects
+// belong to the target, not to a playing sound: when a voice is handed a second
+// note, `set volume` and `set pitch` apply to every sound still playing on that
+// clone. The tail of the previous note is therefore un-muted and re-tuned to the
+// new note's pitch -- a cloud of wrong notes, one per stolen voice. There is no
+// per-target "stop sound" block to stop it with (only project-wide "stop all
+// sounds"), and deleting the clone is the one thing that does silence a target's
+// players. So a note gets a clone, and `delete this clone` is its note-off.
+//
+// That used to cost a whole frame per note -- `create clone` ends a sequencer
+// pass, and one pass per frame is one clone per frame. TurboWarp's turbo mode
+// removes that early exit (measured: 197,000 clones a frame in a tight loop with
+// it on, 1 with it off), which is why the project ships `"turbo":true`.
+//
+// Pitch, pan and volume are set once when the note starts, and then only when
+// the mix actually moves: the core bumps `Mix.epoch` on a bend or a fader
+// change and broadcasts `retune`, and every sounding clone answers it once.
+// A per-frame poll inside the voice would do the same job and cost a
+// thread-step per note per frame *always* -- this costs nothing until a song
+// actually bends, which is the trade scratch PFA makes by having no CC at all.
+//
+// The first statement is the only volatile read. Scratch runs a clone's first
+// block synchronously inside `create clone`, so `Player.startEv` still holds
+// this note even when the core spawns a whole chord in one tick.
+private _i;
+private _v;
+private _off;
+private _ch;
+private _semis;
+private _vel;
+private _vol;
+private _pan;
+private _pitch;
+private _gen;
+private _dur;                      // seconds this slot's audio lasts, 0 = no retrigger
+private _left;                     // seconds of note left, for the retrigger wait
+private _done = 0;                 // a voice starts sounding. It must be declared
+                                   // here: the first `=` in the file sets the initial
+                                   // value, so `_done = 1` at the note's end would
+                                   // make every clone *born* finished -- and the
+                                   // retune handler skips finished voices.
+
+metadata whenCloned pos 0,-600;
+public void whenCloned() {
+    // Counted here, not in the dispatcher, and that is exact by construction: a
+    // clone's first block runs inside `create clone`, so this line runs only for
+    // clones that really exist. Counting in the dispatcher drifted the other
+    // way -- scratch.mit.edu silently refuses clones past its cap of 300, those
+    // notes were counted anyway and never decremented, and once the count
+    // reached the budget the player went silent for the rest of the session.
+    Player.voices += 1;
+    _gen = Tick.gen;
+    _i = Player.startEv;
+    _v = Player.EvVoice.get(_i) + 1;
+    _off = Voice.off.get(_v);
+    _ch = Player.EvChan.get(_i) + 1;
+    _semis = Player.EvSemis.get(_i) * 10;   // Scratch's pitch unit is a tenth of a semitone
+    _vel = Player.EvB.get(_i);
+
+    // SCRATCH sound mode: the music extension plays this note instead of the
+    // sample bank. It has to happen *here*, in the clone's own thread, and that
+    // is the whole reason: `play note for beats` is a waiting block -- it starts
+    // the note and then re-executes itself until the beats have elapsed. Called
+    // from the clock's dispatch loop (or from anything marked `// warp`) the
+    // re-execution happens inside the same frame, so the block spins for the
+    // note's whole duration and the project stops keeping time. A clone's thread
+    // has somewhere to wait, so the wait is free and the clone's lifetime is the
+    // note's lifetime -- which is what a voice is.
+    if (Set.sound == 1) {
+        // The player's master volume still applies here, or the knob would be
+        // silently ignored in this mode. Pan and pitch do not: the extension
+        // already chose the instrument and the pitch, so a PITCH effect on top
+        // would tune the note twice.
+        if (Player.EvChan.get(_i) == 9) {
+            Sound.setVolume(_vel / 127 * (_vel / 127) * (Mix.master / 100) * 100);
+            Music.midiPlayDrum(Player.EvA.get(_i), Player.EvLen.get(_i) * Tick.rest);
+        } else {
+            // `midiSetInstrument` takes a **one-based** MIDI instrument number:
+            // it subtracts 1 and then maps through its GM table
+            // (`MIDI_INSTRUMENTS`), so a 0-based program number lands one place
+            // low. Program 0 -- Acoustic Grand Piano -- became -1, missed the
+            // table, wrapped to the *last* instrument and played the Synth Pad
+            // oscillator instead of a piano. Hence the `+ 1`.
+            Music.midiSetInstr(Mix.prog.get(_ch) + 1);
+            Sound.setVolume(_vel / 127 * (_vel / 127) * (Mix.master / 100) * 100);
+            Music.playNote(Player.EvA.get(_i), Player.EvLen.get(_i) * Tick.rest);
+        }
+        if (Player.voices > 0) {
+            Player.voices -= 1;
+        }
+        Control.deleteThisClone();
+    }
+
+    // Volume, pan and pitch all come from one place, here and on every retune:
+    // see `voiceMix`, which is the only thing that knows how a velocity, the
+    // channel's faders and the player's knobs combine.
+    voiceMix();
+    Sound.setVolume(_vol);
+    Sound.setEffect("PAN", _pan);
+    Sound.setEffect("PITCH", _pitch);
+    Sound.playSound(join("s", Player.EvSlot.get(_i)));
+
+    // Sounding. This is the whole of the voice, and it is scratch PFA's shape:
+    // park on the note's own end, dip the volume once, delete the clone. There
+    // is no per-frame loop and no long fade, and that is a performance decision
+    // with a measured reason:
+    //
+    //   * a per-frame loop here means one thread-step per sounding note per
+    //     frame, and every thread-step in this VM costs a sequencer pass;
+    //   * a 30-frame damper keeps the clone -- and its audio player -- alive for
+    //     a second after the note ended, so at 45 notes a second the mix carried
+    //     ~45 idle players instead of ~6. That is the "laggy" part: the audio
+    //     thread has to mix every one of them every frame.
+    //
+    // Bend, fader and expression are read once, here, and then re-read only
+    // when the mix actually moves: the core bumps `Mix.epoch` on such an event
+    // and broadcasts `retune`, and this clone answers it below. A per-frame poll
+    // here would keep the pitch live all the time at one thread-step per note
+    // per frame, always; this costs nothing until the song bends. The engine
+    // applies the new effects to a sound that is already playing (scratch-audio
+    // `SoundBank.setEffects` re-syncs every live player of the target), so the
+    // note glides instead of holding the pitch it started with.
+    // The end is the note's own tick plus its length, not "now plus length": a
+    // clone that starts a frame late (a dense passage, or after a hitch) must
+    // still end where the score says, or every late note rings long. A note
+    // whose end has already passed still gets one tick, so a stall makes notes
+    // short rather than silent.
+    _end = Player.EvTick.get(_i) + Player.EvLen.get(_i);
+    if (_end < Tick.tick + 1) {
+        _end = Tick.tick + 1;
+    }
+    // Wait for the note's end -- and while waiting, keep the sound alive.
+    //
+    // A sample is finite and Scratch cannot loop one: `Sound.playSound` on a
+    // target that is already playing builds a fresh source node and starts
+    // again from the first frame. So a note longer than its audio goes *silent*
+    // half way through, and that is not a rarity -- in a real MIDI a few percent
+    // of the notes are longer, and they are the held ones: a 13-second seashore,
+    // a 35-second pad, a 6-second sung note. Every expression curve that shapes
+    // those notes (CC11 riding a long swell) lands in the silent part and is
+    // never heard, which is exactly what "the volume does not change" sounds
+    // like from outside.
+    //
+    // The fix is the one a sampler would use if it had no loop points: play the
+    // file again when it runs out. `VoiceDur` is the bank's own table of what
+    // each slot's audio lasts (0 for a slot that is a real recording rather than
+    // a looped-out sustain -- replaying a piano sample would be a re-strike, not
+    // a longer note), and the wait is cut short by the note's own end so the
+    // fade still lands on the score.
+    //
+    // This costs a thread-step per frame per sounding note, exactly what the
+    // `waitUntil` it replaces cost, so the one measured reason the voice has no
+    // loop of its own -- a sequencer pass per note per frame -- is unchanged.
+    //
+    // `Tick.gen` and `Tick.active`: a clone must also stop when the song is
+    // replaced (the tick restarts at zero, so the tick test alone would leave it
+    // parked with its sound frozen) or when the song ends.
+    _dur = 0;
+    if (VoiceDur.length() > Player.EvSlot.get(_i)) {
+        _dur = VoiceDur.get(Player.EvSlot.get(_i) + 1) + 0;
+    }
+    while (Tick.tick < _end && Tick.active == 1 && Tick.gen == _gen && Voice.off.get(_v) == _off) {
+        // Seconds of note left, and the shorter of that and what the audio can
+        // still give. `Tick.seconds` is the current tick's length, so a tempo
+        // change mid-note moves the retrigger with it.
+        _left = (_end - Tick.tick) * Tick.seconds;
+        if (_dur <= 0 || _left <= _dur) {
+            // A slot that is a real recording, or a note that ends first: park
+            // for the rest of it and never replay. `wait` is wall-clock and the
+            // tick is not, so a wait that returns early must come back here
+            // rather than fall through to a replay.
+            Control.wait(_left);
+        } else {
+            Control.wait(_dur);
+            // The audio has run out and the note has not: start it again.
+            // `playSound` re-applies the target's effects, so the volume and
+            // pitch `retune` last set are what the new player starts with.
+            Sound.playSound(join("s", Player.EvSlot.get(_i)));
+        }
+    }
+
+    _done = 1;                     // no longer a voice: `retune` must not raise it
+    // Fade the note out, then drop the clone. It has to fade *to zero*, not to
+    // a quiet fraction, because nothing else can stop this sound: deleting a
+    // clone does not dispose its audio players (scratch-vm `dispose()` only
+    // stops threads and removes the target), there is no per-target "stop
+    // sound" block, and `stop all sounds` is project-wide. The volume effect is
+    // the one handle a voice has on its own sound, and a sound left at 12% is
+    // still a sound -- every note in a dense song would ring for its whole
+    // sample (~1.5 s sustain + 1 s decay here) and the mix would turn to mush.
+    // Setting it to 0 leaves the player running silently until the sample is
+    // over; the next note on that slot stops it anyway.
+    // Two steps rather than one so the cut is a fade, not a click.
+    Sound.setVolume(_vol * 0.5);
+    Control.wait(0.012);
+    Sound.setVolume(0);
+    // Guarded: `prepare()` zeroes the count for a new song while old clones are
+    // still winding down, and their decrement would take it below zero.
+    if (Player.voices > 0) {
+        Player.voices -= 1;
+    }
+    Control.deleteThisClone();
+}
+
+    // Received by every clone of this sprite, once per frame at most, and only
+    // while the mix is changing. `_i` is 0 on the original sprite, which is not
+    // a voice.
+    metadata retune pos 0,-700;
+    public void retune() { // hook: broadcast retune
+        if (_i == 0 || _done == 1 || Set.sound == 1) {
+            Control.stopThisScript();
+        }
+        // The same three lines the note started with, computed by the same
+        // procedure: a bend, a fader, or one of the player's own knobs reaches a
+        // note that is already sounding, and none of them can disagree with what
+        // the note began with because there is only one place that knows how.
+        voiceMix();
+        Sound.setEffect("PITCH", _pitch);
+        Sound.setEffect("PAN", _pan);
+        Sound.setVolume(_vol);
+    }
+
+    // What this voice's three parameters are, right now. Called at note-on and
+    // again on every retune, and nothing else may compute them.
+    //
+    // The inputs are three layers, and the order says which wins:
+    //   * the note's own -- velocity, and the sample's tuned semitone offset;
+    //   * the channel's -- CC7 volume, CC11 expression, CC10 pan, bend;
+    //   * the player's -- Mix.master / masterPan / masterPitch, the settings
+    //     page's rows.
+    // Velocity is squared and everything else is linear; see the note on that
+    // where the note starts.
+    private void voiceMix() { // warp
+        // Velocity is squared, as MIDI's own volume mapping does and as the
+        // scratch PFA player does (`vol * vol / 120 / 2.5`): a piano at velocity
+        // 64 is not half as loud as one at 127, it is a quarter, and a linear
+        // map makes every soft note in a black MIDI sound the same. CC7, CC11
+        // and the player's master are faders, not dynamics, so they stay linear
+        // -- squaring the master would make every setting below 100 quieter
+        // than it says.
+        _vol = _vel / 127 * (_vel / 127) * (Mix.vol.get(_ch) / 127) * (Mix.expr.get(_ch) / 127) * (Mix.master / 100) * 100;
+        // Clamped because the engine clamps anyway (pan to +/-100, pitch to
+        // +/-3600 tenths outside turbo mode) and clamping here is what makes the
+        // page's own limits the ones a reader can see.
+        _pan = Mix.pan.get(_ch) + Mix.masterPan;
+        if (_pan > 100) {
+            _pan = 100;
+        }
+        if (_pan < -100) {
+            _pan = -100;
+        }
+        _pitch = _semis + Mix.bend.get(_ch) + Mix.masterPitch;
+    }

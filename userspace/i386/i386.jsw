@@ -1,5 +1,10 @@
 #enable_feature<namespacedNames>;
-
+// The hidden build is `make i386-obf`, not an uncommented line here: it also
+// passes --obf-ints none, because a hidden integer literal costs a reporter at
+// every use and this machine runs on literals (1.4x the emulated work with the
+// default constant-variable form, 3.3x when the integers go into the string
+// lists). Keep this commented out: `make i386` is the build you can read.
+// #enable_feature<doObfuscation>;
 /*
  * i386 — a PC, in Scratch blocks. Real mode, a real BIOS ROM, a real boot
  * sector, and the CMOS that makes the machine believe it has a battery.
@@ -43,7 +48,9 @@
  */
 
 /* ---- the CPU ---------------------------------------------------------- */
-public X.batch = 240;                    // instructions per frame
+public X.batch = 240;
+public X.romSteps = 0;
+public X.guestSteps = 0;                    // instructions per frame
 public X.frames = 0;                     // frames since the green flag
 public X.maxFrames = 0;                  // 0 = run forever; >0 = a test budget
 
@@ -62,7 +69,7 @@ public X.maxFrames = 0;                  // 0 = run forever; >0 = a test budget
 public X.memBase = 0;                    // the RAM window
 public X.memWords = 163840;              // 640 KiB of base memory
 public X.memWords4 = 655360;             // ... in bytes, for the byte reader
-public X.textMode = 0;                   // 0 text, 1 mode 13h, 2 mode 12h
+public X.textMode = 0;                   // 0 text, 1 13h, 2 12h, 3 CGA 4/5h, 4 CGA 6h
 public X.gfxPos = 0;                     // how far the card has painted
 public X.gfx = [];                       // 0xA0000: a byte a pixel in 13h
 public X.gfxPal = [];
@@ -73,20 +80,39 @@ public X.gfx16 = [0, 0, 0, 0, 0, 170, 0, 170, 0, 0, 170, 170, 170, 0, 0,
                   255, 85, 255, 255, 255, 85, 255, 255, 255];
 public X.gfxWords = 0;
 public X.gfxDirty = 0;                  // the card has a pixel to repaint
+/* The CGA's two control ports. 0x3D9 is the colour select: bits 0-3 are the
+ * background, bit 4 the intensity and bit 5 which of the two three-colour sets.
+ * 0x3DA is the status register a guest polls to wait for a retrace. */
+public X.cgaCtl = 0;                     // the last byte written to 0x3D9
+public X.cgaFlip = 0;                    // toggles on every 0x3DA read
+/* A20: the gate on bit 20 of every physical address. A 386 wakes up with it
+ * shut; this board opens it at POST the way a real BIOS does, and port 0x92
+ * lets a guest close it again for the HMA trick. */
+public X.a20 = 1;                        // 0 == shut, 1 == open
 public X.extBase = 1048576;              // 0x10_0000: extended memory
 public X.extWords = 0;                   // ... as many words as `Ram` gave
 public X.holeEnd = 655360;               // 0xA_0000: RAM stops at the video hole
 public X.diskBase = 786432;              // 0xC_0000: the disk window
 public X.diskWords = 16384;              // 64 KiB = 128 sectors
 public X.textBase = 753664;              // 0xB_8000
-/* The text plane is as big as the widest card this machine will ever be shown
- * on: 160 columns by 60 rows of 8 x 16 cells is 1280 x 960 pixels, which is
- * every stage TurboWarp offers and then some. The *visible* width and height
+/* The text plane is memory, so it is as big as any card this machine will be
+ * shown as: 9600 cells, 160 columns by 60 rows. The *visible* width and height
  * are what the card reports (X.dispCols/X.dispRows), and the stride is the
  * visible width, because a guest writes cell (row * width + col) and the two
- * have to agree. */
+ * have to agree.
+ *
+ * A bigger window is more cells, not bigger ones: the cell is always the
+ * font's 8 x 16, so a 1024 x 768 stage is a 128 x 48 text mode and fills it
+ * exactly. Scaling the cell instead leaves the pen's bands a fraction of a
+ * row apart, TurboWarp rounds them, and every row keeps a scanline of the
+ * frame before it. The ceiling is the plane's own size, which is why a stage
+ * wider than 160 cells stops at 160 (see `dispFit`).
+ *
+ * A guest that writes eighty bytes a row whatever it is told -- MEMZ does --
+ * is the cost of that: it shears on a stage that is not a multiple of 640. The
+ * card reports what it has through int 10h, and a guest that asks is right. */
 public X.textWords = 4800;               // 19200 bytes, 9600 cells
-public X.dispMaxCols = 160;
+public X.dispMaxCols = 160;              // the plane: 160 columns by 60 rows
 public X.dispMaxRows = 60;
 public X.romBase = 983040;               // 0xF_0000
 public X.romWords = 16384;               // 64 KiB
@@ -113,6 +139,10 @@ public X.extBytes = 0;                   // what `alloc` actually granted
 public X.reboot = 0;                     // 1: asked to restart
 public X.rebootExt = -1;                 // -1: keep what this boot loaded
 public X.reboots = 0;
+/* TurboWarp holds the optional disk outside the Stage. Wait for its green-flag
+ * loader before letting the reset-vector CPU reach the built-in fallback MBR. */
+public X.netPulling = 1;
+public X.netBootStatus = "Connecting to the boot disk";
 public X.slotExtMb = 0;                  // what the memory panel installed
 public X.slotCount = 0;
 public X.slotSize = [];
@@ -138,6 +168,7 @@ public X.netLast = "";                   // what it said when it refused the las
 public X.netIdent = "";                  // IDENTIFY DEVICE, as the host sent it
 public X.netDisk = 0;                    // 1 when the host handed over an image
 public X.netDiskSectors = 0;             // ... and how long it is
+public X.diskPulled = 0;                 // sectors of it that have arrived
 public X.netDeferred = 0;                // a lost write the bus was too busy to report
 public X.ataWrote = [0];                 // sectors the guest has written this session
 public X.text = [];                      // the text plane
@@ -156,13 +187,16 @@ public X.cmos = [];
 public X.cmosIndex = 0;
 public X.cmosWrites = 0;
 public X.cmosReady = 0;
-public X.rtcSeconds = 0;                 // counts up once a frame
-public X.rtcFrames = 0;
-public X.rtcRate = 60;                   // frames per RTC second
+public X.rtcSeconds = 0;                 // counts up once a second
+public X.rtcSecs = 0;                    // emulated seconds not yet whole
+public X.rtcAt = 0;                      // when the clock last looked
+public X.hwAt = 0;                       // the RTC second the sensors last saw
+public X.rtcRate = 60;                   // nominal frames a second (the panel's)
 
 /* ---- ports ------------------------------------------------------------- */
 public X.port60 = 0;                     // the 8042's output buffer
 public X.port64 = 0;                     // status: 1 only while a byte waits
+public X.kbCmd = 0;                      // the last command written to 0x64
 public X.out = [];                       // serial 0x3F8, byte values
 public X.portLog = [];
 
@@ -258,11 +292,27 @@ public X.tickNo = 0;
 public X.pitOn = 0;                    // has anyone programmed counter 0 yet
 public X.pitReload = [65536, 18, 65536];
 public X.pitCount = [65536, 18, 65536];
+/* How many times the 8254's input has ticked since power-on, 16 bits of it.
+ * The clock here is the instruction counter -- one count every two
+ * instructions -- so this is also the machine's own measure of elapsed time,
+ * and it is what `int 15h ah=86` waits on. On a real board that wait halts the
+ * CPU and lets the counter run; nothing can halt a Scratch sprite, so the
+ * firmware polls this instead and the wait costs the instructions that the
+ * clock says it should. A software fast-forward was tried here and it made
+ * every guest that paces itself with that call -- MEMZ draws the cat on a
+ * 90 ms wait -- run at the speed of the interpreter instead of the clock. */
+public X.pitUp = 0;
+public X.pitUpLatch = 0;
 public X.pitAccess = [3, 2, 3];
 public X.pitMode = [3, 2, 3];
 public X.pitNextByte = [0, 0, 0];
 public X.pitLow = [0, 0, 0];
 public X.pitLatched = [-1, -1, -1];
+/* Each counter's OUT pin, 1 = high. Only counter 2's is visible to a guest,
+ * through bit 5 of port 0x61 -- and a guest does look: GRUB calibrates the TSC
+ * by loading counter 2, opening its gate, then polling that bit until it rises,
+ * which is what "wait 55 ms" is on a PC without a usable RTC. */
+public X.pitOut = [1, 1, 1];
 public X.picIrr = 0;
 public X.picImr = 255;
 public X.picIsr = 0;
@@ -289,6 +339,11 @@ public X.dispBooted = 0;
  * would leave eighty pixels of nothing along the bottom. */
 public X.stageW = 640;
 public X.stageH = 480;
+/* What the stage itself measured, before the screen was fitted into it: the
+ * card compares against this to notice a window that changed size. */
+public X.stageMeasW = 640;
+public X.stageMeasH = 480;
+public X.dispFrames = 0;                 // frames since the last stage check
 public X.dispCols = 80;
 public X.dispRows = 30;
 /* How many of those cells the stage can show. The card measures the stage at
@@ -341,6 +396,12 @@ public X.timeRate = 100;         // per cent: how fast the guest's clock runs
 public X.threadsPort = 1451;     // 0x5AB, write: budget multiplier per core
 public X.perfPort = 1452;        // 0x5AC, write: performance multiplier
 public X.timePort = 1453;        // 0x5AD, write: guest clock rate, per cent
+/* 0x5BD / 0x5BE, read: the 8254's own count of how many times its input has
+ * ticked -- the clock, as a number a guest can poll. Reading the low byte
+ * latches the high one, so a sixteen-bit read cannot straddle a carry. This is
+ * what a wait reads: see X.pitUp. */
+public X.pitUpLoPort = 1469;     // 0x5BD, read: low byte, and latch
+public X.pitUpHiPort = 1470;     // 0x5BE, read: high byte of that latch
 public X.coreRun = [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
 public X.spawned = 1;            // how many cores exist as clones right now
 public X.apCs = 2048;            // 0x0800: the vector a released core starts at
@@ -444,10 +505,53 @@ public X.hwTicks = 0;
 
 /* what the monitor shows: core 1 copies its own state here once a frame */
 public X.monSteps = 0;
+/* What the guest actually retires, in thousands a second, measured over half a
+ * second of wall clock. The setup screen shows it next to the nominal clock:
+ * one is what the box says it is, this is what the emulator manages. */
+public X.kips = 0;
 public X.monIp = 0;
 public X.monHalted = 0;
 public X.monErr = "";
 public X.monFrames = 0;
+/* Which *segment* the core is in, not just where it is inside it: a real-mode
+ * offset says nothing on its own, and "the machine is at 0x2E04" cannot tell a
+ * loader apart from a BIOS routine. `monCs` is the cached base and `monCr0` the
+ * mode bit, so a machine that looks stuck can be located exactly. */
+public X.monCs = 0;
+/* ---- the debugger -------------------------------------------------------
+ * A machine that retires a million instructions a second cannot be read while
+ * it is running, so the panel is a *paused* view: the core parks between
+ * batches, publishes what it is holding, and steps one instruction at a time
+ * when asked. Everything is a Stage variable or list, because that is the only
+ * way a sprite the reader can see -- the monitors in TurboWarp's variable pane
+ * -- can look at a register file that belongs to the Cpu sprite.
+ */
+public X.dbgOn = 0;                      // 0 off, 1 park, 2 park + read-outs
+public X.dbgPause = 1;                   // 1 = parked, 0 = let it run
+public X.dbgStep = 0;                    // bump it for one instruction
+public X.dbgStepAt = 0;                  // the bump already taken
+public X.dbgIp = 0;
+public X.dbgCs = 0;
+public X.dbgFl = 0;
+public X.dbgHalt = 0;
+public X.dbgCr0 = 0;
+public X.dbgR = [];                      // eax ecx edx ebx esp ebp esi edi
+public X.dbgS = [];                      // es cs ss ds fs gs
+public X.dbgTr = [];                     // the last eight addresses it ran
+public X.dbgDis = "";                    // ... and what it was executing there
+/* Every power of two a double can name, 2^-1074 .. 2^1023: the x87's encode
+ * and decode multiply by these instead of using bit operators this language
+ * does not have. Built once, by the first escape instruction. */
+public X.fpow2 = [];
+public X.monCr0 = 0;
+/* COM1, as text, for whoever wants to read it: a kernel that boots with
+ * `console=ttyS0` has no other way to say what it is doing. Bounded, because a
+ * machine that runs for an hour must not keep an hour of console. */
+public X.serialText = "";
+/* The last reboot request, and where the core was when it arrived. */
+public X.rebootWhy = "";
+/* 1 while the 8042 has been told to pulse the reset line. */
+public X.rebootReq = 0;
 
 /* ---- the ATA channel --------------------------------------------------- *
  * Drive 0 is a 128-sector image in `X.disk` and a register file at the usual
@@ -540,8 +644,18 @@ public X.scsiInquiry = [0x0000, 0x0205, 0x001F, 0x0000, 0x534A, 0x2057, 0x2020, 
 public X.powerOns = 0;                   // power-ons since this page loaded
 public X.clockMode = 0;                  // 0 = counted, 1 = the project timer
 
-// The stage has to be 640 x 480 for the 80 x 25 grid to fit pixel for pixel.
-metadata note Stage at 50,50 350x170: "{\"width\":640,\"height\":480,\"warpTimer\":true} // _twconfig_";
+// The stage has to be 640 x 480 for the 80 x 25 grid to fit pixel for pixel,
+// and the machine wants 120 fps: the CPU batch is short enough that the frame
+// rate, not the instruction count, is what paces the guest.
+metadata note Stage at 50,50 350x170: "{\"width\":640,\"height\":480,\"framerate\":120,\"warpTimer\":true} // _twconfig_";
+/* The desk the machine stands on. A stage with no costume of its own shows the
+ * player's default white, which is the one colour a black screen cannot be
+ * letterboxed against: the backdrop is a black rectangle big enough to cover
+ * any stage the window is dragged to, so the card's margins look like bezel
+ * rather than paper. */
+stage {
+    import "assets/bg.svg" as bg;
+}
 /* One watcher per core, so the numbers on the stage are the numbers the
  * firmware reads back. A published Scratch build does not want eight floating
  * boxes on the machine's screen. */
@@ -556,25 +670,60 @@ metadata default Stage.X.core3MHz at 108,59 100x24 shown;
 metadata default Stage.X.core4Usage at 5,86 100x24 shown;
 metadata default Stage.X.core4MHz at 108,86 100x24 shown;
 */
+#ifdef TURBOWARP
+metadata default Stage.X.netBootStatus at 5,113 260x24 shown;
+#endif
+/* ---- the debugger, on the stage ------------------------------------------
+ * `dbgOn` is the whole panel in one slider:
+ *
+ *   0  off -- the stage is the machine and nothing else
+ *   1  on  -- the core parks and unpauses as the slider moves, no numbers
+ *   2  on  -- and every read-out is on screen
+ *
+ * `dbgPanel()` follows the slider, so the numbers are only in the way when
+ * they were asked for. `dbgStep` retires one instruction per step up and
+ * `dbgPause` free-runs while it is 0. The rest are read-outs: the register file
+ * as two lists, the program counter, the flags, and the last eight addresses
+ * executed. All of them live on the Stage because a list monitor cannot read a
+ * sprite-local list, and a register file the reader cannot see is not a
+ * debugger.
+ *
+ * Everything but `dbgOn` opens hidden, so a published build does not begin with
+ * a wall of numbers over the screen; TurboWarp's variable pane shows them by
+ * hand when wanted.
+ */
+metadata slider(0,2) Stage.X.dbgOn at 5,140 120x24 shown;
+metadata slider(0,1) Stage.X.dbgPause at 5,167 120x24 hidden;
+metadata slider(0,9999) Stage.X.dbgStep at 5,194 120x24 hidden;
+metadata largeReadout Stage.X.dbgIp at 5,221 160x24 hidden;
+metadata largeReadout Stage.X.dbgCs at 5,248 160x24 hidden;
+metadata largeReadout Stage.X.dbgFl at 5,275 160x24 hidden;
+metadata largeReadout Stage.X.dbgHalt at 5,302 160x24 hidden;
+metadata largeReadout Stage.X.dbgCr0 at 5,329 160x24 hidden;
+metadata Stage.X.dbgDis at 175,221 300x24 hidden;
+metadata Stage.X.dbgR at 175,250 150x96 hidden;
+metadata Stage.X.dbgS at 330,250 150x72 hidden;
+metadata Stage.X.dbgTr at 330,326 150x100 hidden;
 
 import "assets/lists/bios.jsa" as rom;
 import "assets/lists/disk.jsa" as disk;
 import "assets/lists/ident.jsa" as ident;   // the drive's IDENTIFY DEVICE block
+import "assets/lists/dis.jsa" as dis;       // the disassembler's tables
 
-// include "input.jsw"
-// include "display.jsw"
-// include "sensor.jsw"
+include "input.jsw"
+include "display.jsw"
+include "sensor.jsw"
 /* The network drive needs a socket, and a socket is the one thing scratch.mit.edu
  * does not have. The Scratch build keeps the staged image and the write path;
  * it simply has nothing on the other end of the wire. */
 #ifdef TURBOWARP
-// include "netdisk.jsw"
+include "netdisk.jsw"
 /* The wire needs a socket too, and a socket belongs to a sprite: each sprite
  * gets its own, which is why the network is not bolted onto the disk's. */
-// include "net.jsw"
+include "net.jsw"
 /* Sound is the same story: the machine can compute a pitch, but only a browser
  * can play one, and only where a sprite may hold sound assets. */
-// include "speaker.jsw"
+include "speaker.jsw"
 #endif
 
 /*
@@ -589,12 +738,21 @@ import "assets/lists/ident.jsa" as ident;   // the drive's IDENTIFY DEVICE block
  * because they are the one thing every core shares, the way they share a bus.
  */
 class Cpu {
+    /* The disassembler is a body include because it needs the core's own
+       scratch -- `ip`, `dsz`, the segment base -- and a custom block belongs to
+       one sprite, so a class of its own could not be called from here. */
+    include "dis_shapes.inc.jsw"
+    include "disasm.inc.jsw"
+    include "fpu.inc.jsw"
+
     private r = [0, 0, 0, 0, 0, 0, 0, 0];
     private sr = [0, 0, 0, 0, 0, 0];
     private ip = 0;
     private fl = 514;
     private idleAt = 0;
     private halted = 0;
+    private badAt = 0;                  // the instruction that stopped it
+    private dbgLevel = -1;              // the dbgOn the panel was set up for
     private steps = 0;
     private err = "";
     private ops = 0;
@@ -603,6 +761,7 @@ class Cpu {
     private v = 0;
     private ir = 0;
     private oz = 2;
+    private asz = 2;                    // this instruction's address size
     private _tv = 0;
     private seg = 4;
     private rep = 0;
@@ -624,9 +783,11 @@ class Cpu {
     private dBase = 0;
     private dLim = 0;
     private dFlags = 0;
+    private dAccess = 0;                   // the access byte, which only `lar` reads
     private cr0 = 0;
     private cr2 = 0;
     private cr3 = 0;
+    private cr4 = 0;                       // bit 4 is PSE: four-megabyte pages
     private gdtrBase = 0;
     private gdtrLimit = 0;
     private idtrBase = 0;
@@ -657,6 +818,8 @@ class Cpu {
         Looks.hide();
         powerOn();
         X.powerOns += 1;
+        // the speed read-out: a monitor the stage shows while the machine runs
+        Variables.showVariable(X.kips);
         // the card boots on request, so its clear can never race POST
         X.dispReq = 1;
         _waits = 0;
@@ -764,6 +927,7 @@ class Cpu {
         cr0 = 0;
         cr2 = 0;
         cr3 = 0;
+        cr4 = 0;
         gdtrBase = 0; gdtrLimit = 0;
         idtrBase = 0; idtrLimit = 0;
         dsz = 2;
@@ -784,7 +948,16 @@ class Cpu {
         nicReset();
         X.nicRx.clear();
         X.nicTxq.clear();
+        /* Whatever the controller was still holding belongs to the machine
+         * that just went away. A key left in the queue is worse than a lost
+         * one: POST's countdown reads it as its own first key, so the window
+         * is gone before anybody can press Delete in it, and it happens only
+         * when the last session happened to end on an unread key. */
+        K.fifo.clear();
+        X.port60 = 0;
+        X.port64 = 0;
         halted = 0;
+        badAt = 0;
         steps = 0;
         err = "";
         ops = 0;
@@ -808,6 +981,15 @@ class Cpu {
          * but was never asked to falls back to the list, and behaves exactly
          * as it did before the panel existed.
          */
+        /* The battery first: the slots are read out of the CMOS, so a page
+         * that has just been opened would otherwise scan the empty register
+         * file that `cmosFresh` is about to fill and report a board with no
+         * modules at all -- no extended memory until the second boot, which
+         * is exactly where a real-mode loader that unpacks itself at 1 MiB
+         * goes wrong. */
+        if (X.cmosReady < 1) {
+            cmosFresh();
+        }
         X.memWords4 = X.memWords * 4;
         slotScan();
         X.extOn = 0;
@@ -942,6 +1124,17 @@ class Cpu {
             _i += 1;
         }
         X.coreRun.set(1, 1);
+        /* The debugger's lists are fixed-size for the same reason every other
+         * list here is: Scratch cannot `set` past the end of a list. */
+        X.dbgR.clear();
+        _i = 1;
+        while (_i <= 8) { X.dbgR.add(0); _i += 1; }
+        X.dbgS.clear();
+        _i = 1;
+        while (_i <= 6) { X.dbgS.add(0); _i += 1; }
+        X.dbgTr.clear();
+        _i = 1;
+        while (_i <= 8) { X.dbgTr.add(0); _i += 1; }
 
         // the ROM and the disk are read-only images: loaded once, from the
         // assets, and never rebuilt
@@ -962,9 +1155,6 @@ class Cpu {
             }
         }
 
-        if (X.cmosReady < 1) {
-            cmosFresh();
-        }
         X.cmosIndex = 0;
     }
 
@@ -1005,6 +1195,7 @@ class Cpu {
         X.cmos.set(88, 0xA5);        // 0x58 the setup has recorded this map
         X.cmos.set(49, 0x00);        // 0x30 boot counter
         X.cmos.set(50, 0x00);        // 0x31 POST result
+        X.cmos.set(46, 3);           // 0x2D boot order: CD-ROM first
         X.cmos.set(51, 0x20);        // 0x32 century
         X.cmos.set(53, 1);           // 0x34 emulation: on
         X.cmos.set(54, 1);           // 0x35 battery: fitted
@@ -1041,10 +1232,20 @@ class Cpu {
                 X.monHalted = halted;
                 X.monErr = err;
                 X.monFrames = X.frames;
+                X.monCs = sbase.get(2);
+                X.monCr0 = cr0;
+                serialPoll();
+                kbdIrq();                       // the controller's line, IRQ1
                 if (X.spawned < X.cores) {
                     spawnCores();               // the setup utility raised the count
                 }
                 modePoll();                     // and the card follows int 10h
+                dbgPanel();                     // the debug panel follows dbgOn
+                if (X.dbgOn >= 1) {
+                    dbgPoll();              // park, step, and publish
+                } else {
+                    dbgPublish();           // the monitors are always the truth
+                }
                 resetPoll();                    // and a save may have restarted it
                 nicPoll();                      // and the wire may have a frame
             }
@@ -1063,20 +1264,29 @@ class Cpu {
              * halted CPU retires no instructions, and this board's clock is
              * the instruction counter.
              */
-            _h = halted;
-            if (_h == 1) {
-                idleCore();
-                _h = halted;
-            }
-            if (_h == 1) {
-                reportCore(0);                  // a sleeping core has nothing to show
-                Control.wait(1);
+#ifdef TURBOWARP
+            if (X.netPulling == 1) {
+                reportCore(0);
+                Control.wait(0);                // let the NetDisk sprite receive the image
             } else {
-                _was = steps;
-                runBatch();
-                reportCore(steps - _was);
-                Control.wait(0);
+#endif
+                _h = halted;
+                if (_h == 1) {
+                    idleCore();
+                    _h = halted;
+                }
+                if (_h == 1) {
+                    reportCore(0);              // a sleeping core has nothing to show
+                    Control.wait(1);
+                } else {
+                    _was = steps;
+                    runBatch();
+                    reportCore(steps - _was);
+                    Control.wait(0);
+                }
+#ifdef TURBOWARP
             }
+#endif
         }
     }
 
@@ -1093,23 +1303,33 @@ class Cpu {
         if (X.tickNo == idleAt) {
             return;
         }
-        if (X.picVec < 1) {
-            getFlagBit(9);
-            if (v == 0) { return; }      // cli; hlt hangs, as it should
-            if (X.pitOn == 0) { return; }
-            _s = X.pitCount.get(1) + 0;
-            if (_s < 1) { _s = 1; }
-            steps += _s * 2 - X.pitAcc;
-            X.pitAcc = 0;
-            /* the counter reached its terminal count while the core slept, so
-             * it reloads and pulls the line -- counting down one tick at a time
-             * here would land the interrupt in the wrong place */
-            X.pitCount.set(1, X.pitReload.get(1));
-            if (X.pitMode.get(1) + 0 < 2) { X.pitCount.set(1, 65536); }
-            picRaise(0);
-            idleAt = X.tickNo;
-            if (X.picVec < 1) { return; }
-        }
+        /* The interrupt flag is the core's *own*, and it is the whole rule: a
+         * `cli; hlt` hangs until a reset, whatever the controller is holding.
+         * This test used to sit inside `if (X.picVec < 1)` -- the shared
+         * controller's idea of whether there was a vector to deliver -- so the
+         * moment the guest programmed the 8259, a halted core stopped being
+         * asked and woke on the next tick. The second core parked in the AP
+         * trampoline came back to life that way, and by then the guest had
+         * written over the trampoline: it walked out of its own parked loop
+         * into MEMZ's boot sector and ran it beside the first core. Two
+         * interpreters stepping one memory is a machine that reboots itself
+         * mid-message and a screen that repaints twice a frame. */
+        getFlagBit(9);
+        if (v == 0) { return; }          // cli; hlt hangs, as it should
+        if (X.picVec < 1) { return; }    // nothing to deliver yet
+        if (X.pitOn == 0) { return; }
+        _s = X.pitCount.get(1) + 0;
+        if (_s < 1) { _s = 1; }
+        steps += _s * 2 - X.pitAcc;
+        X.pitAcc = 0;
+        /* the counter reached its terminal count while the core slept, so
+         * it reloads and pulls the line -- counting down one tick at a time
+         * here would land the interrupt in the wrong place */
+        X.pitCount.set(1, X.pitReload.get(1));
+        if (X.pitMode.get(1) + 0 < 2) { X.pitCount.set(1, 65536); }
+        picRaise(0);
+        idleAt = X.tickNo;
+        if (X.picVec < 1) { return; }
         halted = 0;
     }
 
@@ -1173,6 +1393,10 @@ class Cpu {
          * ratio turns "what this emulator actually does" into "what a 386 would
          * have to be clocked at to keep up", which is the number a 1990s setup
          * screen would show: tens of MHz, not fractions of one. */
+        /* The real retirement rate, whatever the performance setting says:
+         * the monitor is there to show the emulator's speed, not the guest's
+         * impression of it. */
+        X.kips = Operators.math("round", _done / _dt / 1000);
         _mhz = 0;
         if (X.emuOn > 0) {
             /* KIPS times a fixed factor: the machine measures what it really
@@ -1202,6 +1426,7 @@ class Cpu {
     private void runBatch() { // warp
         ops = 0;
         while (ops < X.batch && halted == 0 && err == "") {
+
             /* X.stopAt makes the machine scrubbable: set it to an instruction
              * count and the core parks there, step by step, so a divergence
              * from the model can be bisected instead of guessed at. 0 = off. */
@@ -1213,20 +1438,34 @@ class Cpu {
         }
     }
 
-    /* One RTC second is `X.rtcRate` frames; the registers are BCD, as they are
-     * on the real chip, so the guest reads 0x12 for twelve o'clock. */
+    /* One RTC second is one *second*; the registers are BCD, as they are on the
+     * real chip, so the guest reads 0x12 for twelve o'clock.
+     *
+     * The battery-backed clock on the board is the one clock that does not
+     * count instructions: it runs off its own crystal at 32,768 Hz whether the
+     * CPU is busy, idle or halted. So this reads the wall clock rather than
+     * counting frames -- and there is no frame count to read anyway: `wait 0`
+     * comes back a hundred times a second-frame, so "one frame" is not a unit
+     * the main loop can see. Counting loop passes as if they were frames made
+     * the clock run tens of times too fast: the BIOS printed 00:20:10 one
+     * second after the flag, and the setup screen's clock gained two minutes
+     * for every real one.
+     *
+     * `timeRate` still scales it: Fake OS Time is "how fast the guest's clock
+     * runs", and at 50 the second hand takes two real seconds. */
     private void tickClock() { // warp
         X.tickNo += 1;
-        /* Fake OS Time: the guest's second is `timeRate` per cent of a frame
-         * second. At 100 nothing changes; below it the clock crawls while the
-         * CPU keeps running, so the guest believes the machine is faster than
-         * the wall clock it is running on. */
-        X.rtcFrames += X.timeRate / 100;
-        if (X.rtcFrames < X.rtcRate) {
+        _rtcNow = Sensing.timer();
+        _rtcStep = _rtcNow - X.rtcAt;
+        if (_rtcStep < 0) { _rtcStep = 0; }    // the timer can be reset
+        X.rtcAt = _rtcNow;
+        X.rtcSecs += _rtcStep * X.timeRate / 100;
+        _whole = Operators.math("floor", X.rtcSecs);
+        if (_whole < 1) {
             return;
         }
-        X.rtcFrames = 0;
-        X.rtcSeconds += 1;
+        X.rtcSecs -= _whole;
+        X.rtcSeconds += _whole;
         _s = X.rtcSeconds % 60;
         _m = Operators.math("floor", X.rtcSeconds / 60) % 60;
         _h = Operators.math("floor", X.rtcSeconds / 3600) % 24;
@@ -1352,10 +1591,136 @@ class Cpu {
      * chipset's reset line would: the memory the panel asked for becomes the
      * memory the next boot has, and the CPU starts again at the reset vector.
      */
+    /* The debugger's whole machine-side half.
+     *
+     * `X.stopAt` is already the way to park a core between instructions, so the
+     * debugger is that plus a published copy of the register file: pause sets
+     * the parking post to where the core is, and a step moves it one
+     * instruction further. Nothing here touches the guest's memory or its
+     * timing -- a paused core retires nothing, which is exactly what a real one
+     * does when it is not being clocked.
+     */
+    /* What the debugger shows. A halted core is standing on the instruction
+     * that stopped it, not on the one after: the fault is the only thing
+     * anybody wants to see at that moment, and by the time it is reported `ip`
+     * has already moved past the bytes that failed. */
+    private void dbgShow() { // warp
+        if (halted == 1 && Operators.length(err) > 0) {
+            disasm(badAt);
+            return;
+        }
+        disasm(ip);
+    }
+
+    /* The panel, shown and hidden to match `X.dbgOn`. It runs on the frame the
+     * slider moves -- not every frame, because `showVariable` walks the monitor
+     * list -- and `dbgOn` itself stays put: it is the only control a reader has
+     * when the numbers are hidden.
+     */
+    private void dbgPanel() { // warp
+        if (X.dbgOn == dbgLevel) {
+            return;
+        }
+        dbgLevel = X.dbgOn;
+        if (X.dbgOn >= 2) {
+            Variables.showVariable(X.dbgPause);
+            Variables.showVariable(X.dbgStep);
+            Variables.showVariable(X.dbgIp);
+            Variables.showVariable(X.dbgCs);
+            Variables.showVariable(X.dbgFl);
+            Variables.showVariable(X.dbgHalt);
+            Variables.showVariable(X.dbgCr0);
+            Variables.showVariable(X.dbgDis);
+            Lists.showList(X.dbgR);
+            Lists.showList(X.dbgS);
+            Lists.showList(X.dbgTr);
+        } else {
+            Variables.hideVariable(X.dbgPause);
+            Variables.hideVariable(X.dbgStep);
+            Variables.hideVariable(X.dbgIp);
+            Variables.hideVariable(X.dbgCs);
+            Variables.hideVariable(X.dbgFl);
+            Variables.hideVariable(X.dbgHalt);
+            Variables.hideVariable(X.dbgCr0);
+            Variables.hideVariable(X.dbgDis);
+            Lists.hideList(X.dbgR);
+            Lists.hideList(X.dbgS);
+            Lists.hideList(X.dbgTr);
+        }
+    }
+
+    private void dbgPoll() { // warp
+        if (X.dbgPause < 1) {
+            X.stopAt = 0;                    // free-running
+        } elif (X.dbgStep != X.dbgStepAt) {
+            X.dbgStepAt = X.dbgStep;         // one instruction, then parked again
+            X.stopAt = steps + 1;
+        } else {
+            X.stopAt = steps;                // parked exactly here
+        }
+        dbgPublish();
+        dbgShow();
+    }
+
+    /* The read-out itself, without the parking. It runs whether or not the
+     * debugger is on: `X.dbgOn` is the switch for stopping the machine, and a
+     * monitor that reads zero because a switch elsewhere is off is a monitor
+     * that lies -- the first thing anybody does with it is conclude the machine
+     * is at address zero. The cost is one list write per batch, once a frame. */
+    private void dbgPublish() { // warp
+        /* The ring is the thing a crash is read out of: eight addresses, oldest
+         * first, each one `cs * 65536 + ip` so the monitor prints it as the
+         * segment and the offset it is. It is written once a pass -- a list
+         * write per instruction would cost more than the machine it watches. */
+        X.dbgTr.add(sbase.get(2) * 65536 + ip);
+        if (X.dbgTr.length() > 8) { X.dbgTr.delete(1); }
+        _i = 0;
+        while (_i < 8) {
+            X.dbgR.set(_i + 1, r.get(_i + 1) + 0);
+            _i += 1;
+        }
+        _i = 0;
+        while (_i < 6) {
+            X.dbgS.set(_i + 1, sr.get(_i + 1) + 0);
+            _i += 1;
+        }
+        X.dbgIp = ip;
+        X.dbgCs = sbase.get(2);
+        X.dbgFl = fl;
+        X.dbgHalt = halted;
+        X.dbgCr0 = cr0;
+    }
+
     private void resetPoll() { // warp
-        rdb(0x4F5);
-        if (v % 256 == 0) { return; }
-        wrb(0x4F5, 0);                 // the request is taken
+        /* The request comes from port 0x64, the way it does on a PC: command
+         * 0xFE pulses the reset line, and that is what Linux's `reboot` and
+         * every `int 19h`-style restart actually do.
+         *
+         * This used to be a byte at 0x4F5 -- inside the BIOS data area, next to
+         * the console's own scratch -- and any guest that wrote that address
+         * restarted the machine. A kernel booting to the point where it clears
+         * low memory did exactly that, over and over: the machine looked like
+         * it was rebooting for ever, and the byte it had written was the whole
+         * evidence. */
+        _resetWhy = "";
+        if (X.rebootReq == 1) {
+            X.rebootReq = 0;
+            _resetWhy = "port 0x64 = 0xFE";
+        } else {
+            /* The firmware's own save-and-restart writes a byte at 0x4F5, and
+             * that is only ever meant for the firmware: in real mode the byte
+             * is the setup utility's, and in protected mode it is memory a
+             * kernel may legitimately use. A kernel that zeroes low memory
+             * therefore asked for a reboot on every pass, which is a machine
+             * that reboots for ever. */
+            if (cr0 % 2 == 1) { return; }
+            rdb(0x4F5);
+            if (v % 256 == 0) { return; }
+            wrb(0x4F5, 0);
+            _resetWhy = join("0x4F5 = ", v % 256);
+        }
+        X.rebootWhy = join(_resetWhy, " at ", sbase.get(2), ":", ip,
+                           " after ", steps, " steps");
         slotScan();
 #ifdef TURBOWARP
         rdb(0x3D);
@@ -1378,6 +1743,17 @@ class Cpu {
         }
         if (v % 256 == 0x12) {
             X.textMode = 2;
+            return;
+        }
+        /* 4 and 5 are one bitmap seen through two pages of memory, and 6 is the
+         * same shape at one bit a pixel: all three live in the *text* plane at
+         * 0xB8000, which is why the painter reads memory the console writes. */
+        if (v % 256 == 4 || v % 256 == 5) {
+            X.textMode = 3;
+            return;
+        }
+        if (v % 256 == 6) {
+            X.textMode = 4;
             return;
         }
         if (X.textMode > 0) {
@@ -1486,6 +1862,9 @@ class Cpu {
             _b = Operators.math("floor", _old / _sh) % 256;
             X.text.set(_i, _old - _b * _sh + _wv * _sh);
             markCell(_o);
+            if (X.textMode > 2) {
+                X.gfxDirty = 1;         // in a CGA mode this is the framebuffer
+            }
             return;
         }
         if (_pA >= X.diskBase && _pA < X.diskBase + X.diskWords * 4) {
@@ -1541,16 +1920,29 @@ class Cpu {
 
     /* ---- fetch and addressing ---------------------------------------- */
 
+    /* A20 looks at every physical address on its way out. The gate is a wire
+     * on the address bus, so it folds bit 20 off in protected mode as well --
+     * with it shut, the 4 GB that a kernel's page tables describe is not
+     * reachable, which is exactly what a BIOS that forgets to open it finds. */
     private void phys(segIndex, off) { // warp
+        physRaw(segIndex, off);
+        if (X.a20 == 0) {
+            v = v % 1048576 + Operators.math("floor", v / 2097152) * 2097152;
+        }
+    }
+
+    private void physRaw(segIndex, off) { // warp
         _pSeg = segIndex;
         if (_pSeg < 1) { _pSeg = 0; }      // segment 0: the interrupt table
         if (_pSeg > 0) { _pSeg = sbase.get(_pSeg) + 0; }
         _lin = (_pSeg + off) % 4294967296;
         if (cr0 % 2 == 0) {
-            /* Real mode wraps at a megabyte, and that is not a simplification:
-             * an 8086 with a segment of 0xFFFF and an offset of 0xFFFF really
-             * does come back round to the bottom. */
-            v = _lin % 1048576;
+            /* Real mode wraps at a megabyte only because the gate is shut: an
+             * 8086 with a segment of 0xFFFF and an offset of 0xFFFF comes back
+             * round to the bottom, and the same address on a 386 with A20 open
+             * reaches extended memory. The gate itself is applied below, once,
+             * to whatever this returns. */
+            v = _lin;
             return;
         }
         /* Protected mode is where extended memory starts. A flat descriptor
@@ -1578,11 +1970,27 @@ class Cpu {
         _pgAt = (cr3 - cr3 % 4096) + Operators.math("floor", lin / 4194304) * 4;
         rdd(_pgAt);
         _pde = v;
-        if (_pde % 2 == 0) { pageFault(lin, 0); return; }
+        if (_pde % 2 == 0) {
+            if (peekOnly == 1) { peekMiss = 1; v = 0; return; }
+            pageFault(lin, 0); return;
+        }
+        /* Bit 7 of the entry is PS: with CR4.PSE open, that entry *is* the
+         * mapping, four megabytes of it, and there is no second level. A
+         * 32-bit Linux builds its first table this way, so a machine that
+         * ignores the bit reads a directory entry as a table pointer and
+         * walks into whatever the entry's low bits point at. */
+        if (Operators.math("floor", _pde / 128) % 2 == 1
+            && Operators.math("floor", cr4 / 16) % 2 == 1) {
+            v = _pde - _pde % 4194304 + lin % 4194304;
+            return;
+        }
         _pgAt = _pde - _pde % 4096 + Operators.math("floor", lin / 4096) % 1024 * 4;
         rdd(_pgAt);
         _pte = v;
-        if (_pte % 2 == 0) { pageFault(lin, 1); return; }
+        if (_pte % 2 == 0) {
+            if (peekOnly == 1) { peekMiss = 1; v = 0; return; }
+            pageFault(lin, 1); return;
+        }
         v = (_pte - _pte % 4096) + lin % 4096;
     }
 
@@ -1613,7 +2021,11 @@ class Cpu {
         sr.set(index, _sel);
         if (cr0 % 2 == 1) {
             descriptor(_sel);
-            sbase.set(index, dBase % 1048576);
+            /* A descriptor's base is a linear address, not a real-mode one: a
+             * 32-bit guest may put a segment anywhere in the four gigabytes,
+             * and truncating it to twenty bits moved a kernel's data segment to
+             * the bottom of memory. */
+            sbase.set(index, dBase % 4294967296);
             slimit.set(index, dLim);
             if (index == 2) {
                 dsz = 2;
@@ -1640,6 +2052,7 @@ class Cpu {
         rdb(_dAt + 2); _d2 = v;
         rdb(_dAt + 3); _d3 = v;
         rdb(_dAt + 4); _d4 = v;
+        rdb(_dAt + 5); dAccess = v;
         rdb(_dAt + 7); _d7 = v;
         rdb(_dAt + 6); _d6 = v;
         dBase = _d2 + _d3 * 256 + _d4 * 65536 + _d7 * 16777216;
@@ -1673,6 +2086,14 @@ class Cpu {
         } else {
             ip = (ip + delta) % 65536;
         }
+    }
+
+    /* A value that becomes the instruction pointer is an offset in the *code*
+     * segment, so it is as wide as that segment -- not as wide as the operand
+     * that carried it. `o32 ret` in sixteen-bit code pops four bytes and jumps
+     * to the low sixteen of them; the model does the same with `ipmask`. */
+    private void setIp(val) { // warp
+        if (dsz == 4) { ip = val % 4294967296; } else { ip = val % 65536; }
     }
 
     private void f8() { // warp
@@ -1770,11 +2191,29 @@ class Cpu {
     }
 
     private void getReg16(i) { // warp
-        v = r.get(i + 1) + 0;
+        v = (r.get(i + 1) + 0) % 65536;
     }
 
+    /* A sixteen-bit write is a write to half a 386 register, not to a
+     * sixteen-bit register: the top half stays. Clearing it made
+     *
+     *     mov eax, ecx / shl eax, 16 / mov ax, dx
+     *
+     * -- the only way a 16-bit BIOS can build a 32-bit number -- come out as
+     * `dx`, so `int 15h ah=86` with CX set asked for the wrong number of
+     * microseconds, and every 32-bit value assembled half at a time was
+     * smashed by the second half. */
     private void putReg16(i, val) { // warp
-        r.set(i + 1, val % 65536);
+        _rOld = r.get(i + 1) + 0;
+        r.set(i + 1, _rOld - _rOld % 65536 + val % 65536);
+    }
+
+    /* A pointer: sixteen bits of it, or thirty-two, the way the address size
+     * says. `movs`/`ins` take their index registers at the width the segment
+     * is running in, so ESI above 64 KiB is a real address, not a truncation. */
+    private void getPtr(which) { // warp
+        if (asz == 4) { getReg32(which); return; }
+        getReg16(which);
     }
 
     /* The full thirty-two bits. `mov cr0, eax` needs them: PG is bit 31, and a
@@ -1803,7 +2242,7 @@ class Cpu {
         if (mmod == 3) {
             return;
         }
-        if (dsz == 4) { modrm32(); return; }
+        if (asz == 4) { modrm32(); return; }
         _mrm = mrm;
         if (_mrm == 0) { ea = r.get(4) + r.get(7); }
         if (_mrm == 1) { ea = r.get(4) + r.get(8); }
@@ -2137,7 +2576,7 @@ class Cpu {
     /* ---- the stack ---------------------------------------------------- */
 
     private void push16(val) { // warp
-        r.set(5, (r.get(5) + 65534) % 65536);
+        spAdjust(-2);
         phys(3, r.get(5));          // leaves the address in `v`
         if (v < 4096) {
             if (X.portLog.length() < 40) { X.portLog.add(join("push ir=", ir, " ip=", ip - 1, " sp=", r.get(5), " ss=", sr.get(3), " at=", v, " v=", val)); }
@@ -2148,9 +2587,19 @@ class Cpu {
     /* A push at the operand size. In sixteen-bit code that is the word form
      * above; in thirty-two-bit code the stack pointer moves four and two words
      * land, exactly the way a dword load is built out of two. */
+    /* ESP is a stack pointer, not a sixteen-bit counter: a 386 in protected
+     * mode keeps its stack anywhere in the four gigabytes, so a `push ax` in
+     * 32-bit code must move the *whole* pointer by two. Wrapping it at 64 KiB
+     * dropped the stack to the bottom of memory and every `ret` after that
+     * returned to zero. */
+    private void spAdjust(delta) { // warp
+        if (dsz == 4) { r.set(5, (r.get(5) + delta) % 4294967296); return; }
+        r.set(5, (r.get(5) + delta) % 65536);
+    }
+
     private void pushOp(size, val) { // warp
         if (size != 4) { push16(val); return; }
-        r.set(5, (r.get(5) + 4294967292) % 4294967296);
+        spAdjust(-4);
         phys(3, r.get(5));
         _p4A = v;
         _p4V = val % 4294967296;
@@ -2166,13 +2615,13 @@ class Cpu {
         _q4Lo = v;
         rdw(_q4A + 2);
         v = _q4Lo + v * 65536;
-        r.set(5, (r.get(5) + 4) % 4294967296);
+        spAdjust(4);
     }
 
     private void pop16() { // warp
         phys(3, r.get(5));
         rdw(v);
-        r.set(5, (r.get(5) + 2) % 65536);
+        spAdjust(2);
     }
 
     /* The far call the hardware makes: flags, cs, ip, then the vector. */
@@ -2474,10 +2923,11 @@ class Cpu {
          * image is there it *is* the drive, and the staged list is only what
          * fits in a project. */
         if (X.netDisk == 1) {
-            /* One call, not 768 blocks: the drive's data register wants 256
-             * words, and building them a byte at a time in Scratch is how a
-             * thirty-thousand-sector boot becomes a frozen tab. */
-            Ram.diskwords(256, X.ataLba * 512, X.ataBuf);
+            /* Nothing to copy: the drive *is* the extension's buffer, and the
+             * data register has to hand over 256 words of it. Reading them
+             * straight out of the image is one call a word, which is what the
+             * staged list cost anyway -- and a copy into a Scratch list is not
+             * possible from an extension, so a copy was a sector of zeros. */
             X.ataPos = 0;
             X.ataStatus = 88;             // ready, and data wanted (DRDY|DRQ|DSC)
             X.ataSectors = X.netDiskSectors;
@@ -2516,6 +2966,28 @@ class Cpu {
             X.ataBuf.set(_i + 1, ident.get(_i + 1) + 0);
             _i += 1;
         }
+        /* Word 60 and 61 are how many sectors the drive has, and the baked
+         * block says none: it was written when the drive was a list of 128
+         * sectors and nobody asked. A driver that sizes a disk from IDENTIFY
+         * divides by what it finds, so a drive the host handed over reports the
+         * image it sent. */
+        _cap = X.ataSectors;
+        if (X.netDisk == 1) { _cap = X.netDiskSectors; }
+        /* item n + 1 is word n: the capacity is words 60 and 61, which are
+         * items 61 and 62. Writing items 60 and 61 put it in words 59 and 60,
+         * and a driver that asks the drive its size reads zero. */
+        X.ataBuf.set(61, _cap % 65536);
+        X.ataBuf.set(62, Operators.math("floor", _cap / 65536) % 65536);
+        /* And the block has to keep summing to zero: word 256 is the checksum
+         * of the other 255, and a drive that changes its capacity without
+         * fixing it is a drive whose IDENTIFY a driver rejects. */
+        _sum = 0;
+        _i = 0;
+        while (_i < 255) {
+            _sum = (_sum + X.ataBuf.get(_i + 1) + 0) % 65536;
+            _i += 1;
+        }
+        X.ataBuf.set(256, (65536 - _sum) % 65536);
         X.ataPos = 0;
         X.ataStatus = 88;
     }
@@ -2553,7 +3025,23 @@ class Cpu {
     private void ataIn() { // warp
         v = 0;
         if (X.ataPos < 256) {
+#ifdef TURBOWARP
+            /* The *command* decides where the words come from: READ SECTORS moves a
+             * sector out of the host's image, while IDENTIFY and SMART fill
+             * `ataBuf` with answers the drive made up. Reading the image for
+             * those handed a driver its first 512 bytes back -- a boot sector,
+             * where it asked for a capacity. */
+            if (X.netDisk == 1 && (X.ataCmd == 32 || X.ataCmd == 33 || X.ataCmd == 36)) {
+                /* The drive is the extension's image, so word n of the sector is
+                 * the two bytes at n*2. Thirty-two megabytes of kernel cannot be
+                 * a Scratch list; this is the one place it shows. */
+                v = Ram.diskread16(X.ataLba * 512 + X.ataPos * 2) + 0;
+            } else {
+                v = X.ataBuf.get(X.ataPos + 1) + 0;
+            }
+#else
             v = X.ataBuf.get(X.ataPos + 1) + 0;
+#endif
             X.ataPos += 1;
         }
         if (X.ataPos >= 256) {
@@ -3015,7 +3503,15 @@ class Cpu {
             return;
         }
         if (i == 1) { v = X.uart.get(2); return; }                     // IER/DLM
-        if (i == 2) { v = 1; return; }                                // no interrupt
+        if (i == 2) {
+            /* IIR: bit 0 clear means a source is asking, and the low nibble
+             * says which. Reading it is also how a driver acknowledges, which
+             * costs nothing here because the request is a level: the byte is
+             * still in the queue and the guest has not taken it yet. */
+            v = 1;                                                    // no interrupt
+            if (X.serialIn.length() > 0 && X.uart.get(2) % 2 == 1) { v = 4; }
+            return;
+        }
         if (i == 5) {
             v = 96;                                                   // THRE, TEMT
             if (X.serialIn.length() > 0) { v = 97; }
@@ -3028,7 +3524,14 @@ class Cpu {
         _uv = val % 256;
         if (i == 0) {
             if (X.uart.get(4) >= 128) { X.uart.set(1, _uv); return; }  // divisor
-            if (X.uart.get(5) >= 16) { return; }                      // loopback
+            if (X.uart.get(5) >= 16) {
+                /* MCR bit 4 is the loopback the wire is not: the byte written
+                 * comes straight back as received data. Every 8250 probe does
+                 * exactly this -- set loopback, send a byte, read it back --
+                 * so a card that drops it is a card no driver will adopt. */
+                X.serialIn.add(_uv);
+                return;
+            }
             X.serial.add(_uv);
             X.out.add(_uv);                    // the debug log this port has
             X.serialN += 1;                    // always been for our own code
@@ -3055,13 +3558,53 @@ class Cpu {
             _c = X.serial.get(1);
             X.serial.delete(1);
             if (_c >= 32 && _c < 127) {
-                _st = _st + Operators.letterOf(_c - 31, X.ascii);
+                _st = join(_st, Operators.letterOf(_c - 31, X.ascii));
             } elif (_c == 13 || _c == 10) {
-                _st = _st + "\n";
+                _st = join(_st, "\n");
             }
             _sn += 1;
         }
         v = _st;
+    }
+
+    /* Keep `X.serialText` a readable window on the console instead of an
+     * unbounded copy of everything the guest ever printed. The trim is a
+     * `letterOf` walk, which is dear, so it happens once every few hundred
+     * characters rather than once a frame. */
+    private void serialPoll() { // warp
+        serialTake(240);
+        if (v == "") { return; }
+        X.serialText = join(X.serialText, v);
+        if (Operators.length(X.serialText) < 1600) { return; }
+        _sc = Operators.length(X.serialText) - 1100;
+        _st = "";
+        _sn = 0;
+        while (_sn < 1100) {
+            _st = join(_st, Operators.letterOf(_sc + _sn, X.serialText));
+            _sn += 1;
+        }
+        X.serialText = _st;
+    }
+
+    /* ---- the two interrupt lines a guest can hook ---------------------- *
+     * IRQ1 is the keyboard and IRQ4 is COM1: the two devices a person types
+     * into. Both are *level* asking -- the request stays up until the guest
+     * takes the byte -- so this is a check made once a batch, not an edge.
+     *
+     * The 8042 raises IRQ1 whenever a byte is sitting in its output buffer and
+     * holds it until somebody reads port 0x60. Nothing here reads it: the
+     * guest's handler does, or int 16h does, and the line drops by itself.
+     *
+     * The 16550 raises IRQ4 for a received byte when the guest has enabled that
+     * interrupt in IER. Its transmitter interrupt is deliberately not modelled:
+     * a write to THR is a list append here, so "transmitter empty" would be
+     * true for ever, and an interrupt that never goes away is a hung machine
+     * rather than a model of one. Every driver polls THR at least once before
+     * it arms that interrupt, so the console still prints.
+     */
+    private void kbdIrq() { // warp
+        if (K.fifo.length() > 0) { picRaise(1); }
+        if (X.serialIn.length() > 0 && X.uart.get(2) % 2 == 1) { picRaise(4); }
     }
 
     private void portIn(p) { // warp
@@ -3073,8 +3616,33 @@ class Cpu {
         }
         if (p >= X.nicBase && p <= X.nicBase + 255) { nicRead(p - X.nicBase, 1); return; }
         if (p >= 1016 && p <= 1023) { uartRead(p - 1016); return; }
-        if (p == 96) { v = X.port60; X.port64 = 0; return; }
+        /* Port 0x60 is the controller's own queue, drained a byte at a time:
+         * the key *sent* is not the key that arrives, because an extended key
+         * is two bytes and the caller may ask for the first one long before
+         * the second is pressed. Keeping only the last one written lost a key
+         * whenever two landed in the same frame, and left the 0xE0 prefix
+         * behind for ever. */
+        if (p == 96) {
+            if (K.fifo.length() > 0) {
+                X.port60 = K.fifo.get(1) + 0;
+                K.fifo.delete(1);
+            }
+            v = X.port60;
+            X.port64 = 0;
+            if (K.fifo.length() > 0) { X.port64 = 1; }
+            return;
+        }
         if (p == 100) { v = X.port64; return; }
+        if (p == 986) {
+            /* Status register 1. Bit 0 is set during a horizontal retrace and
+             * bit 3 during a vertical one; a guest that waits for the retrace
+             * to *end* would spin for ever on a constant, so both bits follow
+             * every other read. Nothing here is fast enough to miss a frame. */
+            X.cgaFlip = 1 - X.cgaFlip;
+            v = X.cgaFlip * 9;
+            return;
+        }
+        if (p == 146) { v = X.a20 * 2; return; }
         if (p == 112) { v = X.cmosIndex; return; }
         if (p == 113) { v = X.cmos.get(X.cmosIndex + 1) + 0; return; }
         if (p >= 64 && p <= 66) { pitRead(p - 64); return; }
@@ -3117,9 +3685,28 @@ class Cpu {
         if (p == X.ataCmdPort) { v = X.ataStatus; return; }
         if (p == X.hwSmartValPort) { v = X.hwSmart.get(X.hwSmartSel) + 0; return; }
         if (p == X.hwSmartWorstPort) { v = X.hwSmartWorst.get(X.hwSmartSel) + 0; return; }
+        if (p == 97) {
+            /* 0x61 is three registers in one byte: what the last write left in
+             * the low five bits, the DRAM refresh toggle in bit 4, and timer 2's
+             * output in bit 5. A guest that writes 0x61 and reads bit 5 back
+             * gets its own bits only if the counter is not expressing an
+             * opinion, so those two have to be laid over the top. */
+            v = X.speakerGate % 32 + X.pitOut.get(3) * 32;
+            if (Operators.math("floor", X.pitUp / 4) % 2 == 1) { v += 16; }
+            return;
+        }
         if (p == X.hwGatePort) { v = X.speakerGate; return; }
         if (p == X.hwToneLoPort) { v = X.toneHz % 256; return; }
         if (p == X.hwToneHiPort) { v = Operators.math("floor", X.toneHz / 256) % 256; return; }
+        if (p == X.pitUpLoPort) {
+            X.pitUpLatch = X.pitUp;
+            v = X.pitUpLatch % 256;
+            return;
+        }
+        if (p == X.pitUpHiPort) {
+            v = Operators.math("floor", X.pitUpLatch / 256) % 256;
+            return;
+        }
     }
 
     private void portOut(p, val) { // warp
@@ -3142,6 +3729,30 @@ class Cpu {
             return;
         }
         _oV = val % 256;
+        if (p == 146) {
+            /* System Control Port A. Bit 1 is the A20 gate, bit 0 resets the
+             * processor through the chipset instead of a reset line -- the pair
+             * a loader uses from real mode to get past the megabyte. */
+            X.a20 = Operators.math("floor", _oV / 2) % 2;
+            if (_oV % 2 == 1) { X.rebootReq = 1; }
+            return;
+        }
+        if (p == 968 || p == 969) {
+            /* 0x3D8 is the CGA's mode control and 0x3D9 its colour select. Only
+             * the colour select changes a pixel here: 0x3D8 turns the display
+             * on and off, and a guest that turns it off and back on again wants
+             * the picture back. */
+            if (p == 969) { X.cgaCtl = _oV; }
+            return;
+        }
+        if (p == 100) {
+            /* The 8042's command port. 0xFE is the pulse-reset command, and it
+             * is the one thing a PC -- and therefore Linux -- uses to restart
+             * itself without a chipset register. */
+            if (_oV == 254) { X.rebootReq = 1; }
+            X.kbCmd = _oV;
+            return;
+        }
         if (p == 43) { pitControl(_oV); return; }
         if (p >= 64 && p <= 66) { pitWrite(p - 64, _oV); return; }
         if (p == 32) { picCommand(_oV); picRefresh(); return; }
@@ -3227,7 +3838,23 @@ class Cpu {
             if (_oV >= 1 && _oV <= 5) { X.hwSmartSel = _oV; }
             return;
         }
-        if (p == 97) { X.speakerGate = _oV; speakerUpdate(); return; }
+        if (p == 97) {
+            /* Bit 0 is timer 2's gate. A rising edge reloads the counter and
+             * drops the output, which is the whole handshake GRUB waits on: it
+             * clears the gate, loads 0xFFFF, raises the gate, and then wants to
+             * see the output low before it waits for it to go high. Edge *and*
+             * level matter -- a level-only gate would let a counter that never
+             * stopped report its terminal count at once. */
+            if (_oV % 2 == 1 && X.speakerGate % 2 == 0) {
+                X.pitCount.set(3, X.pitReload.get(3) + 0);
+                X.pitOut.set(3, 0);
+            } elif (_oV % 2 == 0) {
+                X.pitOut.set(3, 0);
+            }
+            X.speakerGate = _oV;
+            speakerUpdate();
+            return;
+        }
         if (p == X.coreReleasePort) {
             // wake core n: the device owns the flag, not the firmware
             if (_oV >= 1 && _oV <= X.cores) {
@@ -3300,6 +3927,9 @@ class Cpu {
         if (_acc > 0) { X.pitAccess.set(_ch + 1, _acc); }
         X.pitMode.set(_ch + 1, Operators.math("floor", word / 2) % 8);
         X.pitNextByte.set(_ch + 1, 0);
+        if (_ch == 2) {
+            if (X.pitMode.get(3) + 0 < 2) { X.pitOut.set(3, 0); } else { X.pitOut.set(3, 1); }
+        }
         if (_acc == 0) {                    // latch the count for a read
             X.pitLatched.set(_ch + 1, X.pitCount.get(_ch + 1) + 0);
         }
@@ -3328,7 +3958,13 @@ class Cpu {
         }
         X.pitCount.set(ch + 1, X.pitReload.get(ch + 1) + 0);
         if (ch == 0) { X.pitOn = 1; }
-        if (ch == 2) { speakerUpdate(); }
+        if (ch == 2) {
+            // a reload arms the pin: low for the one-shot modes, high for the
+            // square-wave ones, which is what the output looks like after a
+            // mode write on an 8254
+            if (X.pitMode.get(3) + 0 < 2) { X.pitOut.set(3, 0); } else { X.pitOut.set(3, 1); }
+            speakerUpdate();
+        }
     }
 
     private void pitRead(ch) { // warp
@@ -3356,17 +3992,26 @@ class Cpu {
      * v as a bit mask, and bit 0 is the one wired to IRQ0. */
     private void pitTick() { // warp
         v = 0;
+        X.pitUp = (X.pitUp + 1) % 65536;      // the clock, for whoever polls it
         _i = 0;
         while (_i < 3) {
-            _c = X.pitCount.get(_i + 1) + 0 - 1;
-            if (_c <= 0) {
-                _c = X.pitReload.get(_i + 1) + 0;
-                v = v + X.pow2.get(_i + 1);
-                if (X.pitMode.get(_i + 1) + 0 < 2) {
-                    _c = 65536;             // one shot: the output stays high
+            /* Counter 2 lives behind the gate on 0x61, and a gated-off counter
+             * holds its value: the whole point of GRUB asking is that the output
+             * does not move until the gate opens. */
+            if (_i < 2 || X.speakerGate % 2 == 1) {
+                _c = X.pitCount.get(_i + 1) + 0 - 1;
+                if (_c <= 0) {
+                    _c = X.pitReload.get(_i + 1) + 0;
+                    v = v + X.pow2.get(_i + 1);
+                    if (X.pitMode.get(_i + 1) + 0 < 2) {
+                        _c = 65536;             // one shot: the output stays high
+                        X.pitOut.set(_i + 1, 1);
+                    } else {
+                        X.pitOut.set(_i + 1, 1 - (X.pitOut.get(_i + 1) + 0));
+                    }
                 }
+                X.pitCount.set(_i + 1, _c);
             }
-            X.pitCount.set(_i + 1, _c);
             _i += 1;
         }
     }
@@ -3574,7 +4219,26 @@ class Cpu {
         if (X.pitAcc < 2) { return; }
         X.pitAcc = 0;
         pitTick();
-        if (v % 2 == 1) { picRaise(0); }
+        /* A wrap is one tick, and a tick is the BIOS's word at 40:6C. The
+         * interrupt delivers the usual one, but the 8259 holds a single
+         * request per line: a guest that spends a wait with interrupts off --
+         * `int 15h ah=86` is exactly that -- would come back to a clock that
+         * had not moved. A request that finds its line already asking is
+         * therefore counted here, so the tick never loses time. */
+        if (v % 2 == 1) {
+            if (X.picIrr % 2 == 1) {
+                rdw(1132);
+                _cbLo = (v + 1) % 65536;
+                if (v + 1 >= 65536) {
+                    rdw(1134);
+                    _cbHi = (v + 1) % 65536;
+                    wrw(1134, _cbHi);
+                }
+                wrw(1132, _cbLo);
+            } else {
+                picRaise(0);
+            }
+        }
     }
 
     /* ---- the decoder -------------------------------------------------- */
@@ -3590,6 +4254,7 @@ class Cpu {
          * kernel's does), and the 66 prefix flips it. Real mode never sees the
          * difference; a 32-bit kernel sees all of it. */
         oz = dsz;
+        asz = dsz;
         _prefOn = 1;
         while (_prefOn == 1) {
             _prefOn = 0;
@@ -3599,7 +4264,15 @@ class Cpu {
                 if (oz == 4) { oz = 2; } else { oz = 4; }
                 _prefOn = 1;
             }
-            if (ir == 103) { _prefOn = 1; }
+            if (ir == 103) {
+                /* 0x67 is the address-size override, and it is what makes
+                 * `[esp]` mean the stack pointer in sixteen-bit code and
+                 * `[si]` mean something else entirely in a 32-bit segment.
+                 * Ignoring it decoded `66 67 FF 34 24` as four bytes instead of
+                 * five -- a SIB byte read as the next opcode. */
+                if (asz == 4) { asz = 2; } else { asz = 4; }
+                _prefOn = 1;
+            }
             if (ir == 38) { seg = 1; _prefOn = 1; }
             if (ir == 46) { seg = 2; _prefOn = 1; }
             if (ir == 54) { seg = 3; _prefOn = 1; }
@@ -3610,6 +4283,7 @@ class Cpu {
             if (ir == 242 || ir == 243) { rep = ir; _prefOn = 1; }
         }
         steps += 1;
+        if (sr.get(2) == 61440) { X.romSteps += 1; } else { X.guestSteps += 1; }
         if (traceOn == 1) {
             trace.add(join(sr.get(2), ":", ip - 1, ":", ir));
         }
@@ -3650,11 +4324,11 @@ class Cpu {
         }
         if (_form == 1) {
             modrm();
-            getOp(2);
+            getOp(oz);
             _x = v;
-            getReg16(mreg);
-            alu(_kind, _x, v, 2);
-            if (_kind != 7) { putOp(2, v); }
+            if (oz == 4) { getReg32(mreg); } else { getReg16(mreg); }
+            alu(_kind, _x, v, oz);
+            if (_kind != 7) { putOp(oz, v); }
             return;
         }
         if (_form == 2) {
@@ -3668,11 +4342,13 @@ class Cpu {
         }
         if (_form == 3) {
             modrm();
-            getReg16(mreg);
+            if (oz == 4) { getReg32(mreg); } else { getReg16(mreg); }
             _x = v;
-            getOp(2);
-            alu(_kind, _x, v, 2);
-            if (_kind != 7) { putReg16(mreg, v); }
+            getOp(oz);
+            alu(_kind, _x, v, oz);
+            if (_kind != 7) {
+                if (oz == 4) { putReg32(mreg, v); } else { putReg16(mreg, v); }
+            }
             return;
         }
         if (_form == 4) {
@@ -3807,6 +4483,49 @@ class Cpu {
             putOp(size, _tRes);
             return;
         }
+        /* A 32 x 32 product is sixty-four bits and a 64 / 32 quotient is
+         * thirty-two: neither fits a Scratch number exactly, so the wide forms
+         * are done in sixteen-bit limbs, which is how the 8086 would have done
+         * them anyway. Without this, `mul ebx` read EAX's low half and threw
+         * the top away -- so `mov eax, ecx / shl eax, 16 / mov ax, dx / mul 1193
+         * / div 1000` in the BIOS's own wait answered zero for every request
+         * with CX set. */
+        if (size == 4 && (_tKind == 4 || _tKind == 5)) {
+            getReg32(0);
+            _mAcc = v;
+            _mNeg = 0;
+            if (_tKind == 5) {
+                if (_mAcc >= 2147483648) { _mAcc = _mAcc - 4294967296; }
+                if (_tVal >= 2147483648) { _tVal = _tVal - 4294967296; }
+            }
+            if (_mAcc < 0) { _mAcc = 0 - _mAcc; _mNeg = 1; }
+            if (_tVal < 0) { _tVal = 0 - _tVal; _mNeg = 1 - _mNeg; }
+            _mA0 = _mAcc % 65536;
+            _mA1 = Operators.math("floor", _mAcc / 65536);
+            _mB0 = _tVal % 65536;
+            _mB1 = Operators.math("floor", _tVal / 65536);
+            _mLo = _mA0 * _mB0;
+            _mCarry = Operators.math("floor", _mLo / 65536) + _mA1 * _mB0 + _mA0 * _mB1;
+            _mPLo = (_mCarry % 65536) * 65536 + _mLo % 65536;
+            _mPHi = _mA1 * _mB1 + Operators.math("floor", _mCarry / 65536);
+            if (_mNeg == 1) {
+                if (_mPLo == 0) {
+                    _mPHi = (4294967296 - _mPHi) % 4294967296;
+                } else {
+                    _mPLo = 4294967296 - _mPLo;
+                    _mPHi = (4294967295 - _mPHi) % 4294967296;
+                }
+            }
+            putReg32(0, _mPLo);
+            putReg32(2, _mPHi);
+            _tSet = 0;
+            if (_mPHi > 0 && _mPHi < 4294967295) { _tSet = 1; }
+            if (_tKind == 5 && _mPHi != 0 && _mPHi != 4294967295) { _tSet = 1; }
+            if (_tKind == 5 && _mPHi == 4294967295 && _mPLo < 2147483648) { _tSet = 1; }
+            setFlagTo(0, _tSet);
+            setFlagTo(11, _tSet);
+            return;
+        }
         if (_tKind == 4 || _tKind == 5) {
             getReg16(0);
             _tAcc = v;
@@ -3840,6 +4559,50 @@ class Cpu {
          * as unsigned bytes, because Scratch's modulo keeps the sign of a
          * negative remainder and a register cannot.
          */
+        if (size == 4) {
+            /* The dividend is EDX:EAX and the divisor is thirty-two bits, so
+             * the quotient is only defined when EDX is smaller than the
+             * divisor; anything else is #DE, exactly as the chip does it. The
+             * division itself is two sixteen-bit steps, so every intermediate
+             * stays inside a double's exact integer range. */
+            getReg32(0);
+            _dLo = v;
+            getReg32(2);
+            _dHi = v;
+            _dVal = _tVal;
+            _dNeg = 0;
+            _dRemNeg = 0;
+            if (_tKind == 7) {
+                if (_dHi >= 2147483648) {
+                    _dRemNeg = 1;
+                    _dNeg = 1;
+                    if (_dLo == 0) { _dHi = 4294967296 - _dHi; }
+                    else { _dLo = 4294967296 - _dLo; _dHi = 4294967295 - _dHi; }
+                }
+                if (_dVal >= 2147483648) {
+                    _dVal = 4294967296 - _dVal;
+                    _dNeg = 1 - _dNeg;
+                }
+            }
+            if (_dVal == 0 || _dHi >= _dVal) {
+                interrupt(0);
+                return;
+            }
+            _d1 = _dHi * 65536 + Operators.math("floor", _dLo / 65536);
+            _dQ1 = Operators.math("floor", _d1 / _dVal);
+            _d1 = _d1 - _dQ1 * _dVal;
+            _d0 = _d1 * 65536 + _dLo % 65536;
+            _dQ0 = Operators.math("floor", _d0 / _dVal);
+            _dRem = _d0 - _dQ0 * _dVal;
+            _dQ = _dQ1 * 65536 + _dQ0;
+            if (_dNeg == 1) {
+                if (_dQ != 0) { _dQ = 4294967296 - _dQ; }
+            }
+            if (_dRemNeg == 1 && _dRem != 0) { _dRem = 4294967296 - _dRem; }
+            putReg32(0, _dQ);
+            putReg32(2, _dRem);
+            return;
+        }
         if (size == 1) {
             /* byte divide: ax / operand -> al = quotient, ah = remainder.
                dx is not part of the dividend and must come out untouched. */
@@ -3937,7 +4700,7 @@ class Cpu {
         }
         if (op == 141) {                       // lea
             modrm();
-            if (dsz == 4) {
+            if (oz == 4) {
                 putReg32(mreg, ea);
             } else {
                 putReg16(mreg, ea);
@@ -3945,7 +4708,8 @@ class Cpu {
             return;
         }
         if (op == 161 || op == 163 || op == 160 || op == 162) {
-            if (dsz == 4) { f32(); } else { f16(); }
+            // the memory offset follows the address size, not the data width
+            if (asz == 4) { f32(); } else { f16(); }
             _mOff = v;
             phys(seg, _mOff);
             _mAddr = v;
@@ -4006,7 +4770,7 @@ class Cpu {
         }
         if (op == 235) { jumpRel8(); return; }
         if (op == 233) {                       // jmp rel
-            if (dsz == 4) {
+            if (oz == 4) {
                 f32();
                 _j = v;
                 if (_j >= 2147483648) { _j = _j - 4294967296; }
@@ -4019,7 +4783,7 @@ class Cpu {
             return;
         }
         if (op == 232) {
-            if (dsz == 4) {
+            if (oz == 4) {
                 f32();
                 _j = v;
                 if (_j >= 2147483648) { _j = _j - 4294967296; }
@@ -4029,16 +4793,24 @@ class Cpu {
                 if (_j >= 32768) { _j = _j - 65536; }
             }
             getReg16(5);
-            pushOp(dsz, ip);
+            pushOp(oz, ip);                    // the return address is an operand
             ipJump(_j);
             return;
         }
         if (op == 234) {                       // jmp far
-            f16();
+            /* The operand size picks the width of the *offset*; the selector
+             * after it is a word either way. Reading both as words made the
+             * high half of a 32-bit offset the selector, so a protected-mode
+             * kernel's `jmp 0x08:entry` landed in segment zero: the CPU stayed
+             * in sixteen-bit code, its `pop ecx` took half a stack slot and the
+             * loader's program-header loop counted a register it no longer
+             * owned. Linux never started, and nothing in real mode showed it. */
+            if (oz == 4) { f32(); } else { f16(); }
             _v0 = v;                         // the offset, saved before the pc moves
             f16();
-            setSeg(2, v);
-            ip = _v0;
+            _v1 = v;                         // ... and the selector
+            setIp(_v0);
+            setSeg(2, _v1);
             return;
         }
         if (op == 226 || op == 227 || op == 224 || op == 225) {   // loop / jcxz
@@ -4066,17 +4838,20 @@ class Cpu {
 
         /* --- inc / dec / push / pop, the register forms --- */
         if (op >= 64 && op <= 79) {
+            /* 0x40..0x4F are inc/dec ax in sixteen-bit code and inc/dec eax in
+             * thirty-two: the register and the flags both take the operand
+             * size, so `inc eax` at 0x1FFFF is 0x20000 and not 0x10000. */
             _i = op % 8;
-            getReg16(_i);
+            if (oz == 4) { getReg32(_i); } else { getReg16(_i); }
             _v0 = v;
             getFlagBit(0);
             _cf = v;
             if (op < 72) {
-                alu(0, _v0, 1, 2);
+                alu(0, _v0, 1, oz);
             } else {
-                alu(5, _v0, 1, 2);
+                alu(5, _v0, 1, oz);
             }
-            putReg16(_i, v);
+            if (oz == 4) { putReg32(_i, v); } else { putReg16(_i, v); }
             setFlagTo(0, _cf);                 // inc/dec leave CF alone
             return;
         }
@@ -4242,13 +5017,14 @@ class Cpu {
             return;
         }
         if (op == 154) {                       // call far
-            f16();
+            if (oz == 4) { f32(); } else { f16(); }
             _v0 = v;
             f16();
-            push16(sr.get(2));
-            push16(ip);
-            setSeg(2, v);
-            ip = _v0;
+            _v1 = v;
+            pushOp(oz, sr.get(2));             // the return frame is the code size
+            pushOp(oz, ip);
+            setIp(_v0);
+            setSeg(2, _v1);
             return;
         }
 
@@ -4317,26 +5093,24 @@ class Cpu {
         }
 
         /* --- returns --- */
-        if (op == 195) { popOp(dsz); ip = v; return; }
+        if (op == 195) { popOp(oz); setIp(v); return; }
         if (op == 194) {
             f16();
             _v0 = v;
-            popOp(dsz);
-            ip = v;
-            getReg16(5);
-            putReg16(5, v + _v0);
+            popOp(oz);
+            setIp(v);
+            spAdjust(_v0);
             return;
         }
-        if (op == 203) { popOp(dsz); ip = v; popOp(dsz); setSeg(2, v); return; }
+        if (op == 203) { popOp(oz); setIp(v); popOp(oz); setSeg(2, v); return; }
         if (op == 202) {
             f16();
             _v0 = v;
-            popOp(dsz);
-            ip = v;
-            popOp(dsz);
+            popOp(oz);
+            setIp(v);
+            popOp(oz);
             setSeg(2, v);
-            getReg16(5);
-            putReg16(5, v + _v0);
+            spAdjust(_v0);
             return;
         }
         if (op == 200) {                       // enter
@@ -4351,7 +5125,7 @@ class Cpu {
             _k = 1;
             while (_k < _lvl) {                // copy the enclosing frames
                 getReg16(5);
-                putReg16(5, v - 2);
+                putPtr(5, v - 2);
                 getReg16(5);
                 phys(3, v);
                 rdw(v);
@@ -4359,16 +5133,15 @@ class Cpu {
                 _k += 1;
             }
             if (_lvl > 0) { push16(_frame); }
-            putReg16(5, _frame);               // BP = frame
-            getReg16(4);
-            putReg16(4, v - _v0);              // and make room for the locals
+            putPtr(5, _frame);                 // BP = frame
+            spAdjust(-_v0);                    // and make room for the locals
             return;
         }
         if (op == 201) {                       // leave
             getReg16(5);                       // SP = BP
-            putReg16(4, v);
+            putPtr(4, v);
             pop16();
-            putReg16(5, v);                    // and BP = the caller's
+            putPtr(5, v);                      // and BP = the caller's
             return;
         }
         if (op == 196 || op == 197) {          // les / lds
@@ -4508,11 +5281,12 @@ class Cpu {
         if (op == 15) { twoByte(); return; }
 
         /* --- the coprocessor escapes ---------------------------------- *
-         * 0xD8..0xDF are the 387's opcodes, and this board has no 387. A real
-         * 386 without one raised interrupt 7 -- "device not available" -- and a
-         * BIOS's own floating-point probe is built around exactly that, so
-         * raising it is both cheaper and more honest than modelling an FPU. */
-        if (op >= 216 && op <= 223) { interrupt(7); return; }
+         * 0xD8..0xDF are the 387's opcodes. The ones this board implements are
+         * in `fpu.inc.jsw`; the rest raise interrupt 7, "device not
+         * available", which is what a 386 without a coprocessor did and what
+         * the Python model raises for the same forms -- the two machines have
+         * to agree about a form neither of them implements. */
+        if (op >= 216 && op <= 223) { escape(op); return; }
 
         /* --- daa / das / aaa / aas: the decimal adjusts ----------------- *
          * Both of daa's tests read the byte as it arrived: doing the second
@@ -4677,32 +5451,84 @@ class Cpu {
                 _dir = 1;                      // not `_sh`: wrb keeps a shift there
                 if (v == 1) { _dir = -1; }
                 if (op == 108 || op == 109) {
-                    portIn(_port);
-                    _v0 = v % 256;
-                    getReg16(7);
+                    /* `insw` is one 16-bit read from the port, not two 8-bit
+                     * ones. The ATA data register is a word register: reading
+                     * it twice steps the drive on by a word each time, so a
+                     * sector built that way is the gaps between the words that
+                     * were thrown away. The firmware reads every sector this
+                     * way, which is why a perfect disk behind it still ended in
+                     * "No bootable device". */
+                    getPtr(7);
                     _v1 = v;
                     phys(1, _v1);
                     _addr = v;             // phys leaves the address in v
-                    if (_sz == 2) {
-                        portIn(_port);
-                        _v0 = _v0 + (v % 256) * 256;
-                        wrw(_addr, _v0);
+                    if (_sz == 2 && _port == X.ataDataPort) {
+                        /* A whole `rep insw` at once when it lands in extended
+                         * memory. The loader moves sixteen megabytes into the
+                         * machine a batch of sectors at a time, and a word a
+                         * call is eight million calls: the extension has the
+                         * image and the guest's memory, so it does the copy
+                         * and the loop is skipped rather than slowed down. */
+#ifdef TURBOWARP
+                        if (rep == 243 && X.netDisk == 1 && _dir == 1
+                            && (X.ataCmd == 32 || X.ataCmd == 33 || X.ataCmd == 36)
+                            && _v1 == _addr && _count % 256 == 0
+                            && Operators.math("floor", _count / 256) <= X.ataCount
+                            && _addr >= X.extBase
+                            && _addr + _count * 2 <= X.extBase + X.extWords * 4) {
+                            Ram.diskcopy(_count * 2, X.ataLba * 512, _addr - X.extBase);
+                            X.ataLba += Operators.math("floor", _count / 256);
+                            X.ataCount -= Operators.math("floor", _count / 256);
+                            X.ataPos = 0;
+                            if (X.ataCount <= 0) {
+                                X.ataCount = 0;
+                                X.ataStatus = 80;
+                            } else {
+                                X.ataStatus = 88;
+                            }
+                            putPtr(7, _v1 + _count * 2);
+                            putPtr(1, 0);
+                            return;
+                        }
+#endif
+                        ataIn();
+                        wrw(_addr, v % 65536);
                     } else {
-                        wrb(_addr, _v0);
+                        if (_sz == 2 && _port == X.scsiDataPort) {
+                            scsiData();
+                            wrw(_addr, v % 65536);
+                        } else {
+                            portIn(_port);
+                            _v0 = v % 256;
+                            if (_sz == 2) {
+                                portIn(_port);
+                                _v0 = _v0 + (v % 256) * 256;
+                                wrw(_addr, _v0);
+                            } else {
+                                wrb(_addr, _v0);
+                            }
+                        }
                     }
                     _v0 = _v1 + _sz * _dir;
-                    putReg16(7, _v0 % 65536);
+                    putPtr(7, _v0);
                 } else {
-                    getReg16(6);
+                    getPtr(6);
                     _v1 = v;
                     phys(seg, _v1);
                     _addr = v;
                     if (_sz == 2) { rdw(_addr); } else { rdb(_addr); }
                     _v0 = v;
-                    portOut(_port, _v0 % 256);
-                    if (_sz == 2) { portOut(_port, Operators.math("floor", _v0 / 256) % 256); }
+                    /* And `outsw` is one 16-bit write, for the same reason:
+                     * the data register takes a word, and handing it two bytes
+                     * latches two half-words the drive would store as two. */
+                    if (_sz == 2 && _port == X.ataDataPort) {
+                        ataOut(_v0 % 65536);
+                    } else {
+                        portOut(_port, _v0 % 256);
+                        if (_sz == 2) { portOut(_port, Operators.math("floor", _v0 / 256) % 256); }
+                    }
                     _v0 = _v1 + _sz * _dir;
-                    putReg16(6, _v0 % 65536);
+                    putPtr(6, _v0);
                 }
                 _nSi += 1;
             }
@@ -4710,6 +5536,7 @@ class Cpu {
         }
 
         err = join("opcode ", op, " at ", sr.get(2), ":", ip - 1);
+        badAt = ip - 1;                  // where the disassembler should look
         halted = 1;
     }
 
@@ -4739,28 +5566,32 @@ class Cpu {
             return;
         }
         if (_qKind == 2 || _qKind == 4) {
-            getOp(2);
+            /* The target is a word or a dword with the operand size, and a
+             * dword is the normal case in protected mode: `jmp [entry]` read as
+             * a word jumps to the low half of the kernel's entry point, which
+             * is zero. */
+            getOp(size);
             _qV = v;
             if (_qKind == 2) {
-                pushOp(dsz, ip);
-                ip = _qV;
+                pushOp(oz, ip);
+                setIp(_qV);
             } else {
-                ip = _qV;
+                setIp(_qV);
             }
             return;
         }
         if (_qKind == 3 || _qKind == 5) {
-            getOp(2);
+            getOp(size);
             _qV = v;
-            phys(eseg, ea + 2);
+            phys(eseg, ea + size);
             rdw(v);
             _qSeg = v;
             if (_qKind == 3) {
-                pushOp(dsz, sr.get(2));
-                pushOp(dsz, ip);
+                pushOp(oz, sr.get(2));
+                pushOp(oz, ip);
             }
+            setIp(_qV);
             setSeg(2, _qSeg);
-            ip = _qV;
             return;
         }
         getOp(size);
@@ -4774,7 +5605,10 @@ class Cpu {
      */
     private void stringOp(op) { // warp
         _kSz = 1;
-        if (op == 165 || op == 167 || op == 171 || op == 173 || op == 175) { _kSz = 2; }
+        /* The `w` forms are the operand size: with no prefix in 32-bit code
+         * they are the `d` forms, and a `rep stosd` that cleared two bytes at a
+         * time left the kernel's BSS half old data. */
+        if (op == 165 || op == 167 || op == 171 || op == 173 || op == 175) { _kSz = oz; }
         _kKind = 0;
         if (op == 164 || op == 165) { _kKind = 0; }
         if (op == 166 || op == 167) { _kKind = 1; }
@@ -4803,9 +5637,9 @@ class Cpu {
     }
 
     private void stringOne(kind, size, delta) { // warp
-        getReg16(6);
+        getPtr(6);
         _nSi = v;
-        getReg16(7);
+        getPtr(7);
         _nDi = v;
         phys(seg, _nSi);
         _nSrc = v;
@@ -4815,6 +5649,11 @@ class Cpu {
             if (size == 1) {
                 rdb(_nSrc);
                 wrb(_nDst, v);
+            } elif (size == 4) {
+                rdd(_nSrc);
+                _nA = v;
+                wrw(_nDst, _nA % 65536);
+                wrw(_nDst + 2, Operators.math("floor", _nA / 65536));
             } else {
                 rdw(_nSrc);
                 wrw(_nDst, v);
@@ -4829,6 +5668,11 @@ class Cpu {
                 _nA = v;
                 rdb(_nDst);
                 alu(7, _nA, v, 1);
+            } elif (size == 4) {
+                rdd(_nSrc);
+                _nA = v;
+                rdd(_nDst);
+                alu(7, _nA, v, 4);
             } else {
                 rdw(_nSrc);
                 _nA = v;
@@ -4840,23 +5684,35 @@ class Cpu {
             return;
         }
         if (kind == 2) {
-            getReg16(0);
+            /* The accumulator is the operand size, not the register file's
+             * sixteen-bit slot: `rep stosd` fills with all of eax. */
+            if (size == 4) { getReg32(0); } else { getReg16(0); }
             _nA = v;
-            if (size == 1) { wrb(_nDst, _nA % 256); } else { wrw(_nDst, _nA); }
+            if (size == 1) { wrb(_nDst, _nA % 256); }
+            elif (size == 4) {
+                wrw(_nDst, _nA % 65536);
+                wrw(_nDst + 2, Operators.math("floor", _nA / 65536));
+            } else {
+                wrw(_nDst, _nA);
+            }
             stringAdvance(7, delta);
             return;
         }
         if (kind == 3) {
             if (size == 1) { rdb(_nSrc); putReg8(0, v); }
             if (size == 2) { rdw(_nSrc); putReg16(0, v); }
+            if (size == 4) { rdd(_nSrc); putReg32(0, v); }
             stringAdvance(6, delta);
             return;
         }
-        getReg16(0);
+        if (size == 4) { getReg32(0); } else { getReg16(0); }
         _nA = v;
         if (size == 1) {
             rdb(_nDst);
             alu(7, _nA % 256, v, 1);
+        } elif (size == 4) {
+            rdd(_nDst);
+            alu(7, _nA, v, 4);
         } else {
             rdw(_nDst);
             alu(7, _nA, v, 2);
@@ -4864,9 +5720,17 @@ class Cpu {
         stringAdvance(7, delta);
     }
 
+    /* A string pointer is an offset in the *address* size, which is the code
+     * size here, not the element size: `rep movsd` over sixteen megabytes walks
+     * EDI, and keeping only its low half wraps every sixty-four kilobytes. */
     private void stringAdvance(which, delta) { // warp
-        getReg16(which);
-        putReg16(which, (v + delta) % 65536);
+        getPtr(which);
+        putPtr(which, v + delta);
+    }
+
+    private void putPtr(which, val) { // warp
+        if (asz == 4) { putReg32(which, val % 4294967296); return; }
+        putReg16(which, val % 65536);
     }
 
     /* ---- 0F: the two-byte page ---------------------------------------- */
@@ -4874,9 +5738,18 @@ class Cpu {
         f8();
         _tOp = v;
         if (_tOp >= 128 && _tOp <= 143) {
-            f16();
-            _tRel = v;
-            if (_tRel >= 32768) { _tRel = _tRel - 65536; }
+            /* The displacement is the operand size, like every other jump: a
+             * 32-bit `jnz` is six bytes and reading four of them decodes the
+             * rest of the program from the middle of an instruction. */
+            if (oz == 4) {
+                f32();
+                _tRel = v;
+                if (_tRel >= 2147483648) { _tRel = _tRel - 4294967296; }
+            } else {
+                f16();
+                _tRel = v;
+                if (_tRel >= 32768) { _tRel = _tRel - 65536; }
+            }
             cond(_tOp % 16);
             if (v == 1) { ipJump(_tRel); }
             return;
@@ -4927,6 +5800,7 @@ class Cpu {
                 if (_tReg == 0) { _tV = cr0; }
                 if (_tReg == 2) { _tV = cr2; }
                 if (_tReg == 3) { _tV = cr3; }
+                if (_tReg == 4) { _tV = cr4; }
                 putReg32(_tRm, _tV);
                 return;
             }
@@ -4934,27 +5808,53 @@ class Cpu {
             if (_tReg == 0) { writeCr0(v); }
             if (_tReg == 2) { cr2 = v % 65536; }
             if (_tReg == 3) { cr3 = v % 65536; }
+            if (_tReg == 4) { cr4 = v % 4294967296; }
             return;
         }
         if (_tOp == 1) {                       // lgdt / lidt / smsw / lmsw
             modrm();
+            if (mreg == 0 || mreg == 1) {          // sgdt / sidt
+                /* Six bytes either way: the limit, then a base the 386 stores
+                 * in full even in a sixteen-bit operand. A kernel reads its own
+                 * table back through this, and an `sgdt` answered with nothing
+                 * is a kernel that builds a second GDT from zeros. */
+                phys(eseg, ea);
+                _tAddr = v;
+                if (mreg == 0) { _tLim = gdtrLimit; _tBase = gdtrBase; }
+                else { _tLim = idtrLimit; _tBase = idtrBase; }
+                wrw(_tAddr, _tLim % 65536);
+                wrw(_tAddr + 2, _tBase % 65536);
+                wrw(_tAddr + 4, Operators.math("floor", _tBase / 65536) % 65536);
+                return;
+            }
             if (mreg == 2 || mreg == 3) {
-                /* the pseudo-descriptor: a sixteen-bit limit, then a base that
-                 * is thirty-two bits in a 32-bit operand and twenty-four in a
-                 * 16-bit one -- the 286 wrote three bytes and the 386 kept it */
+                /* The pseudo-descriptor: a sixteen-bit limit, then a base that
+                 * is thirty-two bits in a 32-bit operand and *twenty-four* in a
+                 * 16-bit one -- the 286 wrote three bytes and the 386 kept it.
+                 *
+                 * Reading two bytes for the 16-bit form is not a rounding: a
+                 * Linux loader loads its GDT at 0x13000 while still in real
+                 * mode, the missing third byte turned that into 0x03000, and
+                 * the descriptor the far jump then read was somebody else's
+                 * bytes. The CPU came up in segment eight with D=0 -- sixteen
+                 * bits of code -- and no real-mode symptom showed it. */
                 phys(eseg, ea);
                 rdw(v);
                 _tLim = v % 65536;
                 phys(eseg, ea + 2);
                 rdw(v);
                 _tLo = v % 65536;
-                _tHi = 0;
+                _tBase = _tLo;
                 if (oz == 4) {
                     phys(eseg, ea + 4);
                     rdw(v);
-                    _tHi = v % 65536;
+                    _tBase = _tLo + (v % 65536) * 65536;
+                } else {
+                    phys(eseg, ea + 4);
+                    rdb(v);
+                    _tBase = _tLo + (v % 256) * 65536;
                 }
-                _tBase = (_tLo + _tHi * 65536) % 1048576;
+                _tBase = _tBase % 4294967296;
                 if (mreg == 2) { gdtrBase = _tBase; gdtrLimit = _tLim; }
                 else { idtrBase = _tBase; idtrLimit = _tLim; }
                 return;
@@ -5029,7 +5929,7 @@ class Cpu {
             modrm();
             getOp(oz);
             _tV = v;
-            getReg16(mreg);
+            if (oz == 4) { getReg32(mreg); } else { getReg16(mreg); }
             _tN = v % (oz * 8);
             _tBit = Operators.math("floor", _tV / X.pow2.get(_tN + 1)) % 2;
             setFlagTo(0, _tBit);
@@ -5052,7 +5952,7 @@ class Cpu {
             modrm();
             getOp(oz);
             _tV = v;
-            getReg16(mreg);
+            if (oz == 4) { getReg32(mreg); } else { getReg16(mreg); }
             _tS = v;
             if (_tOp == 164 || _tOp == 172) { f8(); } else { getReg16(1); }
             _tN = v % 32;
@@ -5114,7 +6014,7 @@ class Cpu {
                     _tN += -1;
                 }
             }
-            putReg16(mreg, _tN);
+            if (oz == 4) { putReg32(mreg, _tN); } else { putReg16(mreg, _tN); }
             return;
         }
         if (_tOp == 176 || _tOp == 177) {
@@ -5125,10 +6025,10 @@ class Cpu {
             modrm();
             getOp(_tSz);
             _tV = v;
-            getReg16(0);
+            if (_tSz == 4) { getReg32(0); } else { getReg16(0); }
             _tA = v;
             if (_tSz == 1) { _tA = _tA % 256; _tV = _tV % 256; }
-            getReg16(mreg);
+            if (_tSz == 4) { getReg32(mreg); } else { getReg16(mreg); }
             _tS = v;
             if (_tSz == 1) { _tS = _tS % 256; }
             if (_tA == _tV) {
@@ -5139,6 +6039,8 @@ class Cpu {
             setFlagTo(6, 0);
             if (_tSz == 1) {
                 putReg8(0, _tV);
+            } elif (_tSz == 4) {
+                putReg32(0, _tV);
             } else {
                 putReg16(0, _tV);
             }
@@ -5151,7 +6053,7 @@ class Cpu {
             modrm();
             getOp(_tSz);
             _tV = v;
-            getReg16(mreg);
+            if (_tSz == 4) { getReg32(mreg); } else { getReg16(mreg); }
             _tS = v;
             if (_tSz == 1) {
                 _tV = _tV % 256;
@@ -5160,12 +6062,46 @@ class Cpu {
                 alu(0, _tV, _tS, 1);
                 putOp(1, _tA);
                 putReg8(mreg, _tV);
+            } elif (_tSz == 4) {
+                alu(0, _tV, _tS, 4);
+                _tA = (_tV + _tS) % 4294967296;
+                putOp(4, _tA);
+                putReg32(mreg, _tV);
             } else {
                 alu(0, _tV, _tS, 2);
                 _tA = (_tV + _tS) % 65536;
                 putOp(2, _tA);
                 putReg16(mreg, _tV);
             }
+            return;
+        }
+        if (_tOp == 2 || _tOp == 3) {
+            /* lar / lsl: the rights byte or the limit behind a selector, handed
+             * back as a value. A loader asks before it loads -- "is this
+             * selector a 4K-granular code segment?" -- instead of faulting on a
+             * bad guess. A null selector answers ZF=0 with a zero destination:
+             * the real chip raises #GP, and no guest we run can tell the two
+             * apart, because neither machine has a #GP path to raise. */
+            _tSz = 2;
+            if (dsz == 4) { _tSz = 4; }
+            modrm();
+            getOp(_tSz);
+            _tSel = v % 65536;
+            v = 0;
+            setFlagTo(6, 0);
+            if (_tSel - _tSel % 8 > 0) {
+                descriptor(_tSel);
+                if (_tOp == 2) {
+                    v = dAccess + dFlags * 256;
+                } else {
+                    v = dLim;
+                    if (Operators.math("floor", dFlags / 8) % 2 == 1) {
+                        v = dLim * 4096 + 4095;   // G scales the limit by four
+                    }
+                }
+                setFlagTo(6, 1);
+            }
+            if (_tSz == 2) { putReg16(mreg, v); } else { putReg32(mreg, v); }
             return;
         }
         if (_tOp == 6) {                       // clts: nothing to clear yet
@@ -5269,6 +6205,7 @@ class Cpu {
             return;
         }
         err = join("2-byte opcode ", _tOp, " at ", sr.get(2), ":", ip - 2);
+        badAt = ip - 2;
         halted = 1;
     }
 
@@ -5278,13 +6215,16 @@ class Cpu {
      * one an OS asks, and an honest answer is more useful than a fault.
      */
     private void cpuId() { // warp
-        getReg16(0);
+        /* The leaf and every answer are thirty-two bits: the vendor string is
+         * four *dwords*, and a kernel that reads half of "GenuineIntel" decides
+         * it is running somewhere else. */
+        getReg32(0);
         _leaf = v;
         if (_leaf == 0) {
-            putReg16(0, 1);                    // the highest leaf
-            putReg16(3, 0x756E6547);           // EBX 'Genu'
-            putReg16(2, 0x49656E69);           // EDX 'ineI'
-            putReg16(1, 0x6C65746E);           // ECX 'ntel'
+            putReg32(0, 1);                    // the highest leaf
+            putReg32(3, 0x756E6547);           // EBX 'Genu'
+            putReg32(2, 0x49656E69);           // EDX 'ineI'
+            putReg32(1, 0x6C65746E);           // ECX 'ntel'
             return;
         }
         if (_leaf == 1) {
@@ -5293,19 +6233,26 @@ class Cpu {
              * asks about cmov and cx8 before it uses them, so the answer is the
              * machine this one is pretending to be, not the 386 in the name.
              *
-             * EDX advertises tsc, msr, cx8 and cmov -- what this CPU really
-             * implements. It does *not* advertise fpu: there is no x87 here,
-             * and a kernel told there is one raises #UD at the first fninit. */
-            putReg16(0, 0x0683);               // EAX: family 6, model 8, step 3
-            putReg16(2, 0x8130);               // EDX: tsc, msr, cx8, cmov
-            putReg16(1, 0x0000);               // ECX
-            putReg16(3, 0x0000);               // EBX
+             * EDX advertises fpu, tsc, msr, cx8 and cmov -- what this CPU
+             * really implements. The fpu bit was left clear for as long as
+             * there was no x87 to answer for it: a kernel told there is one
+             * raises #UD at the first `fninit`. `fpu.inc.jsw` is that x87, so
+             * the bit is set now, and the escape page behind it is compared
+             * against the model instruction by instruction.
+             *
+             * `fxsr` stays clear on purpose: the context switch this machine
+             * offers is `fnsave`/`frstor`, and a kernel that sees fxsr will
+             * reach for `fxsave` instead. */
+            putReg32(0, 0x0683);               // EAX: family 6, model 8, step 3
+            putReg32(2, 0x8131);               // EDX: fpu, tsc, msr, cx8, cmov
+            putReg32(1, 0x0000);               // ECX
+            putReg32(3, 0x0000);               // EBX
             return;
         }
-        putReg16(0, 0);
-        putReg16(1, 0);
-        putReg16(2, 0);
-        putReg16(3, 0);
+        putReg32(0, 0);
+        putReg32(1, 0);
+        putReg32(2, 0);
+        putReg32(3, 0);
     }
 
 }
