@@ -41,10 +41,13 @@
     );
   }
 
-  /* Pinned on purpose: a model trained by Teachable Machine is a plain
-     layers-model, and tfjs loads across versions, but only known versions get
-     tested with the WebGL backend this runs on. Bump it deliberately. */
-  const TF_VERSION = '4.22.0';
+  /* One tfjs for every project kind, and it is the version Teachable Machine's
+     own snippets use: 1.3.1 is the last build that still exports
+     `tf.fromPixels`, which its pose runtime calls, and a layers-model from any
+     TM version loads on it. Two copies on one page is the case that breaks --
+     the second `load()` leaves the first model's backend unusable
+     ("t is not a function"), so there is deliberately only ever one. */
+  const TF_VERSION = '1.3.1';
 
   /* Pose projects are a different animal: the model does not take pixels at all,
      it takes posenet's heatmap + offset tensors (14739 floats for a 17-keypoint
@@ -59,7 +62,6 @@
   const TM_POSE_URL =
     `https://cdn.jsdelivr.net/npm/@teachablemachine/pose@${TM_POSE_VERSION}/` +
     'dist/teachablemachine-pose.min.js';
-  const POSE_TF_VERSION = '1.3.1';
 
   const SHARE = 'https://teachablemachine.withgoogle.com/models/';
   const FILE_NAMES = /(model\.json|model\.weights\.bin|metadata\.json)$/i;
@@ -70,6 +72,47 @@
     if (!metadata) return false;
     if (metadata.packageName === '@teachablemachine/pose') return true;
     return Boolean(metadata.modelSettings && metadata.modelSettings.posenet);
+  }
+
+  /* What a project *is* comes from the model, not from the metadata: a pose
+     classifier is a two-layer dense net over posenet's output, so its input is
+     `[null, 14739]` and feeding it `[1, 224, 224, 3]` is the error
+     "expected dense_Dense5_input to have 2 dimensions but got array with shape
+     [1,224,224,3]". The metadata is a hint -- an export may predate the
+     `packageName` field, or be an Audio project, which is also rank 2 and which
+     this extension cannot feed at all. */
+  const POSENET_WIDTHS = new Set([9 * 9 * 51, 17 * 17 * 51, 33 * 33 * 51]);
+
+  function firstInputShape(topology) {
+    if (!topology || typeof topology !== 'object') return null;
+    const config = topology.config || {};
+    const own = config.batch_input_shape || config.batchInputShape;
+    if (Array.isArray(own)) return own;
+    if (Array.isArray(config.layers)) {
+      for (const layer of config.layers) {
+        const found = firstInputShape(layer);
+        if (found) return found;
+      }
+    }
+    return null;
+  }
+
+  /* 'image' (rank 4), 'pose' (rank 2, posenet width), 'flat' (any other rank 2). */
+  function modelKind(topology, metadata) {
+    const shape = firstInputShape(topology);
+    if (!shape) return isPose(metadata) ? 'pose' : 'image';
+    if (shape.length === 4) return 'image';
+    if (shape.length === 2 && POSENET_WIDTHS.has(Number(shape[1]))) return 'pose';
+    if (shape.length === 2) return 'flat';
+    return isPose(metadata) ? 'pose' : 'image';
+  }
+
+  async function fetchJson(url) {
+    const response = await fetch(url);
+    if (!response.ok) {
+      throw new Error(`gtm: ${url} answered ${response.status}`);
+    }
+    return response.json();
   }
 
   /* -- the two libraries, fetched once ------------------------------------ */
@@ -90,14 +133,12 @@
     });
   }
 
-  const tfPromises = new Map();
+  let tfPromise = null;
 
-  /* `tf.version.tfjs` is the only way to tell which build is already on the
-     page, and the two branches need different ones. */
-  function loadTF(version = TF_VERSION) {
-    const current = globalThis.tf;
-    const loaded = current && current.version && current.version.tfjs;
-    const ready = async (tf) => {
+  function loadTF() {
+    if (tfPromise) return tfPromise;
+    const url = `https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@${TF_VERSION}/dist/tf.min.js`;
+    tfPromise = injectScript(url, 'tf', `TensorFlow.js ${TF_VERSION}`).then(async (tf) => {
       try {
         await tf.setBackend('webgl');
       } catch (error) {
@@ -105,15 +146,11 @@
       }
       await tf.ready();
       return tf;
-    };
-    if (loaded === version) return ready(current);
-    if (!tfPromises.has(version)) {
-      const url = `https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@${version}/dist/tf.min.js`;
-      const promise = injectScript(url, 'tf', `TensorFlow.js ${version}`, true).then(ready);
-      tfPromises.set(version, promise);
-      promise.catch(() => tfPromises.delete(version));
-    }
-    return tfPromises.get(version);
+    });
+    tfPromise.catch(() => {
+      tfPromise = null;
+    });
+    return tfPromise;
   }
 
   /* -- the share link ----------------------------------------------------- */
@@ -336,13 +373,25 @@
         if (!metadata || !Array.isArray(metadata.labels) || !metadata.labels.length) {
           throw new Error('gtm: metadata.json has no labels; that is not a Teachable Machine model');
         }
-        if (isPose(metadata)) {
+        // The topology decides, not the metadata: a rank-2 classifier can never
+        // be handed pixels, and saying so here is much clearer than tfjs's
+        // "expected dense_Dense5_input to have 2 dimensions".
+        const topology = await fetchJson(base + 'model.json');
+        const kind = modelKind(topology.modelTopology, metadata);
+        if (kind === 'flat') {
+          const width = firstInputShape(topology.modelTopology).slice(-1)[0];
+          throw new Error(
+            `gtm: ${base} wants ${width} numbers per frame, not a picture -- that is an ` +
+              'Audio project (or a pose model this extension cannot feed). Only Image ' +
+              'and Pose models are supported.'
+          );
+        }
+        if (kind === 'pose') {
           // Metadata first, then the libraries: which tf.js is correct depends
           // on the branch, and the pose one needs 1.x.
-          const tf = await loadTF(POSE_TF_VERSION);
-          // The pose runtime was built against a tfjs that still exported
-          // `tf.fromPixels`; 1.7.4 no longer does, and `tf.browser.fromPixels`
-          // is the same function under the name it now uses.
+          const tf = await loadTF();
+          // `tf.fromPixels` is what the pose runtime calls; if a future pin
+          // drops it again, `tf.browser.fromPixels` is the same function.
           if (!tf.fromPixels && tf.browser && tf.browser.fromPixels) {
             tf.fromPixels = tf.browser.fromPixels.bind(tf.browser);
           }

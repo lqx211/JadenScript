@@ -55,14 +55,23 @@ function makeScratch(unsandboxed) {
    "the link parsed" observable -- it gets as far as trying to load tf.js. */
 function makeContext(
   Scratch,
-  { failScripts = true, metadata = { labels: ['a'], packageName: '@teachablemachine/image' } } = {}
+  {
+    failScripts = true,
+    metadata = { labels: ['a'], packageName: '@teachablemachine/image' },
+    topology = { class_name: 'Sequential', config: { layers: [
+      { class_name: 'InputLayer', config: { batch_input_shape: [null, 224, 224, 3] } },
+    ] } },
+  } = {}
 ) {
   const context = {
     Scratch,
-    // The real thing would fetch metadata.json first; answering it locally is
-    // what lets the link-parsing checks reach the *library* step, which is the
-    // one the failing <script> makes observable.
-    fetch: async () => ({ ok: true, json: async () => metadata }),
+    // metadata.json and model.json answered locally: the link-parsing checks
+    // only need to reach the *library* step, which the failing <script> makes
+    // observable, and the topology is what decides image vs pose vs audio.
+    fetch: async (url) => ({
+      ok: true,
+      json: async () => (String(url).endsWith('metadata.json') ? metadata : { modelTopology: topology }),
+    }),
     console,
     setTimeout,
     clearTimeout,
@@ -201,6 +210,9 @@ async function main() {
   const poseScratch = makeScratch(true);
   const poseContext = makeContext(poseScratch.Scratch, {
     metadata: { labels: ['up', 'down'], packageName: '@teachablemachine/pose' },
+    topology: { class_name: 'Sequential', config: { layers: [
+      { class_name: 'Dense', config: { batch_input_shape: [null, 14739] } },
+    ] } },
   });
   load(poseContext);
   const poseExtension = poseScratch.registered[0];
@@ -209,6 +221,60 @@ async function main() {
     'a pose model pins tfjs 1.x',
     /TensorFlow\.js 1\.3\.1/.test(poseExtension.lastError()),
     poseExtension.lastError()
+  );
+
+  // The regression behind "expected dense_Dense5_input to have 2 dimensions but
+  // got array with shape [1,224,224,3]": a rank-2 pose classifier reached the
+  // image branch because the metadata did not say "pose".
+  const blindScratch = makeScratch(true);
+  const blindContext = makeContext(blindScratch.Scratch, {
+    metadata: { labels: ['up', 'down'], packageName: '@teachablemachine/image' },
+    topology: { class_name: 'Sequential', config: { layers: [
+      { class_name: 'Dense', config: { batch_input_shape: [null, 14739] } },
+    ] } },
+  });
+  load(blindContext);
+  const blindExtension = blindScratch.registered[0];
+  await blindExtension.load({ URL: 'AbCdEf123_' });
+  check(
+    'the topology alone routes a pose model',
+    /TensorFlow\.js 1\.3\.1/.test(blindExtension.lastError()),
+    blindExtension.lastError()
+  );
+
+  // An Audio project is rank 2 as well, and cannot be fed at all: say so
+  // instead of letting tfjs complain about dimensions.
+  const audioScratch = makeScratch(true);
+  const audioContext = makeContext(audioScratch.Scratch, {
+    metadata: { labels: ['yes', 'no'], packageName: '@teachablemachine/audio' },
+    topology: { class_name: 'Sequential', config: { layers: [
+      { class_name: 'InputLayer', config: { batch_input_shape: [null, 232] } },
+    ] } },
+  });
+  load(audioContext);
+  const audioExtension = audioScratch.registered[0];
+  await audioExtension.load({ URL: 'AbCdEf123_' });
+  check(
+    'an audio model is named, not shape-errored',
+    /Audio project/.test(audioExtension.lastError()),
+    audioExtension.lastError()
+  );
+  check(
+    'the audio refusal reports the width',
+    /232 numbers/.test(audioExtension.lastError()),
+    audioExtension.lastError()
+  );
+
+  // And a plain image model still takes the 4.x branch.
+  const imageScratch = makeScratch(true);
+  const imageContext = makeContext(imageScratch.Scratch);
+  load(imageContext);
+  const imageExtension = imageScratch.registered[0];
+  await imageExtension.load({ URL: 'AbCdEf123_' });
+  check(
+    'an image model uses the same single tfjs',
+    /TensorFlow\.js 1\.3\.1/.test(imageExtension.lastError()),
+    imageExtension.lastError()
   );
 
   // -- the prediction arithmetic -----------------------------------------
