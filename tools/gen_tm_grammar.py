@@ -56,9 +56,13 @@ BUILTIN_FUNCTIONS = (
 )
 
 # The comments the decompiler writes: ``// proccode``, ``// monitor``, ...
+# ``unsupported``/``undefined`` mark a block the rebuild could not carry, and
+# ``callee``/``temp variables`` mark a repaired call and the thread-variable
+# build, so all of them are worth a different colour than prose.
 ANNOTATION_WORDS = (
     "Sprite:", "Stage", "hook:", "proccode", "receiver at", "monitor", "watch",
     "comment", "warp", "main thread", "grouped", "at",
+    "unsupported", "undefined", "callee", "temp variables",
 )
 
 

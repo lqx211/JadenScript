@@ -28,7 +28,7 @@ syn match jswContinuation /\\$/
 syn match jswNoTernary /?/
 
 " -- comments and strings ----------------------------------------
-syn match jswAnnotationWord /\%(\<receiver\ at\>\|\<main\ thread\>\|\<proccode\>\|\<monitor\>\|\<comment\>\|\<grouped\>\|\<watch\>\|\<Sprite:\|\<warp\>\|\<Stage:\|\<hook:\|\<at\>\)/ contained
+syn match jswAnnotationWord /\%(\<temp\ variables\>\|\<receiver\ at\>\|\<main\ thread\>\|\<unsupported\>\|\<undefined\>\|\<proccode\>\|\<monitor\>\|\<comment\>\|\<grouped\>\|\<callee\>\|\<watch\>\|\<Sprite:\|\<warp\>\|\<Stage:\|\<hook:\|\<at\>\)/ contained
 syn region jswComment start="//" end="$" contains=jswAnnotationWord,jswTodo
 syn region jswComment start="/\*" end="\*/" contains=jswAnnotationWord,jswTodo
 syn keyword jswTodo contained TODO FIXME XXX BUG

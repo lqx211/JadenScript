@@ -141,7 +141,7 @@
             },
             {
               "name": "keyword.control.directive.jsw",
-              "match": "(?:\\bmain thread\\b|\\breceiver at\\b|\\bproccode\\b|\\bSprite:|\\bcomment\\b|\\bgrouped\\b|\\bmonitor\\b|\\bStage\\b|\\bhook:|\\bwatch\\b|\\bwarp\\b|\\bat\\b)"
+              "match": "(?:\\btemp variables\\b|\\bmain thread\\b|\\breceiver at\\b|\\bunsupported\\b|\\bundefined\\b|\\bproccode\\b|\\bSprite:|\\bcomment\\b|\\bgrouped\\b|\\bmonitor\\b|\\bcallee\\b|\\bStage\\b|\\bhook:|\\bwatch\\b|\\bwarp\\b|\\bat\\b)"
             },
             {
               "comment": "// costume … / // sound …",

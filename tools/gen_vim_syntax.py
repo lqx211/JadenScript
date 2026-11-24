@@ -67,6 +67,7 @@ METADATA_KEYWORD = set(MONITOR_MODES) | set(METADATA_WORDS)
 ANNOTATION_WORDS = (
     "proccode", "receiver at", "hook:", "monitor", "watch", "comment",
     "warp", "main thread", "grouped", "at", "Sprite:", "Stage:",
+    "unsupported", "undefined", "callee", "temp variables",
 )
 
 NS_NAMES = sorted(set(BUILTIN_NAMESPACES) | set(highlight_namespaces()) | {"microbit", "Comments", "MoreEvents", "WebSocket", "sound", "pen"})

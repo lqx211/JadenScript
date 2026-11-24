@@ -130,6 +130,10 @@ const EXPECT = [
   ['for i in 0..3 {', '..', 'keyword.operator.range.jsw'],
   ['for Synth.counter in 1..n {', 'Synth.counter', 'variable.other.loop.jsw'],
   ['// proccode move camera %s', 'proccode', 'keyword.control.directive.jsw'],
+  // Annotations that say the rebuild could not carry something.
+  ['private void f() { // undefined', 'undefined', 'keyword.control.directive.jsw'],
+  ['    // unsupported block: motion_x', 'unsupported', 'keyword.control.directive.jsw'],
+  ['    // temp variables (lmsTempVars2)', 'temp variables', 'keyword.control.directive.jsw'],
 ];
 
 // A scope that must not appear anywhere on the line.
