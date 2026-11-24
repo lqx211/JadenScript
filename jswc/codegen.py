@@ -3390,6 +3390,16 @@ class Codegen:
         if extension is not None:
             self.diag(call, "E0039", f"{qname} is a statement, not a value")
             return Lit(O.TEXT, "")
+        arity = alias_arity(full, call.name)
+        if arity is not None:
+            low, high = arity
+            takes = f"{low}" if low == high else f"{low} or {high}"
+            self.diag(
+                call,
+                "E0076",
+                f"{full}.{call.name} takes {takes} argument(s), not {len(call.args)}",
+            )
+            return Lit(O.TEXT, "")
         self.diag(call, "E0037", f"unknown reporter {qname!r}")
         return Lit(O.TEXT, "")
 

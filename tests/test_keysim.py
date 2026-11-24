@@ -167,6 +167,17 @@ class CompileTests(unittest.TestCase):
         self.assertTrue(messages, codegen.diagnostics)
         self.assertIn("takes 2 argument(s), not 1", messages[0])
 
+    def test_a_command_alias_suggests_the_longer_name(self):
+        # `clickMiddle` is the 0.1 s form; the duration form is `clickLeft`'s
+        # optional third argument, so a 4-argument call has nowhere to go.
+        codegen, _ = compile_source(
+            "class a { void f(){ keySim.clickMiddle(1, 2, 3, 4); } }"
+        )
+        self.assertTrue(
+            any("E0076" in d and "takes 2 or 3" in d for d in codegen.diagnostics),
+            codegen.diagnostics,
+        )
+
     def test_a_scratch_build_refuses_the_extension(self):
         with tempfile.TemporaryDirectory() as tmp:
             source = Path(tmp) / "keys.jsw"
