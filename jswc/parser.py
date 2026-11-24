@@ -158,7 +158,7 @@ class Parser:
                 if program.stage is None:
                     program.stage = A.StageDecl(line=func.line, col=func.col)
                 program.stage.members.append(func)
-            elif self.at_keyword("public", "private") and not self.at_keyword("void", k=1):
+            elif self.at_keyword("public", "private", "cloud") and not self.at_keyword("void", k=1):
                 program.globals.append(self.parse_visibility_stmt())
             elif self.at_keyword("metadata"):
                 program.meta.append(self.parse_metadata())
@@ -442,6 +442,7 @@ class Parser:
                 "import": self.parse_import,
                 "public": self.parse_visibility_stmt,
                 "private": self.parse_visibility_stmt,
+                "cloud": self.parse_visibility_stmt,
                 "void": self.parse_func,
             }.get(tok.value)
             if handler is not None:
@@ -700,9 +701,27 @@ class Parser:
 
     def parse_visibility_stmt(self) -> A.Stmt:
         vis_tok = self.advance()
+        if vis_tok.value == "cloud":
+            # ``cloud`` is a declaration on its own: a cloud variable is a stage
+            # variable, and Scratch forces it to be public, so there is nothing
+            # for a second modifier to mean.
+            stmt = self.parse_simple(visibility="public")
+            if isinstance(stmt, A.Assign):
+                stmt.cloud = True
+                stmt.line, stmt.col = vis_tok.line, vis_tok.col
+            return stmt
         stmt = self.parse_simple(visibility=vis_tok.value)
         if isinstance(stmt, A.Assign):
             stmt.line, stmt.col = vis_tok.line, vis_tok.col
+            # ``public a = 0; // cloud`` — the commentMetadata spelling, the same
+            # way ``import …; // costume centerx=0`` carries asset facts. The
+            # annotation has to be the bare word: ``// cloud storage is nice`` is
+            # prose, and turning a sentence into a cloud variable would be a
+            # surprise nobody could see in the file.
+            annotation = (self.annotation(vis_tok.line) or "").strip().lower()
+            if annotation == "cloud":
+                stmt.cloud = True
+                stmt.visibility = "public"
         return stmt
 
     def parse_simple(self, visibility: str | None = None, terminate: bool = True) -> A.Stmt:

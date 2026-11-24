@@ -202,17 +202,34 @@ Two consequences worth knowing:
 `"invalid extension gtm"` in TurboWarp means exactly this entry is missing: the
 project names the extension in `extensions` but carries no URL for it.
 
-## Distributing it
+## Sharing the project: the `.sb3` is not portable on its own
 
-* **TurboWarp Packager** — bundle the extension with the project; that is the
-  route for a classroom, since students then open one HTML file.
-* **`extensions.turbowarp.org`** — the only https origin TurboWarp trusts
-  unsandboxed, and it takes a pull request.
-* **localhost** — fine for development and for you; not for handing out.
+The compiled project names the extension by **URL** (`extensionURLs`), and that
+URL is `http://localhost:8000/…`. On another computer `localhost` is *that*
+computer, so unless the repository is there too, the URL resolves to nothing.
 
-A project that references `http://localhost:8000/...` opens fine on a machine
-that is not running the server only in the sense that the blocks are dead: the
-project loads, the model does not.
+What TurboWarp does about it, measured rather than assumed:
+
+| situation | result |
+| --- | --- |
+| URL unreachable (no server on that machine) | `could not be loaded, usually due to a network error`, and the **editor crashes** — "Oops! Something went wrong" |
+| URL served from any other origin (a different port, GitHub Pages, jsDelivr) | loads **sandboxed**, `gtm` throws `must run unsandboxed`, editor crashes |
+| `http://localhost:8000/…` with `make serve` running | works |
+
+So the `.sb3` alone is a development artefact. Three ways to hand it to someone:
+
+1. **TurboWarp Packager** — the route that works. Package the project with the
+   extension URL in the packager's Extensions setting: it downloads `gtm.js` and
+   embeds it, and packaged projects run their extensions **unsandboxed** (its
+   `setExtensionSecurityManager` hard-codes `getSandboxMode: () => 'unsandboxed'`),
+   so the camera and WebGL still work. The result is one HTML file that runs on
+   any computer with no server and no network.
+2. **Install the repository there** and run `make serve`, then open the `.sb3`.
+   Correct, and the workflow to use while you are still editing.
+3. **`extensions.turbowarp.org`** — submit `gtm.js` there and point
+   `EXTENSION_URLS` at its https URL; the `.sb3` is then portable without
+   packaging. That is a pull request against TurboWarp, not something you can
+   self-host: no other https origin is trusted unsandboxed.
 
 ## Checking it
 

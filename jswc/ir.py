@@ -168,12 +168,19 @@ class Target:
         self._idgen = IdGen(name)
 
     # -- variables ---------------------------------------------------------
-    def declare_variable(self, name: str, value: object = 0) -> str:
+    def declare_variable(self, name: str, value: object = 0, cloud: bool = False) -> str:
         if name in self._var_ids:
-            return self._var_ids[name]
+            vid = self._var_ids[name]
+            if cloud:
+                entry = self.variables[vid]
+                # `[name, value, true]` is the whole representation of a cloud
+                # variable (sb3.js reads it back that way); the flag has to be
+                # there from the first declaration.
+                self.variables[vid] = [entry[0], entry[1], True]
+            return vid
         vid = IdGen(f"var:{self.name}:{name}").next("var")
         self._var_ids[name] = vid
-        self.variables[vid] = [name, value]
+        self.variables[vid] = [name, value, True] if cloud else [name, value]
         return vid
 
     def var_id(self, name: str) -> str | None:

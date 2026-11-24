@@ -80,8 +80,7 @@ const EXPECT = [
   // gtm: a lowercase extension namespace, and its members
   ['        gtm.load("https://teachablemachine.withgoogle.com/models/x/");', 'gtm', 'support.class.builtin.jsw'],
   ['        gtm.load("https://teachablemachine.withgoogle.com/models/x/");', 'load', 'support.function.extension.jsw'],
-  ['        if (gtm.isLabel("Cat")) { }', 'isLabel', 'support.function.extension.jsw'],
-  ['        _c = gtm.confidence("Cat");', 'confidence', 'support.function.extension.jsw'],
+  ['        if (gtm.isLabel("Cat")) { }', 'isLabel', 'support.function.extension.jsw'],  ['        _c = gtm.confidence("Cat");', 'confidence', 'support.function.extension.jsw'],
   // pishi: coloured even though a build has to enable the feature
   ['        Arduino.digitalWrite(13);', 'Arduino', 'support.class.builtin.jsw'],
   ['        Arduino.digitalWrite(13);', 'digitalWrite', 'support.function.extension.jsw'],
@@ -90,6 +89,8 @@ const EXPECT = [
   ['    public void playNote(n) {', 'playNote', 'entity.name.function.jsw'],
   ['        if (x) { y = 1; }', 'if', 'keyword.control.jsw'],
   ['    public c_en = "hi";', 'c_en', 'variable.other.readwrite.jsw'],
+  ['    cloud score = 0;', 'cloud', 'storage.modifier.jsw'],
+  ['    cloud score = 0;', 'score', 'variable.other.readwrite.jsw'],
   ['    public void start() {', 'void', 'storage.type.jsw'],
   ['    public Player.tick() {', 'Player', 'support.class.jsw'],
   ['    private _i;', '_i', 'variable.other.temp.jsw'],

@@ -699,8 +699,14 @@ class Decompiler:
             if not self._valid_name(name):
                 self.note("W0008", f"variable {name!r} is not a valid JadenScript name; skipped")
                 continue
+            # `[name, value, true]` is a cloud variable; the flag only means
+            # anything on the stage, so `cloud` doubles as the visibility word.
+            is_cloud = len(entry) > 2 and bool(entry[2])
+            word = "cloud" if is_cloud else keyword
             text = "" if value is None else str(value)
-            if len(text) > self.max_inline * 20:
+            if len(text) > self.max_inline * 20 and not is_cloud:
+                # Large state goes to a side file -- except a cloud variable,
+                # whose `isCloud` flag an `import` line has no way to carry.
                 filename = f"vars/{name}.jsv"
                 self.extra_files[filename] = text.encode("utf-8")
                 line = f'import "{self.asset_prefix}{filename}"' + (
@@ -709,7 +715,9 @@ class Decompiler:
                 line += ";"
                 lines.append(line)
                 continue
-            lines.append(f"{keyword} {name} = {_literal_text(value)};")
+            if is_cloud and len(text) > self.max_inline * 20:
+                self.note("I0003", f"cloud variable {name!r} is written inline")
+            lines.append(f"{word} {name} = {_literal_text(value)};")
         for sid, entry in target.get("lists", {}).items():
             name, items = entry[0], entry[1]
             if any(name.startswith(prefix) for prefix in skip_lists):

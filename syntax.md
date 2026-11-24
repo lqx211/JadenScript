@@ -121,6 +121,59 @@ class something {
 }
 ```
 
+## Cloud variables
+
+A cloud variable is a stage variable the player shares between everybody
+running the project. In JadenScript it has its own declaration keyword:
+
+```jsw
+class lobby {
+    cloud score = 0;     // a stage variable, [name, value, true]
+
+    public void greenFlag() {   // hook: green flag
+        score += 1;
+    }
+}
+```
+
+`cloud` replaces the visibility word, because a cloud variable is always
+public: `scratch-vm` loads it as `[name, value, true]` and only for the Stage
+(`sb3.js` checks `object.isStage`), so the compiler puts it there whatever class
+it is written in. Reading it from another class works the same way a global
+does:
+
+```jsw
+class hud {
+    public void init() {   // hook: green flag
+        Looks.say(score);
+    }
+}
+```
+
+With `#enable_feature<commentMetadata>;` the trailing-comment spelling works
+too, as long as the comment is exactly the word:
+
+```jsw
+#enable_feature<commentMetadata>;
+class lobby {
+    public score = 0; // cloud
+}
+```
+
+Three things the compiler refuses or warns about, because the player is silent
+about them:
+
+| code | when |
+| --- | --- |
+| `E0081` | `cloud items = [1, 2];` — Scratch has no cloud lists; the flag is only read for variables |
+| `E0082` | `cloud x = 1;` inside a function — a declaration belongs to the class, so move it out and assign here |
+| `W0032` | more than ten cloud variables — `cloudOptions.limit` is 10, and the extras load as ordinary stage variables |
+
+Cloud variables also cost the project its offline behaviour: with no cloud
+server configured the value is read-only in the editor and nothing syncs, which
+is what a `[name, value, true]` variable does in the Scratch player and in
+TurboWarp alike.
+
 ## Initial state definition
 
 ### Variables
@@ -279,6 +332,7 @@ project contains, and because the round trip must not lose anything.
 | v0.6 | `// at x,y`, `loose { }`, `// monitor` / `// watch`, `// comment`, costume/sound metadata, `// undefined`, `call(…) { … }`, thread-variable spelling, monitors keyed by variable id | the canvas, the monitors and the pen-drawn UI must survive a rebuild |
 | v0.7 | `log(x)` / `warn(x)` / `error(x)` / `startTimer(x)` / `stopTimer(x)` / `breakpoint;` | the console add-on calls were decompiled as `__log__` stubs; the project's logging has to reach the editor's Logs tab |
 | v1.0 | `#enable_feature<doObfuscation>`, eval warnings | a published build shows sprite/variable/list names in the editor, and runtime-resolved names fail silently |
+| v1.1 | `cloud a = 0;` (and `public a = 0; // cloud`), `gtm.*`, `E0081`/`E0082`/`W0032` | a cloud variable is `[name, value, true]` on the Stage and nothing else in the language could produce one; the VM drops the flag silently past ten of them |
 | v0.9 | number literals (`0x`/`0b`/`0o`, bare numbers), `block(…)`, sprite-local `_x` by default | two real projects exposed them: hex kernel constants, dropdowns that are values, and `_x` locals that must not silently become thread variables |
 | v0.8 | `menu("opcode", "FIELD", value)`, `while (c)` -> `control_while`, `for` de-lowering | dropdown blocks that are not an input slot (`round(<note 66>)`, a menu dragged loose) and loops must come back with the same block, not an equivalent one |
 

@@ -129,6 +129,9 @@ class Assign(Stmt):
     op: str | None = "="
     value: Expr | None = None
     visibility: str | None = None
+    #: ``cloud a = 0;`` — a stage variable the player syncs to the cloud. Scratch
+    #: only honours `isCloud` on the stage, so this always declares there.
+    cloud: bool = False
 
 
 @dataclass

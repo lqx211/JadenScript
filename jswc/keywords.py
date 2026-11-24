@@ -15,6 +15,7 @@ KEYWORDS: frozenset[str] = frozenset(
         "void",
         "public",
         "private",
+        "cloud",
         "if",
         "elif",
         "else",
@@ -76,7 +77,7 @@ RESERVED: frozenset[str] = frozenset(
 )
 
 # Declarations / modifiers get their own highlight bucket.
-MODIFIERS: frozenset[str] = frozenset({"public", "private", "static", "final"})
+MODIFIERS: frozenset[str] = frozenset({"public", "private", "cloud", "static", "final"})
 TYPES: frozenset[str] = frozenset({"void"})
 LITERALS: frozenset[str] = frozenset({"true", "false", "null", "any"})
 

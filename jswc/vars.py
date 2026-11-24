@@ -39,6 +39,9 @@ class VarDef:
     node: A.Node | None = None
     from_import: bool = False
     file_scope: bool = False
+    #: ``cloud``: a stage variable serialised as ``[name, value, true]``. The VM
+    #: only honours the flag on the stage, so this is always a global.
+    cloud: bool = False
 
 
 @dataclass
@@ -305,6 +308,29 @@ class VarPlanner:
 
     # -- definition collection --------------------------------------------
     def _program_level(self) -> None:
+        # A cloud variable is a stage variable, so `stage { cloud x = 0; }` is
+        # the most natural spelling of one. Collect those first: without this
+        # the name would be unknown to the planner and `x += 1` in a sprite
+        # would quietly create a sprite-local variable of the same name.
+        stage = self.program.stage
+        if stage is not None:
+            for member in stage.members:
+                if (
+                    isinstance(member, A.Assign)
+                    and member.op == "="
+                    and member.cloud
+                    and isinstance(member.target, A.Name)
+                ):
+                    if isinstance(member.value, A.ListLit):
+                        self._cloud_list_error(member)
+                        continue
+                    self._define(
+                        member.target.parts,
+                        member.value,
+                        public=True,
+                        node=member,
+                        cloud=True,
+                    )
         for stmt in self.program.globals:
             if (
                 isinstance(stmt, A.Assign)
@@ -313,13 +339,17 @@ class VarPlanner:
             ):
                 parts = stmt.target.parts
                 if isinstance(stmt.value, A.ListLit):
+                    if stmt.cloud:
+                        self._cloud_list_error(stmt)
+                        continue
                     items = _literal_items(stmt.value)
                     if items is not None:
                         name = ".".join(parts)
                         self.plan.lists[name] = items
                         self.plan.file_scope_lists.add(name)
                     continue
-                self._define(parts, stmt.value, public=True, node=stmt, file_scope=True)
+                self._define(parts, stmt.value, public=True, node=stmt, file_scope=True,
+                             cloud=stmt.cloud)
         for decl in self.program.imports:
             self._import_global(decl)
 
@@ -386,6 +416,19 @@ class VarPlanner:
         if stmt.op != "=" or not isinstance(stmt.target, A.Name):
             return
         parts = stmt.target.parts
+        if stmt.cloud:
+            # A cloud variable is a *stage* variable whatever class it is
+            # written in: sb3.js only sets `isCloud` when the target is the
+            # stage, so a sprite-local one would come back a plain variable with
+            # no way to notice. It is public for the same reason -- the point of
+            # a cloud variable is that other players read it.
+            if isinstance(stmt.value, A.ListLit):
+                self._cloud_list_error(stmt)
+                return
+            self._define(parts, stmt.value, public=True, node=stmt, cloud=True)
+            if len(parts) == 1:
+                self._alias_namespaced(cls, parts[0])
+            return
         if isinstance(stmt.value, A.ListLit):
             items = _literal_items(stmt.value)
             if items is None:
@@ -455,6 +498,7 @@ class VarPlanner:
         public: bool,
         node: A.Node,
         file_scope: bool = False,
+        cloud: bool = False,
     ) -> None:
         if not parts:
             return
@@ -462,6 +506,11 @@ class VarPlanner:
         if name in O.PROPERTIES or name in O.REPORTERS:
             return  # ``Motion.x = …`` writes a Scratch property, not a variable
         if len(parts) == 1 and name in self.plan.globals:
+            existing = self.plan.globals[name]
+            if cloud and not existing.cloud:
+                # A later ``cloud`` spelling upgrades the declaration: the flag
+                # lives on the variable, and one cloud claim is enough.
+                existing.cloud = True
             return
         if name in self.plan.globals:
             return
@@ -473,7 +522,16 @@ class VarPlanner:
                 "starts at 0"
             )
         self.plan.globals[name] = VarDef(
-            name=name, initial=initial, public=True, node=node, file_scope=file_scope
+            name=name, initial=initial, public=True, node=node, file_scope=file_scope,
+            cloud=cloud,
+        )
+
+    def _cloud_list_error(self, stmt: A.Assign) -> None:
+        name = ".".join(stmt.target.parts) if stmt.target is not None else "?"
+        self.plan.errors.append(
+            f"{stmt.line}:{stmt.col}: E0081 {name!r} is declared as a cloud list; "
+            "Scratch has no cloud lists (a list is always local to the stage), "
+            "so declare it as a plain list"
         )
 
     def _import_class_state(self, cls: A.ClassDecl, decl: A.ImportDecl) -> None:
@@ -594,10 +652,33 @@ class VarPlanner:
                         self._check_expr(member.target, table, set())
                 elif isinstance(member, A.FuncDecl):
                     self._check_body(member.body, table, set(member.params))
+        # The Stage's own functions are not name-checked (they always were
+        # allowed to reach whatever exists), but a `cloud` declaration inside
+        # one is a statement that would be dropped, so it is reported here.
+        stage = self.program.stage
+        if stage is not None:
+            for member in stage.members:
+                if isinstance(member, A.FuncDecl):
+                    for stmt in iter_statements(member.body):
+                        if isinstance(stmt, A.Assign) and stmt.cloud:
+                            self._cloud_in_function_error(stmt)
+
+    def _cloud_in_function_error(self, stmt: A.Assign) -> None:
+        # A declaration belongs to the class or the file, not to a call: two
+        # calls would claim the same stage slot, and the block for `a = 1` is
+        # what remains.
+        name = ".".join(stmt.target.parts) if stmt.target is not None else "?"
+        self.plan.errors.append(
+            f"{stmt.line}:{stmt.col}: E0082 cloud variable {name!r} is declared "
+            "inside a function; declare it in the class body or at the top "
+            "level, and assign it here"
+        )
 
     def _check_body(self, body, table, params) -> None:
         for stmt in body:
             if isinstance(stmt, A.Assign):
+                if stmt.cloud:
+                    self._cloud_in_function_error(stmt)
                 self._check_expr(stmt.value, table, params)
                 if isinstance(stmt.target, A.Index):
                     self._check_expr(stmt.target, table, params)

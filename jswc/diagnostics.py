@@ -355,6 +355,17 @@ MESSAGES: tuple[Message, ...] = (
             "custom extension at all. A ``--target scratch`` build that calls it "
             "would load with every ``gtm_`` block undefined."),
 
+    Message("E0081", "error", "cloud lists do not exist",
+            "``cloud list = [1, 2];`` has no Scratch equivalent: variables carry "
+            "an ``isCloud`` flag, lists do not. Declare the list without "
+            "``cloud`` -- a stage list is still shared by every sprite."),
+
+    Message("E0082", "error", "cloud variable declared in a function",
+            "A cloud variable is declared on the Stage, like every other global, "
+            "so it belongs in the class body or at the top level; declaring it "
+            "inside a function would make every call claim the same slot. Move "
+            "the declaration out and assign the value here."),
+
     Message("W0030", "warning", "vmProtect skipped for vanillaScratch",
             "``vmProtect`` is a deliberate slowdown, so a build that targets "
             "scratch.mit.edu keeps its ordinary blocks; drop ``vanillaScratch`` "
@@ -366,6 +377,11 @@ MESSAGES: tuple[Message, ...] = (
     Message("W0029", "warning", "sprite left out of an --only-sprite build",
             "The kept sprite calls a custom block on a sprite that is not in "
             "this build, so the compiled call has no definition behind it."),
+
+    Message("W0032", "warning", "more cloud variables than the player accepts",
+            "``scratch-vm`` only marks the first ten cloud variables as cloud "
+            "(``cloudOptions.limit``); the rest are loaded as ordinary stage "
+            "variables and the difference is invisible in the editor."),
 
     Message("E9999", "error", "unclassified",
             "No catalogue entry matched; please report the message verbatim."),

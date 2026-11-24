@@ -36,6 +36,7 @@ let s:lines = [
       \ '        _s = gtm.status;',
       \ '        Facemesh.getX(1);',
       \ '        _l = GoogleTeachableMachine.getImageLabel;',
+      \ '    cloud score = 0;',
       \ ]
 
 " (line, snippet, expected group)
@@ -82,6 +83,8 @@ let s:expect = [
       \ [19, 'Facemesh', 'jswNamespace'],
       \ [19, 'getX(', 'jswFunctionCall'],
       \ [20, 'getImageLabel', 'jswExtensionMember'],
+      \ [21, 'cloud', 'jswModifier'],
+      \ [21, 'score', 'jswIdentifier'],
       \ ]
 
 call setline(1, s:lines)

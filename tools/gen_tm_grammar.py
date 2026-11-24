@@ -317,14 +317,15 @@ def build_grammar() -> dict:
                     },
                     {
                         "comment": "public c_en = …; — the declaration names the state.",
-                        "match": r"\b(public|private)\s+(_[A-Za-z0-9_$][\w$]*)\s*(?=[=;])",
+                        "match": r"\b(public|private|cloud)\s+(_[A-Za-z0-9_$][\w$]*)\s*(?=[=;])",
                         "captures": {
                             "1": {"name": "storage.modifier.jsw"},
                             "2": {"name": "variable.other.temp.jsw"},
                         },
                     },
                     {
-                        "match": r"\b(public|private)\s+(?!void\b)([A-Za-z$][\w$]*)\s*(?=[=;\[])",
+                        "comment": "public b = 0; / cloud score = 0; — the declaration names the state.",
+                        "match": r"\b(public|private|cloud)\s+(?!void\b)([A-Za-z$][\w$]*)\s*(?=[=;\[])",
                         "captures": {
                             "1": {"name": "storage.modifier.jsw"},
                             "2": {"name": "variable.other.readwrite.jsw"},

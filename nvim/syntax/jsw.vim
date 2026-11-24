@@ -55,7 +55,7 @@ syn keyword jswConditional case default elif else if switch
 syn keyword jswRepeat break continue for repeat while
 syn keyword jswStatement call loose return
 syn keyword jswDeclaration as import include stage
-syn keyword jswModifier final private public static
+syn keyword jswModifier cloud final private public static
 syn keyword jswType void
 syn keyword jswWordOperator and not or
 syn keyword jswReserved async await catch const delete do enum export extends finally in instanceof let new of struct this throw try typedef typeof var yield

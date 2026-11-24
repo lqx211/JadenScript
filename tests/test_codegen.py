@@ -243,9 +243,138 @@ class CodegenTests(unittest.TestCase):
             SOURCE,
             "class a { void f(){ for (i=1, i<=3, i++){ Piano.n.add(i); } } }",
             "class a { public void Player.tick(){ if (x) { y=1; } else { y=2; } } }",
+            "class a { cloud score = 0; void f(){ score += 1; } }",
         ):
             _, project = compile_source(source)
             self.assertEqual(validate(project), [])
+
+
+class CloudVariableTests(unittest.TestCase):
+    """``cloud a = 0;`` — a stage variable serialised as ``[name, value, true]``.
+
+    `sb3.js` only sets `isCloud` when the target is the stage, so the
+    declaration lands there however it is spelled, and a sprite never grows one.
+    """
+
+    def test_a_declaration_is_a_stage_variable_with_the_flag(self):
+        _, project = compile_source('class a { cloud score = 0; void f(){ score += 1; } }')
+        entries = list(project.stage.variables.values())
+        self.assertEqual(entries, [["score", 0, True]])
+        self.assertEqual(project.targets[-1].variables, {})
+
+    def test_a_top_level_declaration_works_the_same(self):
+        _, project = compile_source('cloud high = 0;\nclass a { void f(){ high = 1; } }')
+        self.assertEqual(list(project.stage.variables.values()), [["high", 0, True]])
+
+    def test_the_value_is_the_initial_literal(self):
+        _, project = compile_source('class a { cloud name = "anon"; void f(){} }')
+        self.assertEqual(list(project.stage.variables.values()), [["name", "anon", True]])
+
+    def test_it_is_readable_from_another_class(self):
+        _, project = compile_source(
+            'class a { cloud score = 3; void f(){} }\n'
+            'class b { void g(){ Looks.say(score); } }'
+        )
+        names = [v[0] for v in project.stage.variables.values()]
+        self.assertEqual(names, ["score"])
+        # the read became a variable reporter, not an undefined name
+        say = next(b for b in project.targets[-1].blocks.values() if b.opcode == "looks_say")
+        self.assertNotIn("E0035", " ".join(getattr(project, "diagnostics", [])))
+        self.assertTrue(say.inputs["MESSAGE"])
+
+    def test_the_comment_metadata_spelling_is_the_same_variable(self):
+        _, project = compile_source(
+            '#enable_feature<commentMetadata>;\n'
+            'class a { public a = 0; // cloud\n void f(){ a = 1; } }'
+        )
+        self.assertEqual(list(project.stage.variables.values()), [["a", 0, True]])
+
+    def test_a_prose_comment_does_not_make_it_cloud(self):
+        _, project = compile_source(
+            '#enable_feature<commentMetadata>;\n'
+            'class a { public a = 0; // cloud storage is nice\n void f(){ a = 1; } }'
+        )
+        entry = list(project.stage.variables.values())[0]
+        self.assertEqual(len(entry), 2, entry)
+
+    def test_a_cloud_list_is_refused(self):
+        from jswc.tokens import CompileError
+
+        with self.assertRaises(CompileError) as caught:
+            compile_source(
+                'class a { cloud items = [1, 2]; void f(){} }', allow_undefined=False
+            )
+        self.assertIn("E0081", str(caught.exception))
+
+    def test_a_declaration_in_a_function_is_refused(self):
+        from jswc.tokens import CompileError
+
+        with self.assertRaises(CompileError) as caught:
+            compile_source('class a { void f(){ cloud x = 1; } }', allow_undefined=False)
+        self.assertIn("E0082", str(caught.exception))
+
+    def test_a_declaration_in_a_stage_block_works(self):
+        # The stage block is the natural home for a cloud variable, and the one
+        # declaration it accepts: everything else there is a global the planner
+        # already owns.
+        _, project = compile_source(
+            'stage { cloud visits = 0; }\nclass a { void f(){ visits += 1; } }'
+        )
+        self.assertEqual(list(project.stage.variables.values()), [["visits", 0, True]])
+        sprite = next(t for t in project.targets if t.name == "a")
+        self.assertEqual(sprite.variables, {}, "the sprite must not shadow it")
+        block = next(
+            b for b in sprite.blocks.values() if b.opcode == "data_changevariableby"
+        )
+        self.assertEqual(block.fields["VARIABLE"][1], next(iter(project.stage.variables)))
+
+    def test_a_declaration_in_a_stage_function_is_refused(self):
+        from jswc.tokens import CompileError
+
+        with self.assertRaises(CompileError) as caught:
+            compile_source(
+                'stage { void f(){ cloud x = 1; } }\nclass a { void g(){} }',
+                allow_undefined=False,
+            )
+        self.assertIn("E0082", str(caught.exception))
+
+    def test_the_flag_survives_obfuscation(self):
+        from jswc.codegen import Codegen
+        from tests.helpers import parse_source
+
+        _, program = parse_source('class a { cloud score = 0; void f(){ score += 1; } }')
+        project = Codegen(program, allow_undefined=True, obf_junk=True).compile()
+        entry = list(project.stage.variables.values())[0]
+        self.assertEqual(len(entry), 3)
+        self.assertTrue(entry[2])
+
+    def test_more_than_ten_cloud_variables_warn(self):
+        source = "class a {\n" + "".join(
+            f"    cloud c{i} = {i};\n" for i in range(11)
+        ) + "    void f(){}\n}\n"
+        codegen, _ = compile_source(source)
+        self.assertTrue(
+            any("W0032" in note for note in codegen.diagnostics), codegen.diagnostics
+        )
+
+    def test_ten_cloud_variables_do_not_warn(self):
+        source = "class a {\n" + "".join(
+            f"    cloud c{i} = {i};\n" for i in range(10)
+        ) + "    void f(){}\n}\n"
+        codegen, _ = compile_source(source)
+        self.assertFalse(
+            any("W0032" in note for note in codegen.diagnostics), codegen.diagnostics
+        )
+
+    def test_it_round_trips_through_the_decompiler(self):
+        from jswc.decompile import Decompiler
+        from jswc.sb3 import build_project_dict
+        from jswc.sb3_read import LoadedProject
+
+        _, project = compile_source('class a { cloud score = 7; void f(){ score += 1; } }')
+        data, _ = build_project_dict(project)
+        again = Decompiler(LoadedProject(data=data)).decompile()
+        self.assertIn("cloud score = 7;", again)
 
 
 class ColourInputTests(unittest.TestCase):

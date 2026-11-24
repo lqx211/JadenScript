@@ -61,6 +61,12 @@
    "doc": "Declares a Scratch sprite. `class main { // Sprite: main (0,0) … }`"
   },
   {
+   "label": "cloud",
+   "kind": "modifier",
+   "detail": "modifier",
+   "doc": "Access modifier."
+  },
+  {
    "label": "const",
    "kind": "reserved",
    "detail": "reserved",

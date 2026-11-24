@@ -42,6 +42,11 @@ from .tokens import CompileError
 from .vars import VarPlan, collect_list_names, plan_variables
 
 TEMP_VARS_EXTENSION = "lmsTempVars2"
+
+#: How many cloud variables a project may declare and still have them load as
+#: cloud: ``Runtime.cloudOptions.limit`` is 10 in scratch-vm, and the ones past
+#: it are silently loaded as ordinary stage variables.
+CLOUD_VARIABLE_LIMIT = 10
 _IMAGE_FORMATS = {"svg", "png", "jpg", "jpeg", "bmp", "gif", "webp"}
 _SOUND_FORMATS = {"wav", "mp3", "ogg"}
 _HOOK_RE = re.compile(
@@ -596,8 +601,20 @@ class Codegen:
         # File-scope declarations and imports have no owning class, so they are
         # declared up front; everything else declares itself where it is used.
         for name, definition in self.plan.globals.items():
-            if definition.from_import or definition.file_scope:
-                self.project.stage.declare_variable(name, definition.initial)
+            if definition.from_import or definition.file_scope or definition.cloud:
+                self.project.stage.declare_variable(
+                    name, definition.initial, cloud=definition.cloud
+                )
+        cloud_names = [n for n, d in self.plan.globals.items() if d.cloud]
+        if len(cloud_names) > CLOUD_VARIABLE_LIMIT:
+            # sb3.js stops honouring the flag at the runtime's limit, and the
+            # leftover variables look normal in the editor -- so say it here.
+            self.diagnostics.append(
+                f"0:0: W0032 {len(cloud_names)} cloud variables are declared but the "
+                f"player only accepts {CLOUD_VARIABLE_LIMIT}; "
+                + ", ".join(cloud_names[CLOUD_VARIABLE_LIMIT:])
+                + " will load as plain stage variables"
+            )
         # Sorted: a set of names has no order, and the order they are declared
         # in decides the order of the Stage's list ids, which is visible in the
         # file. Two builds of one source should not differ on it.
@@ -1122,8 +1139,14 @@ class Codegen:
             return
         is_global = self.plan is not None and name in self.plan.globals
         qualified = self._qualify(name) if is_global else name
+        cloud = bool(
+            self.plan is not None
+            and getattr(self.plan.globals.get(name), "cloud", False)
+        )
         if is_global:
-            self.project.stage.declare_variable(qualified, self._initial_of(name))
+            self.project.stage.declare_variable(
+                qualified, self._initial_of(name), cloud=cloud
+            )
         elif self.target is not None:
             self.target.declare_variable(qualified, self._initial_of(name))
         from .vars import literal_text
@@ -1280,11 +1303,21 @@ class Codegen:
                 self._emit_loose(member)
             elif isinstance(member, A.MetaDecl):
                 continue  # collected by ``_collect_metadata``
+            elif isinstance(member, A.Assign) and member.cloud and member.op == "=":
+                # The stage block is the natural home for a cloud variable --
+                # and the only declaration this block accepts, because every
+                # other `public a = 0;` is a global the planner already owns.
+                target = member.target
+                name = ".".join(target.parts) if isinstance(target, A.Name) else ""
+                if name:
+                    self.project.stage.declare_variable(
+                        name, self._initial_of(name), cloud=True
+                    )
             else:
                 self.diag(
                     member,
                     "W0010",
-                    "only functions and imports are allowed in a stage block",
+                    "only functions, imports and cloud variables are allowed in a stage block",
                 )
 
     def _apply_stage_declaration(self) -> None:
