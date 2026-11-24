@@ -39,7 +39,8 @@ from .extension_blocks import MICROBIT_CONSTANTS
 from .keysim_blocks import KEYSIM_EXTENSION, KEYSIM_KEYS, KEYSIM_KEY_LABELS
 from . import extensions
 from .extensions import (
-    ARITY_ALIASES, alias_arity, known_namespaces, resolve, suggest_alias,
+    ARITY_ALIASES, alias_arity, is_extension_opcode, known_namespaces, resolve,
+    suggest_alias,
 )
 from .keywords import BUILTIN_NAMESPACES, FEATURES, STATE_ALIASES
 from .tokens import CompileError
@@ -4274,7 +4275,8 @@ class Codegen:
             block.set_input("OPERAND2", Lit(O.TEXT, "0" if truthy else "1"))
             ref: object = Ref(block)
         elif isinstance(value, Ref):
-            if value.block.opcode in BOOLEAN_REPORTERS:
+            if (value.block.opcode in BOOLEAN_REPORTERS
+                    or is_extension_opcode(value.block.opcode)):
                 ref = Ref(value.block)
             else:
                 # `<not <(x) = 0>>` is the VM's own truthiness test and the only

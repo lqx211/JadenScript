@@ -91,6 +91,18 @@ class BooleanSlotTests(unittest.TestCase):
             filled = blocks[child]["inputs"][operand][1]
             self.assertEqual("operator_not", blocks[filled]["opcode"])
 
+    def test_a_boolean_extension_reporter_is_used_as_it_is(self):
+        # An extension block declares no output check, so a Boolean slot takes
+        # it: wrapping ``is it Cat?`` in ``not <… = 0>`` would be correct but
+        # would add two blocks and change the source a decompile produces.
+        _, project = compile_source(
+            'class a { void f() { if (gtm.isLabel("Cat")) { Looks.show(); } } }'
+        )
+        blocks = blocks_of(project, "a")
+        branch = next(b for b in blocks.values() if b["opcode"] == "control_if")
+        child = blocks[branch["inputs"]["CONDITION"][1]]
+        self.assertEqual("gtm_isLabel", child["opcode"])
+
     def test_a_list_item_condition_is_wrapped(self):
         blocks, child = self.condition_of(
             "class a { private l = []; void f() { while (l.get(1)) { Looks.show(); } } }"

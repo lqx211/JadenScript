@@ -319,6 +319,25 @@ class ExtensionCall:
         return BOOLEAN if self.kind == "BOOLEAN" else MATH_NUM
 
 
+#: Every extension id in the catalogue, longest first, for opcode prefixes.
+#: ``gtm_isLabel`` -> ``gtm``. Built once: ``_as_bool`` asks per condition.
+_EXTENSION_IDS: tuple[str, ...] = ()
+
+
+def is_extension_opcode(opcode: str) -> bool:
+    """Whether ``opcode`` was made by an extension (``gtm_isLabel``).
+
+    Extension blocks declare no output check, so a Boolean slot takes them as
+    they are. That matters for the truthiness wrap in ``Codegen._as_bool``:
+    wrapping a Boolean reporter would be correct but pointless, and it would
+    change the source a decompile produces for ``if (gtm.isLabel(x))``.
+    """
+    global _EXTENSION_IDS
+    if not _EXTENSION_IDS:
+        _EXTENSION_IDS = tuple(sorted(catalogue(), key=lambda name: (-len(name), name)))
+    return any(opcode.startswith(extension_id + "_") for extension_id in _EXTENSION_IDS)
+
+
 def extension_for_namespace(namespace: str, features=()) -> str | None:
     for extension_id, entry in catalogue(features).items():
         if entry["namespace"] == namespace:
