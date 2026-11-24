@@ -354,6 +354,33 @@ def _snake(name: str) -> str:
     return "".join(out)
 
 
+def extension_arity(namespace: str, method: str, features=()) -> int | None:
+    """How many arguments ``Namespace.method`` takes, if it is a real block.
+
+    ``resolve`` answers ``None`` for a wrong argument count, which reads as
+    "there is no such block" — ``Facemesh.getX(1)`` said *"not a block of the
+    Facemesh extension"* when the block exists and wants two. This is the number
+    to print instead.
+    """
+    table = catalogue(features)
+    alias = ALIASES.get((namespace, method))
+    if alias is not None:
+        entry = table.get(_extension_of(alias.opcode, namespace), {})
+        spec = entry.get("blocks", {}).get(alias.opcode)
+        if spec is None:
+            return None
+        return len(spec["args"]) - len(alias.fixed) - len(alias.optional)
+    extension_id = extension_for_namespace(namespace, features)
+    if extension_id is None:
+        return None
+    blocks = table.get(extension_id, {}).get("blocks", {})
+    for candidate in (method, _snake(method)):
+        spec = blocks.get(candidate)
+        if spec is not None:
+            return len(spec["args"])
+    return None
+
+
 def resolve(namespace: str, method: str, arg_count: int | None = None,
             features=()) -> ExtensionCall | None:
     """Resolve ``Namespace.method`` to an extension block, if one exists.

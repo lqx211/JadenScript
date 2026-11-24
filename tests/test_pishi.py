@@ -89,6 +89,25 @@ class GatingTests(unittest.TestCase):
             extensions.resolve("Facemesh", "getXFromMenu", 3, FEATURE)
         )
 
+    def test_a_pishi_namespace_is_never_mistaken_for_a_list(self):
+        # ``get``/``length``/``contains`` are list methods too, so a pishi call
+        # that shares the name used to invent a *list* called ``Facemesh`` and
+        # never reach the namespace -- and ``Facemesh.length()`` crashed the
+        # compiler with IndexError.
+        codegen, project = compile_source(
+            "class a { void f() { x = Facemesh.getX(1); y = Facemesh.length(); } }",
+            features=FEATURE,
+        )
+        messages = "\n".join(diagnostics(codegen))
+        self.assertIn("E0076", messages)
+        self.assertIn("takes 2 argument(s)", messages)
+        self.assertIn("E0040", messages)
+        list_ops = {
+            "data_itemoflist", "data_lengthoflist", "data_listcontainsitem",
+            "data_itemnumoflist",
+        }
+        self.assertEqual(set(), list_ops & {b["opcode"] for b in blocks_of(project, "a").values()})
+
     def test_a_namespace_that_is_not_pishi_stays_unknown(self):
         self.assertIsNone(extensions.resolve("Facemash", "getX", 2, FEATURE))
 

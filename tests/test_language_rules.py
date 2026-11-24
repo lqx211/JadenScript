@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from tests.helpers import blocks_of, opcodes
+from tests.helpers import blocks_of, compile_source, opcodes
 
 from jswc.codegen import Codegen
 from jswc.lexer import tokenize
@@ -250,6 +250,28 @@ class VariableImportTests(unittest.TestCase):
         with self.assertRaises(CompileError) as caught:
             self.compile('import "bad.jsa";\nclass a { void f(){} }')
         self.assertIn("invalid JSON", str(caught.exception))
+
+
+
+class ListArgumentTests(unittest.TestCase):
+    def test_a_list_reporter_without_its_argument_is_a_diagnostic(self):
+        # ``notes.get()`` indexed ``args[0]`` and raised IndexError out of the
+        # compiler; user input must never reach a traceback.
+        codegen, _ = compile_source(
+            "class a { private notes = [1]; void f() { x = notes.get(); } }"
+        )
+        self.assertTrue(
+            any("E0076" in d and "needs an argument" in d for d in codegen.diagnostics),
+            codegen.diagnostics,
+        )
+
+    def test_length_needs_no_argument(self):
+        codegen, project = compile_source(
+            "class a { private notes = [1]; void f() { x = notes.length(); } }"
+        )
+        self.assertEqual([], [d for d in codegen.diagnostics if "E0076" in d])
+        self.assertIn("data_lengthoflist",
+                      [b["opcode"] for b in blocks_of(project, "a").values()])
 
 
 if __name__ == "__main__":

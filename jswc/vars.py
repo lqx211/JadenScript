@@ -192,9 +192,14 @@ def collect_list_names(program: A.Program) -> set[str]:
     A namespace such as ``JSON.get(...)`` looks exactly like a list call, so
     namespaces are excluded — otherwise ``JSON`` would become a list.
     """
-    from .extensions import known_namespaces
+    from .extensions import highlight_namespaces, known_namespaces
 
+    # ``highlight_namespaces()`` adds the pishi names, which are only *known*
+    # when ``pishiSupport`` is on: without this, ``Arduino.length()`` (or any
+    # misspelt pishi call that happens to be a list method) invented a list
+    # called ``Arduino`` and the namespace was never reached.
     namespaces = set(BUILTIN_NAMESPACES) | set(known_namespaces())
+    namespaces |= set(highlight_namespaces())
     # A class is a sprite, so ``Player.clear()`` is a custom block or a
     # broadcast, never a list — even though ``clear`` is a list method. A
     # decompiled ``elif`` arm can call one, and the walker now sees it.

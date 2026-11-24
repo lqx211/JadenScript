@@ -39,8 +39,8 @@ from .extension_blocks import MICROBIT_CONSTANTS
 from .keysim_blocks import KEYSIM_EXTENSION, KEYSIM_KEYS, KEYSIM_KEY_LABELS
 from . import extensions
 from .extensions import (
-    ARITY_ALIASES, alias_arity, is_extension_opcode, known_namespaces, resolve,
-    suggest_alias,
+    ARITY_ALIASES, alias_arity, extension_arity, is_extension_opcode,
+    known_namespaces, resolve, suggest_alias,
 )
 from .keywords import BUILTIN_NAMESPACES, FEATURES, STATE_ALIASES
 from .tokens import CompileError
@@ -3169,15 +3169,32 @@ class Codegen:
         block.set_input("ITEM", self._as_input(self._eval(value), O.TEXT))
         return [block]
 
-    def _list_reporter(self, name: str, opcode: str, args: list[A.Expr] | None = None) -> Ref:
+    def _list_reporter(
+        self, name: str, opcode: str, args: list[A.Expr] | None = None,
+        call: A.Call | None = None,
+    ) -> Ref:
         assert self.target is not None
         if opcode == "data_listcontents":
             block = self._new("data_listcontents")
             block.set_field("LIST", name, self._declare_list(name))
             return Ref(block)
+        args = args or []
+        wants_argument = opcode in (
+            "data_itemoflist", "data_listcontainsitem", "data_itemnumoflist"
+        )
+        if wants_argument and not args:
+            # ``notes.get()`` -- a list method missing its argument. Report it
+            # rather than letting ``args[0]`` raise IndexError out of the
+            # compiler. ``notes.length()`` takes none and is fine.
+            method = call.name if call is not None else "?"
+            self.diag(
+                call or A.Name(parts=(name,)),
+                "E0076",
+                f"{name}.{method} needs an argument",
+            )
+            return Lit(O.TEXT, "")
         block = self._new(opcode)
         block.set_field("LIST", name, self._declare_list(name))
-        args = args or []
         if opcode == "data_itemoflist":
             block.set_input("INDEX", self._as_input(self._eval(args[0]), O.INTEGER))
         elif opcode in ("data_listcontainsitem", "data_itemnumoflist"):
@@ -3449,7 +3466,9 @@ class Codegen:
         if qname in O.REPORTERS:
             return self._reporter(O.REPORTERS[qname], call.args)
         if full in self.list_names and call.name in O.LIST_REPORTERS:
-            return self._list_reporter(full, O.LIST_REPORTERS[call.name], call.args)
+            return self._list_reporter(
+                full, O.LIST_REPORTERS[call.name], call.args, call=call
+            )
         if qname in O.PROPERTIES:
             return self._var_read(tuple(qname.split(".")))
         if self._is_runtime_get(full, call):
@@ -3472,6 +3491,18 @@ class Codegen:
                 "E0076",
                 f"{full}.{call.name} takes {takes} argument(s), not {len(call.args)}",
             )
+            return Lit(O.TEXT, "")
+        if full in known_namespaces(self.features):
+            # Same message the command path gives: the namespace is real, and
+            # either the block is not or the argument count is wrong.
+            wanted = extension_arity(full, call.name, self.features)
+            if wanted is not None and wanted != len(call.args):
+                self.diag(
+                    call, "E0076",
+                    f"{qname} takes {wanted} argument(s), not {len(call.args)}",
+                )
+            else:
+                self.diag(call, "E0040", f"{qname} is not a block of the {full} extension")
             return Lit(O.TEXT, "")
         self.diag(call, "E0037", f"unknown reporter {qname!r}")
         return Lit(O.TEXT, "")
@@ -3796,7 +3827,14 @@ class Codegen:
             )
             return []
         if full in known_namespaces(self.features) and resolve(full, call.name, len(call.args), self.features) is None:
-            self.diag(call, "E0040", f"{qname} is not a block of the {full} extension")
+            wanted = extension_arity(full, call.name, self.features)
+            if wanted is not None and wanted != len(call.args):
+                self.diag(
+                    call, "E0076",
+                    f"{qname} takes {wanted} argument(s), not {len(call.args)}",
+                )
+            else:
+                self.diag(call, "E0040", f"{qname} is not a block of the {full} extension")
             return []
         extension = resolve(full, call.name, len(call.args), self.features)
         if extension is not None and not extension.is_reporter:
