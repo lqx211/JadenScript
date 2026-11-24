@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import zipfile
 from pathlib import Path
@@ -107,17 +108,30 @@ def _uses_placeholder(project: Project) -> bool:
     return any(not target.costumes for target in project.targets)
 
 
-def write_sb3(project: Project, path: str | Path) -> tuple[Path, dict]:
+def sb3_bytes(project: Project) -> bytes:
+    """The project as a zipped ``.sb3``, in memory.
+
+    ``--html`` needs the bytes rather than a path (the packager reads a
+    complete project), and ``--project-json --html`` writes no archive at all,
+    so the zip has to be buildable without touching the filesystem.
+    """
     data, asset_id = build_project_dict(project)
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         archive.writestr("project.json", json.dumps(data, separators=(",", ":"), ensure_ascii=False))
         if _uses_placeholder(project):
             # Only referenced when a target has no costume of its own.
             archive.writestr(f"{asset_id}.svg", DEFAULT_SVG)
         for name, payload in project.assets.items():
             archive.writestr(name, payload)
+    return buffer.getvalue()
+
+
+def write_sb3(project: Project, path: str | Path) -> tuple[Path, dict]:
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(sb3_bytes(project))
+    data, _asset_id = build_project_dict(project)
     return path, data
 
 

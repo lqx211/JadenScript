@@ -53,6 +53,8 @@ Useful flags:
 | --- | --- |
 | `-o/--output PATH` | where to write (default: next to the source, `.sb3`) |
 | `--project-json` | write an unzipped `project.json` instead of a zip |
+| `--html` | also write a standalone `.html` (TurboWarp Packager; needs `npm install`) |
+| `--html-title TEXT` | page title for the `--html` file (default: the file name) |
 | `--locals sprite\|thread` | where bare variables live (`thread` needs `lmsTempVars2`) |
 | `--warp` | every custom block runs without screen refresh |
 | `--enable FEATURE` | turn on a language feature (repeatable, see `jswc features`; `pishiSupport` adds the pishi.ai extensions) |
@@ -171,6 +173,50 @@ language features
   • vmProtect
   enable with --enable FEATURE (repeatable)
 ```
+
+### One file that runs anywhere: `--html`
+
+```bash
+jswc build userspace/school/gtm_demo.jsw -o build/gtm_demo.sb3 --html
+```
+
+```
+✔ Compiled build/gtm_demo.sb3
+  blocks 5 · sprites 1 · classes 1 · time 272 ms
+  extensions gtm
+  html      build/gtm_demo.html (1.9 MB, self-contained)
+```
+
+The `.sb3` is a *source* for whoever has the project server; the `.html` is the
+deliverable. It embeds the whole TurboWarp player, every asset, and every custom
+extension — `extensionURLs` entries are fetched at build time and rewritten to
+`data:text/javascript,` URLs by the packager, so a project that uses `gtm` runs
+from a folder with nothing else in it, offline.
+
+This is TurboWarp's own `@turbowarp/packager` (pinned to an exact version in
+`package.json`, because its Node API is unstable across minor releases), not a
+re-implementation. Two consequences:
+
+* **`npm install` once** in the checkout. Without it the build stops with a
+  message saying so.
+* **The extension URLs have to answer at build time.** A `localhost:8000` entry
+  means `make serve` has to be running for that one command. If a URL does not
+  answer, the build fails and names it — the packager on its own only *warns*
+  and leaves the URL in the file, which produces a page that looks packaged and
+  then works on exactly one machine.
+
+The project model is the same one the `.sb3` gets: `--enable`, `--obf-*`,
+`--target` and so on all apply, and `--project-json --html` works too (the
+archive is built in memory for the packager).
+
+| flag | effect |
+| --- | --- |
+| `--html` | also write `<output>.html` next to the `.sb3` |
+| `--html-title TEXT` | `document.title` / window title (default: derived from the file name) |
+
+Autoplay and turbo mode are on in the packaged page, since it is meant to be
+handed to someone and double-clicked. For a title screen or a different
+appearance, use <https://packager.turbowarp.org/> with the same `.sb3`.
 
 ---
 

@@ -9,12 +9,12 @@ import sys
 import time
 from pathlib import Path
 
-from . import __version__, include, lints, ui
+from . import __version__, html, include, lints, ui
 from .codegen import DEFAULT_OBF_FLATTEN, DEFAULT_OBF_POOLS, Codegen
 from .gtm_blocks import GTM_EXTENSION
 from .lexer import tokenize
 from .parser import Parser
-from .sb3 import write_project_json, write_sb3
+from .sb3 import build_project_dict, sb3_bytes, write_project_json, write_sb3
 from .include import Source
 from .tokens import JswError
 from .validator import validate
@@ -399,8 +399,25 @@ def cmd_build(args: argparse.Namespace) -> int:
     output = Path(args.output or source_path.with_suffix(".sb3"))
     if args.project_json:
         path = write_project_json(project, output.with_suffix(".json"))
+        payload = sb3_bytes(project) if args.html else b""
     else:
         path, _data = write_sb3(project, output)
+        payload = Path(path).read_bytes() if args.html else b""
+    html_path = None
+    if args.html:
+        # After the project is on disk: a packaging failure must not lose the
+        # build that already succeeded.
+        try:
+            html_path = html.pack(
+                payload,
+                Path(path).with_suffix(".html"),
+                extension_urls=project.extension_urls.values(),
+                title=args.html_title,
+            )
+        except html.HtmlError as exc:
+            _err(ui.failure(str(exc)))
+            _err(ui.muted(f"  {path} was written; --html produced nothing"))
+            return EXIT_FAILED
     took_total = time.perf_counter() - spinner.started
 
     stats = _project_stats(project)
@@ -414,6 +431,11 @@ def cmd_build(args: argparse.Namespace) -> int:
     if project.extensions:
         print(f"  {ui.muted('extensions ')}"
               f"{ui.THEME.paint(', '.join(project.extensions), ui.THEME.magenta)}")
+    if html_path is not None:
+        size = html_path.stat().st_size
+        print(f"  {ui.muted('html      ')}"
+              f"{ui.THEME.paint(str(html_path), ui.THEME.bold)} "
+              f"{ui.muted(f'({size / 1_000_000:.1f} MB, self-contained)')}")
     if errors or warnings or info:
         print(_tally(errors, warnings, info))
         if errors:
@@ -576,6 +598,11 @@ def build_parser() -> argparse.ArgumentParser:
                        help="run every custom block without screen refresh")
     build.add_argument("--project-json", action="store_true",
                        help="write project.json instead of a zipped .sb3")
+    build.add_argument("--html", action="store_true",
+                       help="also write a standalone HTML file (TurboWarp Packager; "
+                            "needs node and `npm install`)")
+    build.add_argument("--html-title", metavar="TEXT",
+                       help="page title for the --html file (default: the file name)")
     build.add_argument("--enable", action="append", default=[], metavar="FEATURE",
                        help="enable a language feature (useTempVariables, commentMetadata, "
                             "namespacedNames, doObfuscation, corruptBlockPos, vanillaScratch, "

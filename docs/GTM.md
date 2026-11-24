@@ -218,15 +218,27 @@ What TurboWarp does about it, measured rather than assumed:
 
 So the `.sb3` alone is a development artefact. Three ways to hand it to someone:
 
-1. **TurboWarp Packager** — the route that works. Package the project with the
-   extension URL in the packager's Extensions setting: it downloads `gtm.js` and
-   embeds it, and packaged projects run their extensions **unsandboxed** (its
-   `setExtensionSecurityManager` hard-codes `getSandboxMode: () => 'unsandboxed'`),
-   so the camera and WebGL still work. The result is one HTML file that runs on
-   any computer with no server and no network.
-2. **Install the repository there** and run `make serve`, then open the `.sb3`.
+1. **`jswc build … --html`** — the route that works, and it is one flag:
+
+   ```bash
+   make serve                       # only while packaging: the extension is
+   jswc build userspace/school/gtm_demo.jsw -o build/gtm_demo.sb3 --html
+   #   html      build/gtm_demo.html (1.9 MB, self-contained)
+   ```
+
+   `jswc` runs TurboWarp's own packager (`@turbowarp/packager`, `npm install`
+   once), which embeds the player, the assets and `gtm.js` into one HTML file.
+   Verified in a folder containing nothing but that file: the project loads,
+   `gtm` registers unsandboxed and TensorFlow.js runs.
+
+2. **TurboWarp Packager** by hand, if you want its full option set (title
+   screen, appearance, controls). Paste the extension URL into its Extensions
+   setting with `make serve` running.
+
+3. **Install the repository there** and run `make serve`, then open the `.sb3`.
    Correct, and the workflow to use while you are still editing.
-3. **`extensions.turbowarp.org`** — submit `gtm.js` there and point
+
+4. **`extensions.turbowarp.org`** — submit `gtm.js` there and point
    `EXTENSION_URLS` at its https URL; the `.sb3` is then portable without
    packaging. That is a pull request against TurboWarp, not something you can
    self-host: no other https origin is trusted unsandboxed.

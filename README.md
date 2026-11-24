@@ -67,6 +67,7 @@ jswc build examples/hello.jsw -o build/hello.sb3
 | --- | --- |
 | `jswc build file.jsw -o out.sb3` | compile to a zipped project |
 | `jswc build file.jsw --project-json` | emit an unzipped `project.json` instead |
+| `jswc build file.jsw --html` | also write one self-contained HTML file (needs `npm install`) |
 | `jswc build file.jsw --locals thread` | bare variables become `lmsTempVars2` thread variables |
 | `jswc build file.jsw --warp` | mark every custom block "run without screen refresh" |
 | `jswc build file.jsw --enable F` | turn on a language feature (`jswc features` lists them) |
