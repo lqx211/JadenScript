@@ -1685,10 +1685,27 @@ def protect_project(
     """Virtualise every supported hat body. Called once, before obfuscation."""
     if style not in ("list", "h0"):
         raise ValueError("style must be 'list' or 'h0'")
+
+    def note(code: str, message: str, node=None) -> None:
+        """Record a diagnostic.
+
+        vmProtect works on the compiled blocks, so most of its notes are about
+        the build rather than one line. Where a sprite is named, the note is
+        anchored at that sprite's ``class`` line so the editor can show it
+        somewhere useful; the rest go to line 1 rather than to a line that does
+        not exist.
+        """
+        if node is None:
+            entry = f"1:1: {code} {message}"
+            if entry not in codegen.diagnostics:
+                codegen.diagnostics.append(entry)
+            return
+        codegen.diag(node, code, message)
+
     if "vanillaScratch" in codegen.features:
-        codegen.diagnostics.append(
-            "0:0: W0030 vmProtect skipped: a vanillaScratch build keeps its "
-            "ordinary blocks"
+        note(
+            "W0030",
+            "vmProtect skipped: a vanillaScratch build keeps its ordinary blocks",
         )
         return
     if codegen.plan is None:
@@ -1844,22 +1861,26 @@ def protect_project(
 
     if not programs:
         for name, (count, opcode) in sorted(skipped.items()):
-            codegen.diagnostics.append(
-                f"0:0: W0031 vmProtect left {count} program(s) native in {name!r}; "
-                f"first unsupported block: {opcode}"
+            note(
+                "W0031",
+                f"vmProtect left {count} program(s) native in {name!r}; "
+                f"first unsupported block: {opcode}",
+                class_for_target.get(name),
             )
         return
     left = sum(count for count, _ in skipped.values())
     stride = max(MIN_STRIDE, max(program.stride for program in programs))
     if stride > 512:
-        codegen.diagnostics.append(
-            "0:0: W0031 vmProtect left every program native: the deepest "
-            f"expression needs {stride} slots, more than the 512-slot limit"
+        note(
+            "W0031",
+            "vmProtect left every program native: the deepest "
+            f"expression needs {stride} slots, more than the 512-slot limit",
         )
         return
-    codegen.diagnostics.append(
-        f"0:0: I0004 vmProtect virtualised {len(programs)} program(s)"
-        + (f"; {left} left native" if left else "")
+    note(
+        "I0004",
+        f"vmProtect virtualised {len(programs)} program(s)"
+        + (f"; {left} left native" if left else ""),
     )
     arena_max = MAX_THREADS * stride
 
@@ -2050,7 +2071,9 @@ def protect_project(
     codegen.warp = saved_warp
 
     for name, (count, opcode) in sorted(skipped.items()):
-        codegen.diagnostics.append(
-            f"0:0: W0031 vmProtect left {count} program(s) native in {name!r}; "
-            f"first unsupported block: {opcode}"
+        note(
+            "W0031",
+            f"vmProtect left {count} program(s) native in {name!r}; "
+            f"first unsupported block: {opcode}",
+            class_for_target.get(name),
         )

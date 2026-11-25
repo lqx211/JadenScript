@@ -636,6 +636,53 @@ class ProtectedBuildTests(unittest.TestCase):
         self.assertEqual(calls.count("__vm_step %s"), 3)
 
 
+class DiagnosticAnchorTests(unittest.TestCase):
+    """A note about one sprite names the sprite, not line 0.
+
+    vmProtect runs on the compiled blocks, so its notes used to carry a
+    hard-coded ``0:0`` — a location that does not exist, and the one thing a
+    reader wants is *which* sprite stayed native.
+    """
+
+    COMPUTED_BROADCAST = (
+        'public m = "hi";\n'
+        "class a { public void greenFlag() { Control.broadcast(m); } }\n"
+    )
+    WARP_PROC = (
+        "class a {\n"
+        "    public void greenFlag() { tick(); }\n"
+        '    private void tick() { // warp\n        Looks.say("x");\n    }\n'
+        "}\n"
+    )
+
+    def test_the_only_native_program_points_at_its_class(self):
+        codegen, _ = compile_source(
+            self.COMPUTED_BROADCAST, features={"commentMetadata", "vmProtect"}
+        )
+        notes = [line for line in codegen.diagnostics if "W0031" in line]
+        self.assertTrue(notes, codegen.diagnostics)
+        self.assertTrue(notes[0].startswith("2:7: W0031"), notes[0])
+        self.assertIn("native in 'a'", notes[0])
+
+    def test_a_partly_protected_sprite_still_names_it(self):
+        codegen, _ = compile_source(
+            self.WARP_PROC, features={"commentMetadata", "vmProtect"}
+        )
+        notes = [line for line in codegen.diagnostics if "W0031" in line]
+        self.assertTrue(notes, codegen.diagnostics)
+        self.assertTrue(notes[0].startswith("1:7: W0031"), notes[0])
+        self.assertIn("warp custom block", notes[0])
+
+    def test_the_summary_note_does_not_claim_line_zero(self):
+        codegen, _ = compile_source(
+            "public x = 0;\nclass a { public void greenFlag() { x = 1; } }\n",
+            features={"commentMetadata", "vmProtect"},
+        )
+        info = [line for line in codegen.diagnostics if "I0004" in line]
+        self.assertTrue(info, codegen.diagnostics)
+        self.assertTrue(info[0].startswith("1:1: I0004"), info)
+
+
 @unittest.skipUnless(shutil.which("node"), "node is not installed")
 class ExecutionTests(unittest.TestCase):
     """Compare the protected project with the ordinary build in scratch-vm."""
