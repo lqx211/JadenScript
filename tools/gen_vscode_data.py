@@ -188,6 +188,12 @@ EXTRA_MEMBERS = [
     ("Stage", "get", "reporter", "get(name)", "Read stage state by name."),
     ("Stage", "set", "command", "set(name, value)", "Set stage state by name."),
     ("Stage", "change", "command", "change(name, delta)", "Change stage state by name."),
+    # The two blocks a decompiled project needs and the tables above spell with
+    # their raw argument names.
+    ("Looks", "changeEffect", "command", "changeEffect(effect, delta)",
+     'Change a graphic effect by an amount: `Looks.changeEffect("GHOST", 10)`.'),
+    ("Sensing", "current", "reporter", 'current("hour" | "year" | …)',
+     "The clock. Takes year, month, date, day of week, hour, minute or second."),
     # keySim puts input *into* the player, so each block is worth a sentence:
     # `key pressed?` and `mouse down?` see what one of these synthesises.
     ("keySim", "press", "command", "press(key, seconds)",

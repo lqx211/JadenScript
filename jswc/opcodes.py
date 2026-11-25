@@ -247,6 +247,12 @@ COMMANDS: dict[str, Command] = {
     "Looks.setEffect": Command(
         "looks_seteffectto", (Param("EFFECT", FIELD), Param("VALUE", MATH_NUM))
     ),
+    # `change [ghost] effect by (10)` -- the fade every decompiled menu uses.
+    # Without it the block was dropped on the way out of a project and the
+    # rebuild showed everything at full opacity.
+    "Looks.changeEffect": Command(
+        "looks_changeeffectby", (Param("EFFECT", FIELD), Param("CHANGE", MATH_NUM))
+    ),
     "Looks.clearGraphicEffects": Command("looks_cleargraphiceffects"),
     "Looks.goToFront": Command("looks_gotofrontback", fields=(("FRONT_BACK", "front"),)),
     "Looks.goToBack": Command("looks_gotofrontback", fields=(("FRONT_BACK", "back"),)),
@@ -322,6 +328,8 @@ REPORTERS: dict[str, Reporter] = {
         "sensing_distanceto",
         (Param("DISTANCETOMENU", MENU, "sensing_distancetomenu", "DISTANCETOMENU"),),
     ),
+    # `current [hour]` -- the clock a decompiled project reads its time from.
+    "Sensing.current": Reporter("sensing_current", (Param("CURRENTMENU", FIELD),)),
     "Sensing.of": Reporter(
         "sensing_of",
         (

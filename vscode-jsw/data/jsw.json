@@ -1086,6 +1086,14 @@
      }
     ],
     [
+     "changeEffect",
+     {
+      "kind": "command",
+      "detail": "changeEffect(effect, delta)",
+      "doc": "Change a graphic effect by an amount: `Looks.changeEffect(\"GHOST\", 10)`."
+     }
+    ],
+    [
      "changeSize",
      {
       "kind": "command",
@@ -2043,6 +2051,14 @@
       "kind": "command",
       "detail": "ask(question)",
       "doc": "sensing_askandwait"
+     }
+    ],
+    [
+     "current",
+     {
+      "kind": "reporter",
+      "detail": "current(\"hour\" | \"year\" | …)",
+      "doc": "The clock. Takes year, month, date, day of week, hour, minute or second."
      }
     ],
     [

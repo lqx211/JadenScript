@@ -99,6 +99,12 @@ _STAGE_CLICK_HOOK_RE = re.compile(
 )
 _BACKDROP_HOOK_RE = re.compile(r"hook:\s*backdrop\s+(.+?)\s*$", re.IGNORECASE)
 _SAVE_HOOK_RE = re.compile(r"hook:\s*(before|after)\s*(?:project\s*)?sav", re.IGNORECASE)
+#: ``// hook: when [timer] > 10`` -- the "when > " hat, whose menu names the
+#: thing watched (timer or loudness) and whose input is the threshold.
+_GREATER_HOOK_RE = re.compile(
+    r"hook:\s*when\s*\[\s*(timer|loudness|\u97f3\u91cf)\s*\]\s*>\s*(?P<limit>.+?)\s*$",
+    re.IGNORECASE,
+)
 #: ``// hook: WebSocket.onMessage`` — any extension EVENT block becomes a hat.
 _EXT_EVENT_HOOK_RE = re.compile(r"hook:\s*([A-Za-z_]\w*)\.([A-Za-z_]\w*)")
 # micro:bit hats carry their menu value in the brackets:
@@ -1689,6 +1695,18 @@ class Codegen:
 
         if _STAGE_CLICK_HOOK_RE.search(annotation):
             hat = self._new("event_whenstageclicked")
+            self._top_level(hat)
+            self._attach_hat_body(hat, fn.body)
+            return
+
+        greater = _GREATER_HOOK_RE.search(annotation)
+        if greater is not None:
+            hat = self._new("event_whengreaterthan")
+            hat.set_field("WHENGREATERTHANMENU",
+                          "TIMER" if greater.group(1).lower() == "timer" else "LOUDNESS")
+            # The limit is often a reporter, not a number: the decompiler writes
+            # the block's own text, so it is parsed back as one expression.
+            hat.set_input("VALUE", self._annotation_input(greater.group("limit")))
             self._top_level(hat)
             self._attach_hat_body(hat, fn.body)
             return
@@ -4377,6 +4395,25 @@ class Codegen:
         test = self._new("operator_not")
         test.set_input("OPERAND", Ref(equals))
         return Ref(test)
+
+    def _annotation_input(self, text: str):
+        """An input whose text came from an annotation, as a block input.
+
+        ``// hook: when [timer] > (_game_database.get(1) + 2)`` carries a whole
+        expression, so a plain number stays a literal and anything else is
+        parsed and lowered like code. A snippet that does not parse keeps the
+        text, which is what a hand-written annotation expects.
+        """
+        text = text.strip()
+        if re.fullmatch(r"-?\d+(?:\.\d+)?", text):
+            return Lit(O.MATH_NUM, text)
+        from .lexer import tokenize
+        from .parser import Parser
+        try:
+            expr = Parser(tokenize(text)).parse_expression_only()
+        except Exception:
+            return Lit(O.TEXT, text)
+        return self._as_input(self._eval(expr), O.MATH_NUM)
 
     def _seconds(self, args: list[A.Expr]) -> object:
         if not args:

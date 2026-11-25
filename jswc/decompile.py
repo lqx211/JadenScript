@@ -956,6 +956,18 @@ class Decompiler:
             shown = _quote(key) if any(ch in key for ch in '[]"') else key
             header = f"public void Events.keyPressed(k) {{ // hook: when [{shown}] key pressed"
             return self._hat(header, blocks, script)
+        if opcode == "event_whengreaterthan":
+            menu = (script.get("fields", {}).get("WHENGREATERTHANMENU") or ["TIMER", None])[0]
+            watched = "loudness" if str(menu).upper() == "LOUDNESS" else "timer"
+            threshold = self._value(blocks, script, "VALUE")
+            # Two of these can sit in one sprite and the limit may be a whole
+            # expression, so the name is numbered rather than spelled from it.
+            name = f"when{watched.capitalize()}GreaterThan{self._loose_counter()}"
+            return self._hat(
+                f"public void {name}() {{ // hook: when [{watched}] > {threshold}",
+                blocks,
+                script,
+            )
         if opcode == "event_whenbroadcastreceived":
             broadcast = (script.get("fields", {}).get("BROADCAST_OPTION") or ["", None])[0]
             body = _next_block(blocks, script)

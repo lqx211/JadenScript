@@ -1419,6 +1419,96 @@ if __name__ == "__main__":
     unittest.main()
 
 
+class DroppedBlockTests(unittest.TestCase):
+    """Blocks the decompiler used to drop, which a rebuild then rendered wrong.
+
+    Crossy Road fades its menus with ``change [ghost] effect by`` and draws its
+    clock and FPS readout from ``when [timer] > n`` hats and ``current [hour]``.
+    All three came out of the decompiler as ``// unsupported block`` comments, so
+    the rebuild showed every sprite at full opacity and lost four whole scripts.
+    """
+
+    def test_the_fade_block_survives_a_round_trip(self):
+        source = (
+            'class a { public void greenFlag() { '
+            'Looks.changeEffect("GHOST", 10); } }'
+        )
+        _, data = compile_source(source)
+        self.assertIn("looks_changeeffectby", opcodes(data, "a"))
+        text, _ = decompile(data)
+        self.assertNotIn("unsupported block", text)
+        self.assertIn('Looks.changeEffect("GHOST", 10)', text)
+        _, again = compile_source(text)
+        self.assertIn("looks_changeeffectby", opcodes(again, "a"))
+
+    def test_a_computed_fade_keeps_its_expression(self):
+        source = (
+            "class a { public t = 0; public void f() { "
+            'Looks.changeEffect("BRIGHTNESS", this.t * 2 + 1); } }'
+        ).replace("this.", "")
+        _, data = compile_source(source)
+        text, _ = decompile(data)
+        self.assertNotIn("unsupported block", text)
+        _, again = compile_source(text)
+        self.assertIn("looks_changeeffectby", opcodes(again, "a"))
+
+    def test_the_when_greater_than_hat_never_loses_its_body(self):
+        source = """
+            class a {
+                public void tick() { // hook: when [timer] > 10
+                    Looks.say("ten");
+                }
+            }
+        """
+        _, data = compile_source(source)
+        self.assertIn("event_whengreaterthan", opcodes(data, "a"))
+        block = next(b for b in target(data, "a")["blocks"].values()
+                     if isinstance(b, dict) and b["opcode"] == "event_whengreaterthan")
+        self.assertEqual(block["fields"]["WHENGREATERTHANMENU"][0], "TIMER")
+        self.assertEqual(block["inputs"]["VALUE"][1][1], "10")
+        text, _ = decompile(data)
+        self.assertNotIn("loose block", text)
+        self.assertIn("hook: when [timer] > 10", text)
+        self.assertIn("Looks.say", text)
+        _, again = compile_source(text)
+        self.assertIn("event_whengreaterthan", opcodes(again, "a"))
+
+    def test_the_hat_takes_a_reporter_as_its_limit(self):
+        source = """
+            public db = [1, 2, 3];
+            class a {
+                public void deep() { // hook: when [timer] > db.get(1) + 2
+                    Looks.say("deep");
+                }
+            }
+        """
+        _, data = compile_source(source)
+        block = next(b for b in target(data, "a")["blocks"].values()
+                     if isinstance(b, dict) and b["opcode"] == "event_whengreaterthan")
+        # Not a literal: the limit is lowered into a block of its own.
+        self.assertIsInstance(block["inputs"]["VALUE"][1], str)
+
+    def test_loudness_is_the_other_menu(self):
+        source = 'class a { public void f() { // hook: when [loudness] > 0.5\nLooks.say("x"); } }'
+        _, data = compile_source(source)
+        block = next(b for b in target(data, "a")["blocks"].values()
+                     if isinstance(b, dict) and b["opcode"] == "event_whengreaterthan")
+        self.assertEqual(block["fields"]["WHENGREATERTHANMENU"][0], "LOUDNESS")
+
+    def test_the_clock_reporter_survives(self):
+        source = (
+            'class a { public void greenFlag() { '
+            'Looks.say(Sensing.current("HOUR")); } }'
+        )
+        _, data = compile_source(source)
+        self.assertIn("sensing_current", opcodes(data, "a"))
+        text, _ = decompile(data)
+        self.assertNotIn("unsupported reporter", text)
+        self.assertIn('Sensing.current("HOUR")', text)
+        _, again = compile_source(text)
+        self.assertIn("sensing_current", opcodes(again, "a"))
+
+
 class GlobalListScopeTests(unittest.TestCase):
     """A Stage list is visible from a sprite by its bare name.
 

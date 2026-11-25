@@ -491,7 +491,7 @@ class Banner {
         Looks.switchBackdrop(_NextBG);
         Sound.playSound(Characters_environments.get(Characters_environments.indexOf(join("#", _Skin)) + 1));
         repeat (10) {
-            // unsupported block: looks_changeeffectby
+            Looks.changeEffect("GHOST", 10);
         }
         Control.deleteThisClone();
     }
@@ -551,11 +551,11 @@ class Banner {
         Looks.show();
         Looks.setEffect("GHOST", _game_database.get(48) * 2);
         repeat (_game_database.get(36)) {
-            // unsupported block: looks_changeeffectby
+            Looks.changeEffect("GHOST", -10);
         }
         Control.wait(_game_database.get(1));
         repeat (_game_database.get(36)) {
-            // unsupported block: looks_changeeffectby
+            Looks.changeEffect("GHOST", 10);
         }
         _NextBG = "Game";
         Looks.hide();
@@ -1241,13 +1241,13 @@ class Designer {
             Looks.switchCostume(join(Characters_environments.get(Characters_environments.indexOf(join("#", _Skin)) + 1), FloorData.get(Y - __DELETED_ITEMS)));
         }
         if (Xpro < -4 || Xpro > 4) {
-            // unsupported block: looks_changeeffectby
+            Looks.changeEffect("BRIGHTNESS", -10);
         }
         if (FloorData.get(Y - __DELETED_ITEMS) == "") {
-            // unsupported block: looks_changeeffectby
+            Looks.changeEffect("BRIGHTNESS", -10);
         }
         if (Y == SelectedY) {
-            // unsupported block: looks_changeeffectby
+            Looks.changeEffect("BRIGHTNESS", Operators.math("abs", TIMER - Operators.round(TIMER)) * 20 + 10);
         }
         Pen.stamp();
         Pen.stamp();
@@ -1269,8 +1269,9 @@ class Designer {
         }
     }
 
-    // at -123,137
-    // loose block: event_whengreaterthan
+    metadata whenLoudnessGreaterThan1 pos -123,137;
+    public void whenLoudnessGreaterThan1() { // hook: when [loudness] > 10
+    }
 
     metadata whenBackdropChanges pos 14362,516;
     public void whenBackdropChanges() { // hook: backdrop CustomGame
@@ -2109,8 +2110,17 @@ class Thumb {
         }
     }
 
-    // at 150,277
-    // loose block: event_whengreaterthan
+    metadata whenTimerGreaterThan2 pos 150,277;
+    public void whenTimerGreaterThan2() { // hook: when [timer] > _game_database.get(1)
+        if (__keypad == 0) {
+            Looks.show();
+            Looks.setEffect("GHOST", _game_database.get(1) / .01);
+            repeat (_game_database.get(1) / .1) {
+                Looks.changeEffect("GHOST", _game_database.get(1) / -.1);
+                Looks.goToFront();
+            }
+        }
+    }
 
     metadata hide_bg pos -161,664;
     public void hide_bg() { // hook: broadcast hide_bg
@@ -2603,8 +2613,9 @@ class GameOver {
         Control.deleteThisClone();
     }
 
-    // at 44,44
-    // loose block: event_whengreaterthan
+    metadata whenLoudnessGreaterThan3 pos 44,44;
+    public void whenLoudnessGreaterThan3() { // hook: when [loudness] > 10
+    }
 
     metadata whenBackdropChanges pos -151,309;
     public void whenBackdropChanges() { // hook: backdrop Game
@@ -2639,7 +2650,7 @@ class GameOver {
             Control.waitUntil(_CurrentMenu == 0 && _Gold > 99 && All_Skins.length() != Owned_Skins.length());
         }
         repeat (9) {
-            // unsupported block: looks_changeeffectby
+            Looks.changeEffect("GHOST", -10);
         }
         Sound.setEffect("PITCH", (CloneID == "WinAPrize") * 30);
         Sound.playSound("Spawn");
@@ -3482,7 +3493,7 @@ class Effects {
             Z += (0 - Z) / (10 / (FPS / 60));
         }
         repeat (10) {
-            // unsupported block: looks_changeeffectby
+            Looks.changeEffect("GHOST", 10);
         }
         Control.deleteThisClone();
     }
@@ -3684,7 +3695,7 @@ class FreeGift {
             }
             Control.wait(Operators.random(0, 0.5));
             repeat (5) {
-                // unsupported block: looks_changeeffectby
+                Looks.changeEffect("BRIGHTNESS", 20);
             }
             Control.deleteThisClone();
         }
@@ -4056,10 +4067,10 @@ class Sprite2 {
             Looks.show();
             if (Operators.contains(Looks.backdropName(), "Game") && _CurrentMenu == 0 && "Ghost" == _Skin) {
                 Looks.switchCostume("true");
-                // unsupported block: looks_changeeffectby
+                Looks.changeEffect("GHOST", -5);
             } else {
                 Looks.switchCostume("false");
-                // unsupported block: looks_changeeffectby
+                Looks.changeEffect("GHOST", 5);
             }
             if ((PxScroll + Pxoffset) * -10 + (PyScroll - ScrollY) * 40 < 170 && (PxScroll + Pxoffset) * -10 + (PyScroll - ScrollY) * 40 > -170 && ((PxScroll + Pxoffset) * 50 + (PyScroll - ScrollY) * 20 < 230 && (PxScroll + Pxoffset) * 50 + (PyScroll - ScrollY) * 20 > -230)) {
                 Motion.setXY((PxScroll + Pxoffset) * 50 + (PyScroll - ScrollY) * 20, (PxScroll + Pxoffset) * -10 + (PyScroll - ScrollY) * 40);
@@ -4468,7 +4479,7 @@ class WinAPrize {
             Looks.setEffect("BRIGHTNESS", 100);
             _CurrentMenu = "WinAPrize3";
             repeat (25) {
-                // unsupported block: looks_changeeffectby
+                Looks.changeEffect("GHOST", 4);
             }
             Control.deleteThisClone();
         } else {
@@ -5445,20 +5456,20 @@ class TimeScoreCycle {
         TimeCycle.add("00");
         ScoreCycle.add("00000000");
         while (1) {
-            if (0 /* sensing_current */ < 10) {
-                TimeCycle.set(1, join(0, 0 /* sensing_current */));
+            if (Sensing.current("HOUR") < 10) {
+                TimeCycle.set(1, join(0, Sensing.current("HOUR")));
             } else {
-                TimeCycle.set(1, 0 /* sensing_current */);
+                TimeCycle.set(1, Sensing.current("HOUR"));
             }
-            if (0 /* sensing_current */ < 10) {
-                TimeCycle.set(2, join(0, 0 /* sensing_current */));
+            if (Sensing.current("MINUTE") < 10) {
+                TimeCycle.set(2, join(0, Sensing.current("MINUTE")));
             } else {
-                TimeCycle.set(2, 0 /* sensing_current */);
+                TimeCycle.set(2, Sensing.current("MINUTE"));
             }
-            if (0 /* sensing_current */ < 10) {
-                TimeCycle.set(3, join(0, 0 /* sensing_current */));
+            if (Sensing.current("SECOND") < 10) {
+                TimeCycle.set(3, join(0, Sensing.current("SECOND")));
             } else {
-                TimeCycle.set(3, 0 /* sensing_current */);
+                TimeCycle.set(3, Sensing.current("SECOND"));
             }
             if (_Score < 1e1) {
                 ScoreCycle.set(1, join("0000000", _Score));
@@ -6170,8 +6181,10 @@ class display2fps {
         }
     }
 
-    // at -464,652
-    // loose block: event_whengreaterthan
+    metadata whenTimerGreaterThan4 pos -464,652;
+    public void whenTimerGreaterThan4() { // hook: when [timer] > 0
+        _.service_fps();
+    }
 
     metadata boost pos 104,766;
     private void boost() { // warp
