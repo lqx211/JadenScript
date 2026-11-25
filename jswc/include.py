@@ -28,9 +28,16 @@ from pathlib import Path
 #: A trailing ``//`` comment is allowed: the path is inside the quotes, so the
 #: comment can never be part of it, and a line worth an explanation is worth
 #: being able to explain.
-_INCLUDE = re.compile(r'^\s*include\s+"([^"]+)"\s*(?://.*)?$')
+#: `include "a.jsw"` -- either quote, because a string in this language may be
+#: single-quoted (`x = 'hi'`), and `include 'a.jsw'` is the same path. A path
+#: with no spaces needs no quotes either (`include a.jsw;`), which is what a
+#: reader tries first.
+_INCLUDE = re.compile(
+    r"""^\s*include\s+(?:"(?P<double>[^"]+)"|'(?P<single>[^']+)'|(?P<bare>[^\s;'"]+))"""
+    r"\s*;?\s*(?://.*)?$"
+)
 #: The spelling before `include` was a keyword. Reported, not honoured.
-_OLD_INCLUDE = re.compile(r'^\s*//\s*include\s+"([^"]+)"\s*$')
+_OLD_INCLUDE = re.compile(r"""^\s*//\s*include\s+(?:"([^"]+)"|'([^']+)')\s*$""")
 #: An `include` line the pattern above could not read -- a missing quote, a
 #: path in angle brackets, trailing words. It would otherwise reach the parser
 #: as a bare keyword and fail somewhere that says nothing about this line.
@@ -132,17 +139,20 @@ def expand(path: str | Path, *, defines: set[str] | None = None,
         if stale is not None:
             raise IncludeError(
                 f"{path}:{number}: include is a keyword now, not a comment: "
-                f'write  include "{stale.group(1)}"  without the //')
+                f'write  include "{stale.group(1) or stale.group(2)}"  without the //')
         match = _INCLUDE.match(line)
         if match is None:
             if _STRAY_INCLUDE.match(line) is not None:
                 raise IncludeError(
-                    f'{path}:{number}: an include is  include "file.jsw"  -- '
-                    "one quoted path and nothing else on the line")
+                    f'{path}:{number}: an include needs a path, then nothing else '
+                    f'on the line:  include "file.jsw"  (quotes optional when the '
+                    f"path has no spaces)")
             lines.append(line)
             origins.append((str(path), number))
             continue
-        child = expand(path.parent / match.group(1), defines=names,
+        specified = match.group("double") or match.group("single") or match.group("bare")
+        child = expand(path.parent / specified,
+                       defines=names,
                        _seen=(*_seen, resolved))
         child_lines = child.text.splitlines()
         for offset, child_line in enumerate(child_lines):

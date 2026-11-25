@@ -150,7 +150,14 @@ class ProtectedBuildTests(unittest.TestCase):
         ]
         self.assertTrue(grew, "the frame allocator never grows __vm_stack")
 
-    def test_warp_custom_blocks_and_their_callers_stay_native(self):
+    def test_only_the_warp_call_chain_stays_native(self):
+        """Warp mode is scoped to the callee, so its *callers* stay protected.
+
+        ``sequencer.stepToProcedure`` sets ``warpMode`` on the stack frame it
+        pushes, and ``popStack`` drops it again on return.  A non-warp caller
+        therefore never runs the VM loop in warp mode: only the warp procedure
+        and everything it calls have to stay native.
+        """
         source = (
             "public x = 0;\n"
             "class a {\n"
@@ -167,9 +174,20 @@ class ProtectedBuildTests(unittest.TestCase):
         )
         calls = _proccodes(blocks_of(project, "a"))
         self.assertIn("__vm_start %s %s", calls)
-        self.assertNotIn("__vm_proc_start %s %s %s %s", calls)
         self.assertTrue(
-            any("W0031" in line for line in codegen.diagnostics),
+            any(name.startswith("__vm_proc_start") for name in calls),
+            "the caller of a warp procedure should still be virtualised",
+        )
+        # ``fast`` keeps its own body: it is the one that runs in warp mode.
+        warp_body = [
+            block["opcode"]
+            for block in blocks_of(project, "a").values()
+            if isinstance(block, dict) and block["opcode"] == "data_changevariableby"
+        ]
+        self.assertTrue(warp_body, "the warp body was replaced by a VM stub")
+        self.assertTrue(
+            any("W0031" in line and "warp custom block" in line
+                for line in codegen.diagnostics),
             codegen.diagnostics,
         )
 
@@ -349,11 +367,12 @@ class ProtectedBuildTests(unittest.TestCase):
             features={"commentMetadata", "vmProtect"},
             warp=True,
         )
-        self.assertNotIn(
-            "__vm_proc_start %s %s %s %s",
-            _proccodes(blocks_of(project, "a")),
+        calls = _proccodes(blocks_of(project, "a"))
+        self.assertFalse(
+            [name for name in calls if name.startswith("__vm_proc_start")],
+            calls,
         )
-        self.assertIn("__vm_start %s %s", _proccodes(blocks_of(project, "a")))
+        self.assertIn("__vm_start %s %s", calls)
         self.assertTrue(
             any("W0031" in line for line in codegen.diagnostics),
             codegen.diagnostics,
@@ -745,6 +764,48 @@ class ExecutionTests(unittest.TestCase):
                     )
                 )
                 self.assertEqual(protected, normal)
+
+    def test_a_warp_procedure_called_from_the_vm_returns_to_the_interpreter(self):
+        if not (ROOT / "scratch-vm-develop" / "src" / "virtual-machine.js").exists():
+            self.skipTest("scratch-vm-develop/ is not checked out")
+        source = (
+            "public x = 0;\n"
+            "public y = 0;\n"
+            "class a {\n"
+            "  private void fast(n) { // warp\n"
+            "    repeat (n) { x += 1; }\n"
+            "  }\n"
+            "  public void greenFlag() { fast(3); y = x + 1; }\n"
+            "}\n"
+        )
+        normal = _strip_runtime(self._run(source, {"commentMetadata"}, 1))
+        protected = _strip_runtime(
+            self._run(source, {"commentMetadata", "vmProtect"}, 10)
+        )
+        self.assertEqual(normal["Stage.x"], 3)
+        self.assertEqual(normal["Stage.y"], 4)
+        self.assertEqual(protected, normal)
+
+    def test_a_boolean_literal_survives_the_trip_through_the_vm(self):
+        if not (ROOT / "scratch-vm-develop" / "src" / "virtual-machine.js").exists():
+            self.skipTest("scratch-vm-develop/ is not checked out")
+        source = (
+            "public x = 0;\n"
+            "class a {\n"
+            "  public void greenFlag() {\n"
+            "    if (true) { x = 1; }\n"
+            "    if (false) { x = 2; }\n"
+            "    Control.waitUntil(true);\n"
+            "    x += 10;\n"
+            "  }\n"
+            "}\n"
+        )
+        normal = _strip_runtime(self._run(source, {"commentMetadata"}, 1))
+        protected = _strip_runtime(
+            self._run(source, {"commentMetadata", "vmProtect"}, 10)
+        )
+        self.assertEqual(normal["Stage.x"], 11)
+        self.assertEqual(protected, normal)
 
     def test_h0_style_keeps_custom_block_calls_and_recursion(self):
         if not (ROOT / "scratch-vm-develop" / "src" / "virtual-machine.js").exists():

@@ -1,7 +1,159 @@
-stage {}
+#enable_feature<commentMetadata>;
+#enable_feature<namespacedNames>;
 
-class core {
-    public void greenFlag(){
-        pkli-ko9p0
+include "cr.jsw"
+
+class model {
+    private very_handsome_miss_caleb_wong_model_url = "https://teachablemachine.withgoogle.com/models/rUfcLK4_k";
+    private requiredSamples = 20; // How many samples to collect for averaging (20 x 20ms = 0.4s window)
+    private requiredConfidence = 0.9; // Least confidence to confirm that the gesture is sure
+    public ignored = false;
+    public ignore_time = 0;
+    public log = [];
+    public cu = 0;
+    public cl = 0;
+    public cr = 0;
+    public ck = 0;
+    public lu = [];
+    public ll = [];
+    public lr = [];
+    public lk = [];
+    public trig = 0;
+    public active = 1;
+    public void greenFlag() {
+        vinit();
+        Runtime.setTurboMode(true);
+        Runtime.setFramerate(60);
+        main();
+    }
+    public void vinit(){
+        lu.clear();
+        ll.clear();
+        lr.clear();
+        lk.clear();
+        trig = 0;
+        active = 1;
+        ignored = false;
+        ignore_time = Sensing.timer();
+        log.clear();
+    }
+    public void main() {
+        console.info("Init model...")
+        call init();
+        _t = Sensing.timer()+10;
+        Control.waitUntil(gtm.status()=='ready' || gtm.status()=='error' || Sensing.timer()>_t);
+        if (gtm.status() == "ready" && gtm.cameraActive()){
+            console.log("Model ready!");
+        } elif (gtm.status() == "error") {
+            // The reason is in lastError(): a refused camera is the common one.
+            console.error(join('Google Teachable Machine is not usable: ',gtm.lastError()));
+            Control.stopAll();
+        } elif (!gtm.cameraActive()) {
+            console.error('Could not activate camera. Is permission granted?')
+            console.error(join('GTM Debug info: ',gtm.lastError()));
+            Control.stopAll();
+        } elif (Sensing.timer()>_t) {
+            console.warn('Timeout loading model and will continue loading in background.');
+        } else {
+            console.error('Something went wrong.');
+            console.error(join('GTM Debug info: ',gtm.lastError()));
+            Control.stopAll();
+        }  
+        while(active){
+            trig = 0;
+            getConfidence(); // -> trig
+            _can = !ignored || Sensing.timer() > ignore_time+0.8; // 800ms cooldown
+            if (_can && trig!=0 && trig!=4){
+                if (trig==1){
+                    object.mu();
+                } elif (trig==2){
+                    object.ml();
+                } elif (trig==3){
+                    object.mr();
+                }
+                ignored = true; // latch only when we acted, so it repeats after the cooldown
+                ignore_time = Sensing.timer();
+            }
+            if (trig==4){ // 'stop' pose releases the latch
+                ignored = false;
+            }
+            Control.wait(0.02); // 20ms per sample, see requiredSamples
+        }
+    }
+    public void init(){
+        gtm.load(very_handsome_miss_caleb_wong_model_url); // load the very very handsome miss caleb wong model
+        console.info('GTM init success, about to activate camera (may ask for permission)')
+        gtm.startCamera();
+        console.info('camera init success')
+    }
+    private void getConfidence(){ // warp
+        cu = gtm.confidence('up'); // works great
+        cl = gtm.confidence('left'); // something is wrong recognizing left
+        cr = gtm.confidence('right'); // works great i guess
+        ck = gtm.confidence('stop'); // works great
+        lu.append(cu);
+        ll.append(cl);
+        lr.append(cr);
+        lk.append(ck);
+        for _i in lu,ll,lr,lk { // New support: for-each over multiple lists (remember warn if its incorrectly used)
+            while (_i.length()>requiredSamples){
+                _i.delete(1);
+            }
+        }
+        /*  To ensure that it is correct input, all confidence in the list must larger than 0.9
+            Confidence values are sampled every 20ms (see Control.wait in main), append to the lists
+        */
+        _lu_sum = 0;
+        _ll_sum = 0;
+        _lr_sum = 0;
+        _lk_sum = 0;
+        _pass = 0;
+        for _i in lu {_lu_sum += _i;}
+        for _i in ll {_ll_sum += _i;}
+        for _i in lr {_lr_sum += _i;}
+        for _i in lk {_lk_sum += _i;}
+        if (_lu_sum/lu.length()>requiredConfidence && _lu_sum>_ll_sum && _lu_sum>_lr_sum && _lu_sum>_lk_sum){
+            _pass = 1;
+        } elif (_ll_sum/ll.length()>requiredConfidence && _ll_sum>_lu_sum && _ll_sum>_lr_sum && _ll_sum>_lk_sum){
+            _pass = 2;
+        } elif (_lr_sum/lr.length()>requiredConfidence && _lr_sum>_lu_sum && _lr_sum>_ll_sum && _lr_sum>_lk_sum){
+            _pass = 3;
+        } elif (_lk_sum/lk.length()>requiredConfidence && _lk_sum>_lu_sum && _lk_sum>_ll_sum && _lk_sum>_lr_sum){
+            _pass = 4;
+        }
+        trig = _pass;
     }
 }
+
+class object { // cr controller
+    public void ml(){
+        keySim.press("left arrow");
+    }
+    public void mr(){
+        keySim.press("right arrow");
+    }
+    public void mu(){
+        keySim.press("up arrow");
+    }
+
+}
+/*
+class object {
+    public void ml(){
+        Motion.x -= 10;
+    }
+    public void mr(){
+        Motion.x += 10;
+    }
+    public void mu(){
+        Motion.y += 10;
+    }
+    public void greenFlag(){
+        Motion.x = 0;
+        Motion.y = -120;
+    }
+    // To call a function inside current class, ml()
+    // Call a function outside the class, model.main(), but only public functions of course
+    // I know some decompiled projects may have function names like object.ml, so, ml = object.ml, great... right? idk
+}
+*/

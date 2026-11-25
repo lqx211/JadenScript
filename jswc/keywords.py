@@ -167,25 +167,76 @@ PUNCTUATION: tuple[str, ...] = ("(", ")", "{", "}", "[", "]", ",", ";", ".", ":"
 # ---------------------------------------------------------------------------
 
 #: Monitor modes: the fourth word of a ``metadata`` line, including the long
-#: spellings ``largeReadout`` and ``slider(min,max)``.
+#: spellings ``largeReadout`` and ``slider(min,max)``. The parser folds case,
+#: so ``SLIDER`` is the same mode.
 MONITOR_MODES: frozenset[str] = frozenset(
     {"normal", "large", "largeReadout", "slider", "list", "default"}
 )
 
-#: The structural words around a ``metadata`` line.
-METADATA_WORDS: frozenset[str] = frozenset(
-    {"pos", "at", "hidden", "shown", "range", "watchers", "min", "max",
-     "discrete", "continuous"}
+#: The aliases that open a metadata line: all four describe something off the
+#: canvas, and `comment`/`note` are the workspace-comment spelling.
+METADATA_ANNOTATIONS: frozenset[str] = frozenset(
+    {"monitor", "watch", "comment", "note"}
 )
+
+#: The structural words around a ``metadata`` line: where it goes, and what the
+#: slider bounds are.
+METADATA_WORDS: frozenset[str] = frozenset(
+    {"pos", "at", "range", "watchers", "min", "max", "discrete", "continuous"}
+)
+
+#: The monitor's own state. These are values, not syntax: a monitor is
+#: ``shown``, ``hidden`` or ``minimized``.
+METADATA_FLAGS: frozenset[str] = frozenset({"shown", "hidden", "minimized"})
+
+#: Values a target key may take from a closed set. They are only scoped right
+#: after their key — ``all`` is also a perfectly good variable name.
+ROTATION_VALUES: frozenset[str] = frozenset({"all", "leftright", "none"})
+VIDEO_VALUES: frozenset[str] = frozenset({"on", "off", "on-flipped"})
+FLAG_VALUES: frozenset[str] = frozenset({"0", "1", "true", "false"})
 
 #: ``stage: costume=0, volume=100, …;`` and ``Sprite: name="x", x=0, …;``
 TARGET_KEYS: frozenset[str] = frozenset(
     {
         "name", "x", "y", "size", "direction", "show", "costume", "volume",
-        "layer", "tempo", "video", "videoTransparency", "rotation", "draggable",
-        "namespace", "ns",
+        "layer", "tempo", "video", "videoState", "videoTransparency",
+        "rotation", "draggable", "namespace", "ns",
     }
 )
+
+#: The type of value each target key takes. ``jswc.codegen._check_meta`` is what
+#: enforces these; the editor reads this table for hovers and completion detail,
+#: so the two have to name the same types.
+TARGET_KEY_TYPES: dict[str, str] = {
+    "name": "text",
+    "x": "number",
+    "y": "number",
+    "size": "number",
+    "direction": "number",
+    "show": "flag",
+    "namespace": "text",
+    "ns": "text",
+    "costume": "integer",
+    "volume": "number",
+    "layer": "integer",
+    "tempo": "number",
+    "video": "video",
+    "videoState": "video",
+    "videoTransparency": "number",
+    "rotation": "rotation",
+    "draggable": "flag",
+}
+
+#: Which targets a key is valid on: the Stage has no position of its own, and
+#: only the Stage has tempo and video.
+TARGET_KEY_SCOPES: dict[str, str] = {
+    **{key: "sprite" for key in (
+        "name", "namespace", "ns", "x", "y", "size", "direction", "show",
+        "rotation", "draggable",
+    )},
+    **{key: "both" for key in ("costume", "volume", "layer")},
+    **{key: "stage" for key in ("tempo", "video", "videoState", "videoTransparency")},
+}
 
 #: ``// costume centerx=0 centery=0 res=1`` and
 #: ``// sound rate=48000 samples=8225`` — the annotation the asset import

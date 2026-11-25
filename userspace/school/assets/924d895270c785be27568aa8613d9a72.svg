@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 300 300" height="300" width="300">
+<path fill="#FEFA4D" d="M171 159L179 143L29 113L21 129L171 159Z"></path>
+<path fill="#CCC93E" d="M21 133L171 163V159L21 129V133Z"></path>
+<path fill="#807D27" d="M171 163L179 147V143L171 159V163Z"></path>
+<path fill="#997A22" d="M171 167L179 151V147L171 163V167Z"></path>
+<path fill="#D2A730" d="M31 139L171 167V163L21 133L31 135V139Z"></path>
+<path fill="#AA7B25" d="M31 139L41 141V137L21 133L31 135V139Z"></path>
+<path fill="#AA7B25" d="M51 143L61 145V141L51 139V143Z"></path>
+<path fill="#AA7B25" d="M71 147L81 149V145L71 143V147Z"></path>
+<path fill="#AA7B25" d="M91 151L101 153V149L91 147V151Z"></path>
+<path fill="#AA7B25" d="M111 155L121 157V153L111 151V155Z"></path>
+<path fill="#AA7B25" d="M131 159L141 161V157L131 155V159Z"></path>
+<path fill="#AA7B25" d="M151 163L161 165V161L151 159V163Z"></path>
+<path fill="#D2A730" d="M21 137L31 139V135L21 133V137Z"></path>
+</svg>

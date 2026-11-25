@@ -44,7 +44,8 @@ group of 36 tokens — the only way to know a Vim regex really matches.
 | `jswClassName` | `Type` | the name after `class` |
 | `jswRepeat` / `jswConditional` / `jswStatement` | `Repeat` / `Conditional` / `Statement` | `for`, `if`, `return` |
 | `jswAnnotationWord` | `SpecialComment` | `// proccode`, `// hook:`, `// Sprite:` |
-| `jswTarget` / `jswTargetKey` / `jswMetadata` | `PreProc` / `Identifier` / `Statement` | `Empty: name=…`, `metadata … at 1,2` |
+| `jswTarget` / `jswTargetKey` / `jswTargetValue` | `PreProc` / `Identifier` / `Constant` | `Empty: name=…`, `rotation=all` |
+| `jswMetadata` / `jswMetadataVerb` / `jswMonitorMode` / `jswMetadataFlag` | `Statement` / `Keyword` / `Constant` / `Constant` | `metadata … pos`, `monitor`, `slider`, `shown` |
 
 Colours therefore come from your colourscheme; override any group in
 `after/syntax/jsw.vim` if you want a specific hue:

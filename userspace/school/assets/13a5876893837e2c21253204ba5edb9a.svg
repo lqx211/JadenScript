@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 200 200" height="200" width="200">
+<path fill="#2E405C" d="M106 114L114 98V90L106 106V114Z"></path>
+<path fill="#639AC1" d="M86 110L106 114V106L86 102V110Z"></path>
+<path fill="#67A9CE" d="M86 102L106 106L114 90L94 86L86 102Z"></path>
+<path fill="#5F4C2F" d="M111 112L113 108V100L111 104V112Z"></path>
+<path fill="#A48961" d="M108 111.4L111 112V104L108 110V111.4Z"></path>
+<path fill="#5F4C2F" d="M91 129L93 125V118.2V111.4L91 111V129Z"></path>
+<path fill="#A48961" d="M86 128L91 129V111L86 110V128Z"></path>
+<path fill="#5F4C2F" d="M97 119L99 115V112.6L97 112.2V119Z"></path>
+<path fill="#A48961" d="M93 118.2L97 119V112.2L93 111.4V118.2Z"></path>
+<path fill="#5F4C2F" d="M106 128L108 124V110L106 114V128Z"></path>
+<path fill="#A48961" d="M101 127L106 128V114L101 113V127Z"></path>
+<path fill-opacity="0.1" fill="white" d="M93 99L103 101L107 93L97 91L93 99Z"></path>
+<path fill="#6186BD" d="M86 110L106 114V110L86 106V110Z"></path>
+<path fill="#313759" d="M106 114L114 98V94L106 110V114Z"></path>
+</svg>

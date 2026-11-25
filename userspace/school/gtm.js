@@ -59,9 +59,18 @@
      tfjs@1.3.1, the last tfjs that still exports `tf.fromPixels` -- while an
      image project keeps 4.x. */
   const TM_POSE_VERSION = '0.8.3';
-  const TM_POSE_URL =
-    `https://cdn.jsdelivr.net/npm/@teachablemachine/pose@${TM_POSE_VERSION}/` +
-    'dist/teachablemachine-pose.min.js';
+  const TM_POSE_PATH =
+    `@teachablemachine/pose@${TM_POSE_VERSION}/dist/teachablemachine-pose.min.js`;
+
+  /* Where the two libraries come from. A packaged page can be served by a host
+     whose Content-Security-Policy allows nothing but its own origin, so a build
+     that copies them next to the page sets `window.GTM_LIB_BASE` and they load
+     from there instead. Read per call, not at module scope: the page sets the
+     global before the extension runs, but nothing guarantees the order. */
+  function cdnBase() {
+    const local = typeof window !== 'undefined' && window.GTM_LIB_BASE;
+    return String(local || 'https://cdn.jsdelivr.net/npm/').replace(/\/?$/, '/');
+  }
 
   const SHARE = 'https://teachablemachine.withgoogle.com/models/';
   const FILE_NAMES = /(model\.json|model\.weights\.bin|metadata\.json)$/i;
@@ -133,11 +142,39 @@
     });
   }
 
+  /* The pose runtime fetches posenet's pretrained weights from Google by an
+     absolute URL of its own, so a same-origin build cannot point at them with a
+     URL base the way it does for tfjs. It copies them instead and publishes
+     `window.GTM_MIRROR_MAP`; `fetch` is wrapped for exactly those prefixes and
+     left alone for everything else. Installed when a model loads, not at module
+     scope, because the page sets the global after the extension is registered. */
+  function installMirrors() {
+    const map = typeof window !== 'undefined' && window.GTM_MIRROR_MAP;
+    if (installMirrors.installed || !map || typeof window.fetch !== 'function') return;
+    installMirrors.installed = true;
+    const rewrite = (url) => {
+      const text = String(url);
+      for (const from of Object.keys(map)) {
+        if (text.startsWith(from)) return String(map[from]) + text.slice(from.length);
+      }
+      return text;
+    };
+    const original = window.fetch;
+    window.fetch = function (input, init) {
+      if (typeof input === 'string') return original.call(this, rewrite(input), init);
+      if (input && typeof input.url === 'string') {
+        const url = rewrite(input.url);
+        if (url !== input.url) return original.call(this, url, init);
+      }
+      return original.call(this, input, init);
+    };
+  }
+
   let tfPromise = null;
 
   function loadTF() {
     if (tfPromise) return tfPromise;
-    const url = `https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@${TF_VERSION}/dist/tf.min.js`;
+    const url = `${cdnBase()}@tensorflow/tfjs@${TF_VERSION}/dist/tf.min.js`;
     tfPromise = injectScript(url, 'tf', `TensorFlow.js ${TF_VERSION}`).then(async (tf) => {
       try {
         await tf.setBackend('webgl');
@@ -363,6 +400,7 @@
     /* -- loading ---------------------------------------------------------- */
 
     async load(args) {
+      installMirrors();
       let base;
       try {
         base = shareBase(args.URL);
@@ -370,6 +408,15 @@
         this.state = 'error';
         this.error = error.message;
         return '';
+      }
+      /* A same-origin build copies the model next to the page and sets
+         `window.GTM_MODEL_MIRROR`, so the three files never leave the host --
+         which is what a host with `connect-src 'self'` requires. The source
+         still says the share link, so the same project works in the editor. */
+      const mirror = typeof window !== 'undefined' && window.GTM_MODEL_MIRROR;
+      if (mirror) {
+        const id = base.slice(SHARE.length).replace(/\/$/, '');
+        base = String(mirror).replace(/\/?$/, '/') + id + '/';
       }
       if (this.busy) {
         this.error = 'gtm: a model is already loading';
@@ -412,7 +459,9 @@
           if (!tf.fromPixels && tf.browser && tf.browser.fromPixels) {
             tf.fromPixels = tf.browser.fromPixels.bind(tf.browser);
           }
-          const tmPose = await injectScript(TM_POSE_URL, 'tmPose', 'the pose runtime');
+          const tmPose = await injectScript(
+            cdnBase() + TM_POSE_PATH, 'tmPose', 'the pose runtime'
+          );
           this.progress = 1;
           // The pose library loads the classifier *and* posenet itself.
           const poseModel = await tmPose.load(base + 'model.json', base + 'metadata.json');

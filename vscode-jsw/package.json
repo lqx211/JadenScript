@@ -2,7 +2,7 @@
   "name": "jaden-script",
   "displayName": "JadenScript",
   "description": "Syntax highlighting, completion and default token colours for JadenScript (.jsw), the language that compiles to TurboWarp projects.",
-  "version": "0.3.8",
+  "version": "0.4.0",
   "publisher": "js2twrp",
   "license": "MIT",
   "engines": {
@@ -83,6 +83,13 @@
               }
             },
             {
+              "comment": "the key argument of a keySim block: a name, not prose",
+              "scope": "string.quoted.keysim-key.jsw",
+              "settings": {
+                "foreground": "#B5CEA8"
+              }
+            },
+            {
               "comment": "stage:/sprite property keys and the structural metadata words",
               "scope": [
                 "keyword.other.target-key.jsw",
@@ -101,6 +108,24 @@
               ],
               "settings": {
                 "foreground": "#C586C0"
+              }
+            },
+            {
+              "comment": "monitor / watch / comment / note - the word that opens a metadata line",
+              "scope": "keyword.other.metadata-annotation.jsw",
+              "settings": {
+                "foreground": "#C586C0"
+              }
+            },
+            {
+              "comment": "the closed-set values: shown|hidden|minimized, rotation=all, video=on",
+              "scope": [
+                "constant.language.metadata-flag.jsw",
+                "constant.language.rotation-style.jsw",
+                "constant.language.video-state.jsw"
+              ],
+              "settings": {
+                "foreground": "#4FC1FF"
               }
             },
             {

@@ -10,10 +10,12 @@ from __future__ import annotations
 
 import contextlib
 import io
+import json
 import os
 import shutil
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 
 from jswc import cli, html
@@ -149,6 +151,91 @@ class BuildTests(_Tmp):
         self.assertEqual(code, 0, err)
         self.assertTrue((self.tmp / "j.json").exists())
         self.assertTrue((self.tmp / "j.html").exists())
+
+
+class SelfHostedTests(unittest.TestCase):
+    """The bits of the same-origin build that decide what lands where.
+
+    The integration test needs the network (it mirrors a real CDN and model),
+    so what is checked here is the transformation itself: the project the
+    packager is handed, the page it gets back, and the posenet path derived
+    from a model's own metadata.
+    """
+
+    def project(self, urls: dict[str, str]) -> bytes:
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w") as archive:
+            archive.writestr(
+                "project.json",
+                json.dumps({"targets": [], "extensionURLs": dict(urls)}),
+            )
+            archive.writestr("asset.svg", b"<svg/>")
+        return buffer.getvalue()
+
+    def test_extension_urls_become_relative_and_the_archive_keeps_the_originals(self):
+        sb3 = self.project({"gtm": "http://localhost:8000/gtm.js"})
+        patched = html._rewrite_extension_urls(
+            sb3, {"gtm": "out_files/ext/gtm.js"}
+        )
+        rewritten = json.loads(zipfile.ZipFile(io.BytesIO(patched)).read("project.json"))
+        self.assertEqual(rewritten["extensionURLs"], {"gtm": "out_files/ext/gtm.js"})
+        # Everything else in the archive is copied through untouched.
+        self.assertIn("asset.svg", zipfile.ZipFile(io.BytesIO(patched)).namelist())
+        original = json.loads(zipfile.ZipFile(io.BytesIO(sb3)).read("project.json"))
+        self.assertEqual(original["extensionURLs"], {"gtm": "http://localhost:8000/gtm.js"})
+
+    def test_an_unknown_extension_id_is_left_alone(self):
+        sb3 = self.project({"gtm": "http://localhost:8000/gtm.js"})
+        patched = html._rewrite_extension_urls(sb3, {"other": "x/y.js"})
+        self.assertEqual(
+            json.loads(zipfile.ZipFile(io.BytesIO(patched)).read("project.json"))[
+                "extensionURLs"
+            ],
+            {"gtm": "http://localhost:8000/gtm.js"},
+        )
+
+    def test_the_page_is_patched_to_resolve_relative_extension_paths(self):
+        page = "      " + html.EXTENSION_LOAD_CALL + "\n"
+        patched = html._absolutise_extension_urls(page)
+        self.assertIn("new URL(extension, document.baseURI).href", patched)
+        self.assertNotIn(html.EXTENSION_LOAD_CALL + "\n", patched)
+
+    def test_a_page_without_the_call_fails_loudly(self):
+        with self.assertRaises(html.HtmlError) as caught:
+            html._absolutise_extension_urls("<html></html>")
+        self.assertIn("scaffolding", str(caught.exception))
+
+    def test_the_posenet_path_comes_from_the_models_own_settings(self):
+        metadata = {
+            "modelSettings": {"posenet": {"multiplier": 0.75, "outputStride": 16}}
+        }
+        original = html._fetch
+        html._fetch = lambda url, **kw: json.dumps({"weightsManifest": [
+            {"paths": ["group1-shard1of2.bin", "group1-shard2of2.bin"]}
+        ]}).encode()
+        try:
+            files = html._posenet_files(metadata)
+        finally:
+            html._fetch = original
+        self.assertEqual(
+            files[0],
+            "savedmodel/posenet/mobilenet/float/075/model-stride16.json",
+        )
+        self.assertIn(
+            "savedmodel/posenet/mobilenet/float/075/group1-shard2of2.bin", files
+        )
+
+    def test_an_image_model_needs_no_posenet_files(self):
+        self.assertEqual(html._posenet_files({"modelSettings": {}}), [])
+        self.assertEqual(html._posenet_files({}), [])
+
+    def test_the_libraries_keep_their_cdn_path(self):
+        # gtm builds `<base>@tensorflow/tfjs@1.3.1/dist/tf.min.js`, so the copy
+        # has to answer there; renaming it to `tf.min.js` would 404.
+        for relative in html.VENDORED_LIBRARIES:
+            with self.subTest(relative=relative):
+                self.assertTrue(relative.startswith("@"))
+                self.assertIn("/dist/", relative)
 
 
 class FailureTests(_Tmp):

@@ -64,8 +64,33 @@ const EXPECT = [
   ['Empty: name="Empty", x=36;', 'name', 'keyword.other.target-key.jsw'],
   ['metadata list Stage.x at 0,0 0x0 hidden;', 'list', 'constant.language.monitor-mode.jsw'],
   ['metadata list Stage.x at 0,0 0x0 hidden;', 'at', 'keyword.other.metadata.jsw'],
-  ['metadata list Stage.x at 0,0 0x0 hidden;', 'hidden', 'keyword.other.metadata.jsw'],
+  ['metadata list Stage.x at 0,0 0x0 hidden;', 'hidden', 'constant.language.metadata-flag.jsw'],
   ['metadata list Stage.Lyrics.zh at 5,5 0x0 hidden;', 'Stage.Lyrics.zh', 'variable.other.member.jsw'],
+  // `metadata monitor|watch|comment|note …` names the statement, and the parser
+  // folds case for the modes, so SLIDER really is the slider mode.
+  ['metadata monitor Stage.x at 0,0 0x0 shown;', 'monitor', 'keyword.other.metadata-annotation.jsw'],
+  ['metadata watch Stage.x at 0,0 0x0 shown;', 'watch', 'keyword.other.metadata-annotation.jsw'],
+  ['metadata note Stage at 1,2 3x4: "hi";', 'note', 'keyword.other.metadata-annotation.jsw'],
+  ['metadata SLIDER Stage.x at 0,0 0x0 shown;', 'SLIDER', 'constant.language.monitor-mode.jsw'],
+  ['metadata note Stage at 1,2 3x4 minimized: "hi";', 'minimized',
+   'constant.language.metadata-flag.jsw'],
+  ['metadata slider Stage.x at 0,0 0x0 shown range 0..10 discrete;', 'discrete',
+   'keyword.other.metadata.jsw'],
+  // Typed values: only a value right after its own key, so `all` stays a plain
+  // identifier everywhere else.
+  ['Sprite: name="x", rotation=all;', 'all', 'constant.language.rotation-style.jsw'],
+  ['Sprite: name="x", rotation="all";', 'all', 'string.quoted.double.jsw'],
+  ['stage: video=on-flipped;', 'on-flipped', 'constant.language.video-state.jsw'],
+  ['Sprite: name="x", show=1;', '1', 'constant.language.metadata-flag.jsw'],
+  // The comment spelling carries the same keys and values.
+  ['// Sprite: main (12,34) size=100 ns=Np', 'size', 'keyword.other.target-key.jsw'],
+  ['// Sprite: main (12,34) size=100 ns=Np', 'Sprite:', 'keyword.control.directive.jsw'],
+  ['// Stage: costume=0, tempo=120;', 'tempo', 'keyword.other.target-key.jsw'],
+  // keySim: the key argument is a name, not prose
+  ['        keySim.press("space", 0.2);', '"space"', 'string.quoted.keysim-key.jsw'],
+  ['        keySim.hold("up arrow");', '"up arrow"', 'string.quoted.keysim-key.jsw'],
+  ['        keySim.press("space", 0.2);', '.', 'punctuation.accessor.jsw'],
+  ['        Looks.say("space");', 'space', 'string.quoted.double.jsw'],
   // calls: a custom block, an extension method, and a declaration
   ['        playNote(60);', 'playNote', 'entity.name.function.call.jsw'],
   ['        LogStatic("x");', 'LogStatic', 'entity.name.function.call.jsw'],

@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 300 300" height="300" width="300">
+<path fill="black" d="M26 130L166 158V166L26 138V130Z"></path>
+<path fill="black" d="M166 158L174 142V150L166 166V158Z"></path>
+<path fill="black" d="M34.0001 114L174 142L166 158L26 130L34.0001 114Z"></path>
+<path fill="#CC0000" d="M26 130L166 158V166L163.5 165.5V159.5L28.5 132.5V138.5L26 138V130Z"></path>
+<path fill="#800000" d="M174 142L166 158V166L167 164V158L173 146V152L174 150V142Z"></path>
+<path fill="#FF0000" d="M34.0001 114L174 142L166 158L164.5 155.5L170.5 143.5L35.5 116.5L29.5 128.5L164.5 155.5L166 158L26 130L34.0001 114Z"></path>
+</svg>

@@ -189,31 +189,123 @@ def _arm(chain: list[Block], width: int) -> int:
     return width
 
 
-def block_height(blocks: dict[str, Block], block: Block,
-                 reporters: set[str] = frozenset()) -> int:
-    """The height scratch-blocks would draw this block's own box at."""
+def _deps(blocks: dict[str, Block], block: Block) -> list[str]:
+    """Blocks whose height this one's height is computed from.
+
+    Every non-substack input slot, plus every row of every substack: a
+    C-block's height adds up the rows it contains.
+    """
+    out: list[str] = []
+    for name, value in block.inputs.items():
+        if name in SUBSTACKS:
+            for row in _substack(blocks, block, name):
+                out.append(row.id)
+            continue
+        child = _slot_child(blocks, value)
+        if child is not None:
+            out.append(child.id)
+    return out
+
+
+def _heights(
+    blocks: dict[str, Block], roots: list[str], reporters: set[str]
+) -> dict[str, int]:
+    """The drawn height of every block reachable from ``roots``.
+
+    Iterative on purpose: ``vmProtect``'s ``h0`` backend turns a switch into
+    one long ``if``/``elif`` chain, so a protected project can nest thousands of
+    C-blocks deep and the recursive form blew CPython's stack measuring it.
+    """
+    deps: dict[str, list[str]] = {}
+    stack = [bid for bid in roots if bid in blocks]
+    while stack:
+        bid = stack.pop()
+        if bid in deps:
+            continue
+        block = blocks[bid]
+        found = [child for child in _deps(blocks, block) if child in blocks]
+        deps[bid] = found
+        stack.extend(found)
+
+    waiting = {bid: len(set(found)) for bid, found in deps.items()}
+    parents: dict[str, list[str]] = {bid: [] for bid in deps}
+    for bid, found in deps.items():
+        for child in set(found):
+            parents[child].append(bid)
+
+    heights: dict[str, int] = {}
+    ready = [bid for bid, count in waiting.items() if count == 0]
+    while ready:
+        bid = ready.pop()
+        block = blocks[bid]
+        heights[bid] = _height_of(blocks, block, reporters, heights)
+        for parent in parents[bid]:
+            if parent in heights:
+                continue
+            waiting[parent] -= 1
+            if waiting[parent] == 0:
+                ready.append(parent)
+    for bid in deps:                     # a cycle cannot be drawn: give it 0
+        heights.setdefault(bid, 0)
+    return heights
+
+
+def _height_of(
+    blocks: dict[str, Block], block: Block, reporters: set[str],
+    heights: dict[str, int],
+) -> int:
+    """One block's own box height, reading its children out of ``heights``."""
     if block.opcode == "procedures_definition":
         return PROCEDURE_DEFINITION
     if block.opcode == "procedures_prototype":
         return PROCEDURE_PROTOTYPE
     if block.shadow:
         return VARIABLE_ROW if block.opcode in VARIABLE_SHADOWS else SHADOW
-    row = _row_height(blocks, block, reporters)
+
+    tallest = 0
+    for name, value in block.inputs.items():
+        if name in SUBSTACKS:
+            continue
+        child = _slot_child(blocks, value)
+        if child is not None:
+            tallest = max(tallest, heights.get(child.id, 0))
+        elif isinstance(value, list) and len(value) >= 2 and isinstance(value[1], list):
+            tallest = max(tallest, _primitive_row(value[1]))
+    if block.id in reporters:
+        row = max(BARE_REPORTER, tallest + REPORTER_GROW)
+    elif block.opcode in CAP_OPCODES:
+        row = max(CAP_ROW, tallest + STATEMENT_GROW)
+    else:
+        floor = TALL_ROW if block.opcode.startswith(TALL_ROW_PREFIXES) else ROW
+        row = max(floor, tallest + STATEMENT_GROW)
+
+    def rows_height(chain: list[Block]) -> int:
+        if not chain:
+            return 0
+        total = sum(heights.get(item.id, 0) for item in chain)
+        return total - JOINT * (len(chain) - 1)
+
     if block.opcode == "control_forever":
         then = _substack(blocks, block, "SUBSTACK")
-        inner = max(EMPTY_SUBSTACK, stack_height(blocks, _first(then), reporters))
+        inner = max(EMPTY_SUBSTACK, rows_height(then))
         return row + _arm(then, FOREVER_ARM) + inner
     if block.opcode in C_BLOCKS or block.opcode == "control_if_else":
         then = _substack(blocks, block, "SUBSTACK")
         height = row + _arm(then, BOTTOM_ARM)
-        height += max(EMPTY_SUBSTACK, stack_height(blocks, _first(then), reporters))
+        height += max(EMPTY_SUBSTACK, rows_height(then))
         if block.opcode == "control_if_else":
             otherwise = _substack(blocks, block, "SUBSTACK2")
             if otherwise:
                 height += _arm(otherwise, ELSE_ARM)
-                height += stack_height(blocks, _first(otherwise), reporters)
+                height += rows_height(otherwise)
         return height
     return row
+
+
+def block_height(blocks: dict[str, Block], block: Block,
+                 reporters: set[str] = frozenset()) -> int:
+    """The height scratch-blocks would draw this block's own box at."""
+    return _heights(blocks, [block.id], set(reporters)).get(block.id, 0)
 
 
 def stack_height(blocks: dict[str, Block], first: str | None,
@@ -224,8 +316,9 @@ def stack_height(blocks: dict[str, Block], first: str | None,
     rows = _stack(blocks, first)
     if not rows:
         return 0
-    return (sum(block_height(blocks, block, reporters) for block in rows)
-            - JOINT * (len(rows) - 1))
+    heights = _heights(blocks, [row.id for row in rows], reporters)
+    total = sum(heights.get(row.id, 0) for row in rows)
+    return total - JOINT * (len(rows) - 1)
 
 
 def _reporters_of(blocks: dict[str, Block]) -> set[str]:
@@ -253,16 +346,29 @@ def _literal_chars(value: object) -> int:
 
 
 def stack_width(blocks: dict[str, Block], first: str | None) -> int:
-    """A width estimate for a stack: its widest row plus its text."""
+    """A width estimate for a stack: its widest row plus its text.
+
+    Iterative like :func:`_heights`: the ``h0`` switch turns into a deep chain
+    of nested C-blocks, and walking it recursively used to overflow.
+    """
     widest = BASE_WIDTH
-    for block in _stack(blocks, first):
+    seen: set[str] = set()
+    pending: list[tuple[str | None, int]] = [(first, 0)]
+    while pending:
+        bid, depth = pending.pop()
+        if bid is None or bid not in blocks or bid in seen:
+            continue
+        seen.add(bid)
+        block = blocks[bid]
         chars = sum(len(str(field[0])) for field in block.fields.values())
         chars += sum(_literal_chars(value) for value in block.inputs.values())
-        widest = max(widest, BASE_WIDTH + chars * CHAR_WIDTH)
+        widest = max(widest, BASE_WIDTH + chars * CHAR_WIDTH + depth * 16)
+        if block.next is not None:
+            pending.append((block.next, depth))
         for name in SUBSTACKS:
             inner = _substack(blocks, block, name)
             if inner:
-                widest = max(widest, stack_width(blocks, _first(inner)) + 16)
+                pending.append((_first(inner), depth + 1))
     return min(widest, MAX_WIDTH)
 
 
@@ -284,8 +390,21 @@ def layout_target(target: Target, *, fixed: set[str] = frozenset(),
     if not movable:
         return
     reporters = reporter_ids(target)
-    heights = {block.id: stack_height(target.blocks, block.id, reporters)
-               for block in movable}
+    rows_by_script = {block.id: _stack(target.blocks, block.id) for block in movable}
+    row_heights = _heights(
+        target.blocks,
+        [row.id for rows in rows_by_script.values() for row in rows],
+        reporters,
+    )
+
+    def script_height(block: Block) -> int:
+        rows = rows_by_script[block.id]
+        if not rows:
+            return 0
+        total = sum(row_heights.get(row.id, 0) for row in rows)
+        return total - JOINT * (len(rows) - 1)
+
+    heights = {block.id: script_height(block) for block in movable}
     columns: list[list[Block]] = [[]]
     used = 0
     for block in movable:

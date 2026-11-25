@@ -62,6 +62,63 @@ class PublicIsBroadcastTests(unittest.TestCase):
         self.assertIn("event_whenkeypressed", opcodes(project, "a"))
 
 
+class StageScriptTests(unittest.TestCase):
+    """A `stage { }` script resolves names against the Stage.
+
+    The Stage's scripts are emitted with the *first class* in hand -- it names
+    the sprite for state lookup -- and taking that name for name resolution
+    made every call between two Stage functions "unknown function" (E0036) and
+    every bare variable a lookup in that other sprite.
+    """
+
+    SOURCE = """
+        public FPS = 0;
+        stage {
+            public void greenFlag() {
+                FPS(1);
+            }
+            private void FPS(tick) {
+                FPS = 60;
+                FPS(tick + 1);
+            }
+            public void reset() {
+                RESET_THE_GAME();
+            }
+            private void RESET_THE_GAME() {
+                FPS = 0;
+            }
+        }
+        class sprite_a {
+            public void greenFlag() { Looks.show(); }
+        }
+    """
+
+    def test_a_stage_function_can_call_another(self):
+        codegen, _project = compile_source(self.SOURCE)
+        self.assertEqual(codegen.diagnostics, [])
+
+    def test_the_call_is_a_custom_block_not_a_broadcast(self):
+        _, project = compile_source(self.SOURCE)
+        calls = [
+            b["mutation"]["proccode"]
+            for b in blocks_of(project, "Stage").values()
+            if b["opcode"] == "procedures_call"
+        ]
+        # greenFlag -> FPS, FPS -> FPS, reset -> RESET_THE_GAME, and the
+        # receiver hat of `reset` (a public function) -> its own block.
+        self.assertEqual(calls.count("FPS %s"), 2)
+        self.assertIn("RESET_THE_GAME", calls)
+        # A private function is never reached through a broadcast.
+        self.assertNotIn("RESET_THE_GAME", receivers(project, "Stage"))
+
+    def test_a_stage_variable_is_the_stages_own(self):
+        _, project = compile_source(self.SOURCE)
+        stage_vars = {name for name, _ in project.stage.variables.values()}
+        self.assertIn("FPS", stage_vars)
+        # Not declared on the sprite the Stage borrowed its class name from.
+        self.assertNotIn("FPS", {n for n, _ in project.targets[1].variables.values()})
+
+
 class BooleanSlotTests(unittest.TestCase):
     def condition_of(self, source: str, sprite: str = "a") -> dict:
         blocks = blocks_of_value(source, sprite)

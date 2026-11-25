@@ -17,7 +17,8 @@
    "the packager is not installed" into a sentence rather than a stack trace.
 
    Usage:
-     node tools/package_html.js --out build/x.html [--title "My Project"] < x.sb3
+     node tools/package_html.js --out build/x.html [--title "My Project"] \\
+       [--no-bake] [--custom-js "window.X = 1"] < x.sb3
 */
 
 'use strict';
@@ -25,11 +26,16 @@
 const fs = require('fs');
 
 function parseArgs(argv) {
-  const args = { out: null, title: null };
+  const args = { out: null, title: null, bake: true, customJs: null };
   for (let i = 0; i < argv.length; i += 1) {
     const flag = argv[i];
     if (flag === '--out') args.out = argv[(i += 1)];
     else if (flag === '--title') args.title = argv[(i += 1)];
+    else if (flag === '--custom-js') args.customJs = argv[(i += 1)];
+    // Extensions stay the URLs the project already names, instead of being
+    // inlined as `data:` scripts: a host whose script-src has no `data:` can
+    // still load them, as long as they are same-origin files.
+    else if (flag === '--no-bake') args.bake = false;
     else if (flag === '--help' || flag === '-h') args.help = true;
   }
   return args;
@@ -74,7 +80,9 @@ const projectData = fs.readFileSync(0);
   packager.options.target = 'html';
   packager.options.turbo = true;
   packager.options.autoplay = true;
+  packager.options.bakeExtensions = args.bake;
   if (args.title) packager.options.app.windowTitle = args.title;
+  if (args.customJs) packager.options.custom.js = args.customJs;
   const result = await packager.package();
   fs.writeFileSync(args.out, result.data);
   emit({ ok: true, type: result.type, bytes: result.data.length, filename: result.filename });

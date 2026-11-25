@@ -132,6 +132,11 @@ marimo/_lsp/
 __marimo__/
 .streamlit/secrets.toml
 
+# `jswc build --html` output: the page, and the folder a --self-hosted build
+# puts next to it (the extensions, TensorFlow.js and the model are downloads)
+userspace/*/*.html
+userspace/*/*_files/
+
 # local scratch workspaces and decompiled third-party projects
 /tmp/
 examples/s3emu.jsw

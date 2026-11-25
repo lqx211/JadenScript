@@ -139,8 +139,9 @@ slots and grows by one frame when nested calls or concurrent clones need more,
 so live frames are never overwritten. `--warp` only speeds up the native stubs the
 interpreter calls: `__vm_run` itself stays a non-warp loop so it always yields.
 For the same reason, `// warp` custom blocks and every procedure they call stay
-native; a virtualised caller can still call them, but their bodies are not
-protected.
+native. A virtualised caller can still call them -- warp mode belongs to the
+callee's stack frame -- so a procedure that merely calls a warp helper keeps its
+protection.
 
 `corruptBlockPos` is the anti-tamper build: every target gets a few blocks
 nothing can reach whose `next`/`parent`/input ids name blocks that do not
@@ -224,6 +225,126 @@ archive is built in memory for the packager).
 Autoplay and turbo mode are on in the packaged page, since it is meant to be
 handed to someone and double-clicked. For a title screen or a different
 appearance, use <https://packager.turbowarp.org/> with the same `.sb3`.
+
+#### Hosting the packaged file: a page-wide Content-Security-Policy breaks it
+
+The file is self-contained, but it is *not* a single script: each extension is a
+`data:text/javascript` URL, and an extension that loads a library does so from a
+CDN. A host that sends a `Content-Security-Policy` has to allow both, or the page
+opens and does nothing — the console says
+
+```
+Loading the script 'data:text/javascript,…' violates the following Content
+Security Policy directive: "script-src 'self' 'unsafe-inline' …"
+Fetch API cannot load https://storage.googleapis.com/tm-model/<id>/metadata.json.
+Refused to connect because it violates the document's Content Security Policy.
+```
+
+| needs | why |
+| --- | --- |
+| `script-src … data: blob:` | every inlined extension |
+| `script-src … https://cdn.jsdelivr.net` | TensorFlow.js, which `gtm` injects as a `<script>` |
+| `connect-src … https://teachablemachine.withgoogle.com` | the share link's `model.json` |
+| `connect-src … https://storage.googleapis.com` | where that link redirects (`tm-model/…`) |
+| `connect-src … https://cdn.jsdelivr.net` | tfjs fetches its own weights/backends |
+| `Permissions-Policy: camera=(self)` | `getUserMedia`; the default is already `self` |
+
+#### When the header cannot be changed: `--self-hosted`
+
+```bash
+jswc build userspace/school/main.jsw -o tmp/serve.sb3 --html --self-hosted
+```
+
+```
+✔ Compiled tmp/serve.sb3
+  html      tmp/serve.html (1.8 MB, self-contained)
+```
+
+The page is written as before, plus one folder next to it that it loads
+everything from:
+
+| path | what |
+| --- | --- |
+| `serve_files/ext/<id>.js` | each extension, fetched at build time and referenced as `serve_files/ext/<id>.js` instead of a `data:` URL |
+| `serve_files/lib/@tensorflow/tfjs@…/dist/tf.min.js` | TensorFlow.js, at the path `gtm` builds from its base |
+| `serve_files/lib/@teachablemachine/pose@…/…` | the pose runtime, when the model needs it |
+| `serve_files/lib/tfjs-models/savedmodel/posenet/…` | posenet's pretrained weights, which the pose runtime fetches by absolute URL |
+| `serve_files/model/<id>/` | the model the project names: `metadata.json`, `model.json` and every weight shard |
+
+Every URL in the page is then same-origin, so a host whose policy is
+`script-src 'self'; connect-src 'self'` runs it unchanged. Three things make
+that work:
+
+* the extensions are named relative to the page and resolved at load time
+  (`new URL(extension, document.baseURI)`), so the folder can be moved or served
+  from any path — the VM itself rejects a relative URL outright;
+* `gtm` reads `window.GTM_LIB_BASE` and `window.GTM_MODEL_MIRROR`, which the
+  build sets in an inline script, so the library and the model come from the
+  folder while the *source* still says the Teachable Machine share link;
+* posenet's weights are fetched by the pose runtime with a hard-coded Google
+  URL, so `fetch` is wrapped for the `https://storage.googleapis.com/tfjs-models/`
+  prefix only (`window.GTM_MIRROR_MAP`).
+
+Upload the page **and** its folder together. The `.sb3` is unchanged — it still
+names the original URLs, so it keeps working in the editor.
+
+The mirror is what a build can see: models named by a literal share link. A URL
+computed at run time cannot be copied, and the page will fail to load that model
+under a strict policy.
+
+Do not replace the policy with one of these — add the sources to the one being
+sent, so the rest of the site keeps its protection:
+
+| directive | add |
+| --- | --- |
+| `script-src` | `data: blob: https://cdn.jsdelivr.net` |
+| `connect-src` | `https://teachablemachine.withgoogle.com https://storage.googleapis.com https://cdn.jsdelivr.net` |
+
+nginx appends the directive inline:
+
+```nginx
+add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' data: blob: https://static.cloudflareinsights.com https://www.google.com https://www.gstatic.com https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https://cloudflareinsights.com https://teachablemachine.withgoogle.com https://storage.googleapis.com https://cdn.jsdelivr.net ws: wss:; frame-src 'self' blob:; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self'" always;
+```
+
+Behind Cloudflare the header may come from a **Transform Rule → Modify response
+header** rather than the origin, in which case editing nginx changes nothing: set
+the same single-line value there (Rules → Transform Rules → Modify response
+header → *Set static* on `Content-Security-Policy`).
+
+nginx's `add_header` does not append across levels: a nested block that sets any
+`add_header` drops the outer ones, so edit the policy that is actually being
+sent rather than adding a second one. Check with
+`curl -sSI https://host/page.html | grep -i content-security` — `data:` has to
+appear in `script-src`, and the three hosts in `connect-src`.
+
+`tools/check_csp.py` reads the live response and names the missing sources, so
+this is a one-command answer rather than a console hunt:
+
+```console
+$ python3 tools/check_csp.py https://chat.lqx211.com/temp/serve.html
+page      https://chat.lqx211.com/temp/serve.html
+          2,013,929 bytes, packaged (extensions inlined)
+policy    header
+script-src
+          MISSING  data:                                    the inlined extensions are data: URLs
+          ok       'unsafe-eval'                            scratch-vm's compiler uses Function()
+          MISSING  https://cdn.jsdelivr.net                 TensorFlow.js is injected as a <script>
+connect-src
+          MISSING  https://storage.googleapis.com           where that link redirects (tm-model/…)
+```
+
+It exits non-zero while anything is missing, so it can gate a deploy.
+
+To check the header *before* touching a server, `tools/serve.py` can send it:
+
+```bash
+python3 tools/serve.py --root tmp --csp packaged   # http://localhost:8010/
+```
+
+`--csp packaged` adds that `Content-Security-Policy` and
+`Permissions-Policy: camera=(self)`, so the page is tested against exactly what a
+real host will send. Without the flag the server sends no policy, which is how a
+page that fails in production passes locally.
 
 ### Where the blocks land: `--layout`
 

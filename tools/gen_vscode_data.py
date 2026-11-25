@@ -7,6 +7,14 @@ compiler knows — keywords, runtime namespaces and their members, community
 extensions, list methods, feature switches — and ``vscode-jsw/completion.js``
 serves it.
 
+``metadata`` gets the same treatment: the four words that can open the line
+(``monitor``/``watch``/``comment``/``note``), the modes, the layout words, the
+monitor states, and the target keys with the type each one takes
+(``text``/``number``/``integer``/``flag``/``rotation``/``video``) plus whether
+it belongs to a sprite or to the Stage. The types come from
+``jswc.keywords.TARGET_KEY_TYPES``, which is the table the compiler's own
+``_check_meta`` enforces.
+
 Run ``python3 tools/gen_vscode_data.py`` (``make vscode-data``) after touching
 ``jswc/keywords.py``, ``jswc/opcodes.py`` or ``jswc/extensions.py``. The file is
 committed so the extension works without a build step.
@@ -25,7 +33,13 @@ from jswc import opcodes as O  # noqa: E402
 from jswc.extension_blocks import MICROBIT_CONSTANTS  # noqa: E402
 from jswc.extensions import ALIASES, EXTENSION_BLOCKS  # noqa: E402
 from jswc.gtm_blocks import GTM_BLOCKS  # noqa: E402
-from jswc.keysim_blocks import KEYSIM_BLOCKS  # noqa: E402
+from jswc.keysim_blocks import (  # noqa: E402
+    KEYSIM_AND_WAIT,
+    KEYSIM_BLOCKS,
+    KEYSIM_BUTTONS,
+    KEYSIM_KEYS,
+    KEYSIM_KEY_LABELS,
+)
 from jswc.keycodes import CONTROL_CODES, MORE_KEYS, SUPPORTED_NAMES  # noqa: E402
 from jswc.keywords import (  # noqa: E402
     BUILTIN_NAMESPACES,
@@ -34,6 +48,8 @@ from jswc.keywords import (  # noqa: E402
     LITERALS,
     MODIFIERS,
     RESERVED,
+    TARGET_KEY_SCOPES,
+    TARGET_KEY_TYPES,
     TYPES,
 )
 
@@ -172,6 +188,42 @@ EXTRA_MEMBERS = [
     ("Stage", "get", "reporter", "get(name)", "Read stage state by name."),
     ("Stage", "set", "command", "set(name, value)", "Set stage state by name."),
     ("Stage", "change", "command", "change(name, delta)", "Change stage state by name."),
+    # keySim puts input *into* the player, so each block is worth a sentence:
+    # `key pressed?` and `mouse down?` see what one of these synthesises.
+    ("keySim", "press", "command", "press(key, seconds)",
+     "Press and release a key; the press lasts `seconds` and the script carries on."),
+    ("keySim", "pressAndWait", "command", "pressAndWait(key, seconds)",
+     "Press and release a key and wait the `seconds` out."),
+    ("keySim", "hold", "command", "hold(key)",
+     "Hold a key down until `release`."),
+    ("keySim", "release", "command", "release(key)",
+     "Release a key that `hold` pressed."),
+    ("keySim", "click", "command", 'click(button, x, y, seconds, "and wait")',
+     "Click a mouse button at a point; `button` is 0 left, 1 middle, 2 right."),
+    ("keySim", "clickLeft", "command", "clickLeft(x, y[, seconds])",
+     "Click the left button for 0.1 s, or for `seconds`."),
+    ("keySim", "clickMiddle", "command", "clickMiddle(x, y[, seconds])",
+     "Click the middle button for 0.1 s, or for `seconds`."),
+    ("keySim", "clickRight", "command", "clickRight(x, y[, seconds])",
+     "Click the right button for 0.1 s, or for `seconds`."),
+    ("keySim", "holdLeft", "command", "holdLeft(x, y)",
+     "Hold the left button down at a point until `releaseLeft`."),
+    ("keySim", "holdMiddle", "command", "holdMiddle(x, y)",
+     "Hold the middle button down at a point until `releaseMiddle`."),
+    ("keySim", "holdRight", "command", "holdRight(x, y)",
+     "Hold the right button down at a point until `releaseRight`."),
+    ("keySim", "releaseLeft", "command", "releaseLeft()",
+     "Release a held left button."),
+    ("keySim", "releaseMiddle", "command", "releaseMiddle()",
+     "Release a held middle button."),
+    ("keySim", "releaseRight", "command", "releaseRight()",
+     "Release a held right button."),
+    ("keySim", "holdButton", "command", "holdButton(button, x, y)",
+     "Hold any button down at a point; `button` is 0 left, 1 middle, 2 right."),
+    ("keySim", "releaseButton", "command", "releaseButton(button)",
+     "Release a button that `holdButton` pressed."),
+    ("keySim", "moveTo", "command", "moveTo(x, y)",
+     "Move the pointer without clicking."),
 ]
 
 HATS = [
@@ -207,20 +259,89 @@ ANNOTATIONS = [
 MONITOR_MODE_DOCS = [
     ("list", "Shows the list monitor for the target."),
     ("large", "A large (read-only) variable readout."),
-    ("slider", "A slider; add `range min..max`."),
+    ("largeReadout", "The long spelling of `large`."),
+    ("slider", "A slider; add `range min..max`, or write `slider(min,max)`."),
     ("normal", "The default variable readout."),
     ("default", "Same as `normal`, but deleted when its target is deleted."),
+]
+
+#: The aliases that open a metadata line. All four take a target, and
+#: `monitor`/`watch` are the same statement under two names.
+METADATA_FORM_DOCS = [
+    (
+        "pos",
+        "metadata <script> pos <x>,<y>;",
+        "Where a script sits on the canvas: `metadata Stage.tick pos 10,20;`. "
+        "`<script>` is the method as written, e.g. `greenFlag` or "
+        "`Events.keyPressed`.",
+    ),
+    (
+        "monitor",
+        "metadata monitor <Target.name> at <x>,<y> <W>x<H> <shown|hidden>;",
+        "A read-out for one variable, in either order: the mode may come before "
+        "or after the target. `// monitor …` is the comment spelling.",
+    ),
+    (
+        "watch",
+        "metadata watch <Target.name> at <x>,<y> <W>x<H> <shown|hidden>;",
+        "Alias of `monitor`.",
+    ),
+    (
+        "slider",
+        "metadata slider(<min>,<max>) <Target.name> at <x>,<y> <W>x<H> shown;",
+        "A slider. Whole-number bounds are steps, so `slider(0,2)` is a "
+        "three-state switch; the decompiler writes it `range 0..2 discrete`.",
+    ),
+    (
+        "list",
+        "metadata list <Target.list> at <x>,<y> <W>x<H> <shown|hidden>;",
+        "The list's contents in a monitor box.",
+    ),
+    (
+        "large",
+        "metadata large <Target.name> at <x>,<y> <W>x<H> <shown|hidden>;",
+        "The big number, for one value someone is watching.",
+    ),
+    (
+        "comment",
+        "metadata comment <owner> at <x>,<y> <W>x<H>: \"text\";",
+        "A workspace comment: the `// comment` spelling with a position.",
+    ),
+    (
+        "note",
+        "metadata note <owner> at <x>,<y> <W>x<H>: \"text\";",
+        "Alias of `comment`.",
+    ),
 ]
 
 METADATA_WORD_DOCS = [
     ("pos", "Script position: `metadata Stage.tick pos 10,20;`."),
     ("at", "Monitor position and size: `at 0,0 100x24`."),
-    ("hidden", "The monitor starts hidden."),
-    ("shown", "The monitor starts visible."),
     ("range", "Slider bounds: `range 0..10`."),
+    ("discrete", "The slider steps by 1 instead of sliding continuously."),
+    ("continuous", "The explicit opposite of `discrete`."),
     ("watchers", "Whether more than one watcher may exist."),
     ("min", "Lower bound for `range`."),
     ("max", "Upper bound for `range`."),
+]
+
+METADATA_FLAG_DOCS = [
+    ("shown", "The monitor starts visible."),
+    ("hidden", "The monitor starts hidden."),
+    ("minimized", "A workspace comment starts collapsed."),
+]
+
+#: The values a target key may take from a closed set, and which keys take
+#: them. Scoped and completed only after `key=`.
+TARGET_VALUE_DOCS = [
+    ("all", ("rotation",), "Rotate in any direction (the default)."),
+    ("leftright", ("rotation",), "Only mirror left and right."),
+    ("none", ("rotation",), "Never rotate."),
+    ("on", ("video", "videoState"), "Show the camera picture."),
+    ("off", ("video", "videoState"), "No camera picture."),
+    ("on-flipped", ("video", "videoState"), "Show the camera, mirrored."),
+    ("1", ("show", "draggable"), "On."),
+    ("0", ("show", "draggable"), "Off."),
 ]
 
 TARGET_KEY_DOCS = [
@@ -233,12 +354,14 @@ TARGET_KEY_DOCS = [
     ("costume", "Index of the current costume."),
     ("volume", "Sound volume percentage."),
     ("layer", "Layer order; larger is nearer the viewer."),
-    ("tempo", "Stage tempo in bpm (stage only)."),
-    ('video', '"on" or "off" (stage only).'),
+    ("tempo", "Stage tempo in bpm."),
+    ("video", "Camera on/off."),
+    ("videoState", "The same thing as `video`."),
     ("videoTransparency", "Video transparency percentage."),
     ("rotation", 'all, leftright or none.'),
     ("draggable", "1 if the sprite can be dragged."),
     ("namespace", "Prefix for this class's public state and blocks."),
+    ("ns", "Short spelling of `namespace`, used by `// Sprite:`."),
 ]
 
 ASSET_WORD_DOCS = [
@@ -394,6 +517,81 @@ def _key_names() -> list[dict]:
     return unique
 
 
+#: The keySim menu values, spelled the way the extension's dropdown spells
+#: them. ``press``/``hold``/``release`` store ``KeyboardEvent.key``, so a
+#: spelled-out name is translated by the compiler
+#: (``KEYSIM_KEY_LABELS``) and the character is stored as itself.
+KEYSIM_BUTTON_DOCS = {
+    "0": "Left button.",
+    "1": "Middle button.",
+    "2": "Right button.",
+}
+
+
+def _keysim_keys() -> list[dict]:
+    """What may go in `keySim.press/hold/release(…)`.
+
+    The friendly names first — `space` is `" "` in the DOM and `up arrow` is
+    `ArrowUp`, which is exactly what a reader needs to know — then the raw
+    values the dropdown offers.
+    """
+    out = []
+    for label, value in KEYSIM_KEY_LABELS.items():
+        shown = "the space bar" if label == "space" else f"`{value}`"
+        literal = '" "' if value == " " else f'"{value}"'
+        out.append(
+            {
+                "label": label,
+                "kind": "key",
+                "detail": f"key · {shown}",
+                "value": value,
+                "doc": f"Compiles to `{literal}`; the extension compares "
+                       f"against `KeyboardEvent.key`.",
+            }
+        )
+    named = {entry["value"] for entry in out}
+    for value in KEYSIM_KEYS:
+        if value in named:
+            continue
+        if value == " ":
+            continue  # the `space` label above is the way to write it
+        out.append(
+            {
+                "label": value,
+                "kind": "key",
+                "detail": "key · the character itself",
+                "value": value,
+                "doc": "",
+            }
+        )
+    return out
+
+
+def _keysim_buttons() -> list[dict]:
+    return [
+        {
+            "label": value,
+            "kind": "key",
+            "detail": "mouse button",
+            "doc": KEYSIM_BUTTON_DOCS.get(value, ""),
+        }
+        for value in KEYSIM_BUTTONS
+    ]
+
+
+def _keysim_wait() -> list[dict]:
+    return [
+        {
+            "label": value,
+            "kind": "key",
+            "detail": "and wait",
+            "doc": "`and wait` holds the script until the click finishes; "
+                   "`without waiting` is the *continue* item.",
+        }
+        for value in KEYSIM_AND_WAIT
+    ]
+
+
 def build() -> dict:
     keywords = []
     for word in sorted(KEYWORDS | RESERVED):
@@ -447,15 +645,66 @@ def build() -> dict:
             for name, value in sorted(MICROBIT_CONSTANTS.items())
         ],
         "monitorModes": [
-            {"label": word, "kind": "constant", "doc": doc}
+            {
+                "label": word,
+                "kind": "constant",
+                "detail": "metadata mode",
+                "doc": doc,
+            }
             for word, doc in MONITOR_MODE_DOCS
         ],
+        # The shapes a `metadata` line can take: offered right after the keyword
+        # and shown in the hover for `metadata` itself.
+        "metadataForms": [
+            {
+                "label": word,
+                "kind": "snippet",
+                "detail": "metadata · " + usage,
+                "usage": usage,
+                "doc": doc,
+            }
+            for word, usage, doc in METADATA_FORM_DOCS
+        ],
         "metadataWords": [
-            {"label": word, "kind": "keyword", "doc": doc}
+            {
+                "label": word,
+                "kind": "keyword",
+                "detail": "metadata word",
+                "doc": doc,
+            }
             for word, doc in METADATA_WORD_DOCS
         ],
+        "metadataFlags": [
+            {
+                "label": word,
+                "kind": "constant",
+                "detail": "monitor state · shown|hidden|minimized",
+                "doc": doc,
+            }
+            for word, doc in METADATA_FLAG_DOCS
+        ],
+        # `rotation=all` — the values, and the keys that take them. completion.js
+        # only offers these after the `=`.
+        "targetValues": [
+            {
+                "label": word,
+                "kind": "enum",
+                "keys": list(keys),
+                "detail": "value of " + ", ".join(keys),
+                "doc": doc,
+            }
+            for word, keys, doc in TARGET_VALUE_DOCS
+        ],
         "targetKeys": [
-            {"label": word, "kind": "keyword", "doc": doc}
+            {
+                "label": word,
+                "kind": "keyword",
+                "detail": f"{TARGET_KEY_TYPES.get(word, 'text')} · "
+                          f"{TARGET_KEY_SCOPES.get(word, 'sprite')}",
+                "type": TARGET_KEY_TYPES.get(word, "text"),
+                "scope": TARGET_KEY_SCOPES.get(word, "sprite"),
+                "doc": doc,
+            }
             for word, doc in TARGET_KEY_DOCS
         ],
         "assetWords": [
@@ -467,6 +716,9 @@ def build() -> dict:
             for word, doc in ASSET_KEY_DOCS
         ],
         "keyNames": _key_names(),
+        "keysimKeys": _keysim_keys(),
+        "keysimButtons": _keysim_buttons(),
+        "keysimWait": _keysim_wait(),
         "hats": [
             {"label": full, "detail": detail, "doc": doc}
             for full, detail, doc in HATS

@@ -159,6 +159,21 @@ TurboWarp only loads a URL unsandboxed when it starts with
 make serve                       # tools/serve.py --port 8000, with CORS
 ```
 
+A *packaged* page is different: the packager marks every extension unsandboxed,
+so nothing checks the origin there — a `jswc build --html` file runs this
+extension from a USB stick. Two globals let such a build keep everything on one
+origin, for a host whose Content-Security-Policy allows nothing else:
+
+| global | effect |
+| --- | --- |
+| `window.GTM_LIB_BASE` | where `tf.min.js` and the pose runtime are loaded from, default `https://cdn.jsdelivr.net/npm/` |
+| `window.GTM_MODEL_MIRROR` | a folder (`./model/`) the model's `<id>/` is read from instead of the share link |
+| `window.GTM_MIRROR_MAP` | prefixes `fetch` rewrites, for posenet's pretrained weights |
+
+`jswc build --html --self-hosted` sets all three and writes the files; see
+"Hosting the packaged file" in docs/CLI.md. Unset, the extension behaves exactly
+as before.
+
 then, in the TurboWarp editor:
 
 ```

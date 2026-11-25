@@ -59,7 +59,7 @@ from dataclasses import dataclass, field
 
 from . import ast_nodes as A
 from . import opcodes as O
-from .extension_blocks import EXTENSION_BLOCKS
+from .extensions import catalogue
 from .opcodes import COMMANDS, FIELD, PROPERTIES, REPORTERS
 from .ir import Block, Lit, Project, Ref, Target
 from .keywords import ALL_KEYWORDS
@@ -179,19 +179,30 @@ _VARIABLE_VISIBILITY = {
     "data_hidevariable": "hideVariable",
 }
 
-#: Extension opcode -> (namespace, method, kind, argument specs).  The generic
-#: extension registry is the same one the ordinary code generator uses; this
-#: table only removes the need to parse the opcode prefix at every block.
-_EXTENSION_BY_OPCODE: dict[str, tuple[str, str, str, tuple]] = {}
-for _extension_id, _entry in EXTENSION_BLOCKS.items():
-    _namespace = _entry["namespace"]
-    for _opcode, _spec in _entry["blocks"].items():
-        _EXTENSION_BY_OPCODE[f"{_extension_id}_{_opcode}"] = (
-            _namespace,
-            _opcode,
-            _spec["type"],
-            tuple(tuple(arg) for arg in _spec["args"]),
-        )
+#: Extension opcode -> (namespace, method, kind, argument specs).  Built from
+#: the same registry the ordinary code generator uses, so ``gtm``/``keySim``
+#: and the feature-gated pishi blocks resolve here too.
+ExtensionTable = dict[str, tuple[str, str, str, tuple]]
+
+
+def extension_table(features=()) -> ExtensionTable:
+    """Extension opcode -> its namespace, method, kind and arguments."""
+    table: ExtensionTable = {}
+    for extension_id, entry in catalogue(features).items():
+        namespace = entry["namespace"]
+        for opcode, spec in entry["blocks"].items():
+            table[f"{extension_id}_{opcode}"] = (
+                namespace,
+                opcode,
+                spec["type"],
+                tuple(tuple(arg) for arg in spec["args"]),
+            )
+    return table
+
+
+#: The table without pishi's feature gate; `protect_project` builds the real
+#: one from the features the source asked for.
+_EXTENSION_BY_OPCODE: ExtensionTable = extension_table()
 
 #: Extension commands that can suspend the current thread.  The VM has to
 #: flush queued broadcasts before them, just like a native `wait`.
@@ -199,15 +210,26 @@ _EXTENSION_YIELDING = {
     "lmsMoreEvents_broadcastToTargetAndWait",
     "lmsMoreEvents_broadcastDataAndWait",
     "lmsMoreEvents_broadcastDataToTargetAndWait",
+    # The Teachable Machine extension fetches a model, opens the camera and
+    # tears both down; every one of those waits on the browser.
+    "gtm_load",
+    "gtm_unload",
+    "gtm_startCamera",
+    "gtm_stopCamera",
 }
 
-#: Extension hats and events keep their native trigger block, but their body
-#: can be virtualised exactly like a core hat body.
-_EXTENSION_HATS = {
-    opcode
-    for opcode, (_namespace, _method, _kind, _args) in _EXTENSION_BY_OPCODE.items()
-    if _kind in ("HAT", "EVENT")
-}
+
+def extension_hats(table: ExtensionTable) -> set[str]:
+    """Extension hats and events: native trigger, virtualised body."""
+    return {
+        opcode
+        for opcode, (_namespace, _method, kind, _args) in table.items()
+        if kind in ("HAT", "EVENT")
+    }
+
+
+#: The hats of the default table, kept for callers that never pass features.
+_EXTENSION_HATS = extension_hats(_EXTENSION_BY_OPCODE)
 
 
 class Unsupported(Exception):
@@ -261,6 +283,7 @@ class _Compiler:
         unsafe: set[str],
         pools: dict[str, list[str]],
         params: dict[str, int] | None = None,
+        extensions: ExtensionTable | None = None,
     ):
         self.blocks = blocks
         self.cases = cases
@@ -269,6 +292,7 @@ class _Compiler:
         self.unsafe = unsafe
         self.pools = pools
         self.params = params or {}
+        self.extensions = _EXTENSION_BY_OPCODE if extensions is None else extensions
         self.param_count = len(self.params)
         self.code: list[_Instr] = []
         self.temps = 0
@@ -758,7 +782,7 @@ class _Compiler:
         return parts, slots
 
     def extension_command(self, block: dict) -> bool:
-        spec = _EXTENSION_BY_OPCODE.get(block.get("opcode", ""))
+        spec = self.extensions.get(block.get("opcode", ""))
         if spec is None or spec[2] != "COMMAND":
             return False
         namespace, method, _kind, args = spec
@@ -773,7 +797,7 @@ class _Compiler:
         return True
 
     def extension_reporter(self, block: dict) -> bool:
-        spec = _EXTENSION_BY_OPCODE.get(block.get("opcode", ""))
+        spec = self.extensions.get(block.get("opcode", ""))
         if spec is None or spec[2] not in ("REPORTER", "BOOLEAN"):
             return False
         namespace, method, _kind, args = spec
@@ -1686,6 +1710,8 @@ def protect_project(
         else None
     )
     cases = _Cases(rng)
+    ext_table = extension_table(codegen.features)
+    ext_hats = extension_hats(ext_table)
     consts: list = []
     pools = {
         pool.list_id: list(pool.items)
@@ -1706,10 +1732,18 @@ def protect_project(
             calls.setdefault(codegen._proccode(fn), fn)
         unsafe = _unsafe_calls(cls)
 
-        # A warp custom block runs its whole body without yielding.  The VM
-        # loop is deliberately non-warp, so virtualising a warp procedure (or
-        # anything a warp procedure calls) would freeze the project.  Keep
-        # those procedures native; a virtualised caller can still call them.
+        # A warp custom block runs its whole body without yielding, so the VM
+        # loop must never run *inside* one: `while (1)` there would spin until
+        # the warp timer expires, every frame.  Warp mode is scoped to the
+        # callee's stack frame (`sequencer.stepToProcedure` sets it on the
+        # frame it pushes), so the rule is about the direction of the call:
+        #
+        #   warp proc -> anything it calls     native (inside warp mode)
+        #   non-warp proc -> warp proc         virtualised (safe: the warp
+        #                                      frame is popped on return)
+        #
+        # A caller of a warp procedure therefore keeps its protection; only the
+        # warp procedure and its own callees stay native.
         by_name = {}
         for fn in cls.funcs:
             by_name.setdefault(fn.proccode, fn)
@@ -1727,19 +1761,19 @@ def protect_project(
             fn = calls.get(prototype.mutation.get("proccode"))
             if fn is not None:
                 warp_fns.add(fn.qualified)
+        # Close over the *callees*: everything reachable from a warp body runs
+        # in warp mode too, so it has to stay native as well.
         changed = True
         while changed:
             changed = False
             for fn in cls.funcs:
-                if fn.qualified in warp_fns:
+                if fn.qualified not in warp_fns:
                     continue
-                if any(
-                    (called := by_name.get(name)) is not None
-                    and called.qualified in warp_fns
-                    for name in _called_names(fn.body)
-                ):
-                    warp_fns.add(fn.qualified)
-                    changed = True
+                for name in _called_names(fn.body):
+                    called = by_name.get(name)
+                    if called is not None and called.qualified not in warp_fns:
+                        warp_fns.add(called.qualified)
+                        changed = True
 
         def compile_body(block, param_names, is_procedure=False, fn=None):
             params = {name: index for index, name in enumerate(param_names)}
@@ -1751,6 +1785,7 @@ def protect_project(
                 unsafe,
                 pools,
                 params,
+                ext_table,
             )
             try:
                 compiler.chain(blocks_json.get(block.next))
@@ -1783,7 +1818,7 @@ def protect_project(
                 not block.top_level
                 or (
                     block.opcode not in _HATS
-                    and block.opcode not in _EXTENSION_HATS
+                    and block.opcode not in ext_hats
                 )
                 or not block.next
             ):

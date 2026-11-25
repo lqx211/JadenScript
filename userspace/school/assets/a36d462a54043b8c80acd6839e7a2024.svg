@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 200 200" height="200" width="200">
+<path fill="#8D1E42" d="M128 32L133 33V89L128 88V32Z"></path>
+<path fill="#54132F" d="M135 29L133 33V89L135 85V29Z"></path>
+<path fill="#999BCE" d="M128 76L133 77V81L128 80V76Z"></path>
+<path fill="#999BCE" d="M128 64L133 65V69L128 68V64Z"></path>
+<path fill="#999BCE" d="M128 52L133 53V57L128 56V52Z"></path>
+<path fill="#999BCE" d="M128 40L133 41V45L128 44V40Z"></path>
+<path fill="#5A5C8F" d="M135 73L133 77V81L135 77V73Z"></path>
+<path fill="#5A5C8F" d="M135 61L133 65V69L135 65V61Z"></path>
+<path fill="#5A5C8F" d="M135 49L133 53V57L135 53V49Z"></path>
+<path fill="#5A5C8F" d="M135 37L133 41V45L135 41V37Z"></path>
+<path fill="#D82B63" d="M130 28L135 29L133 33L128 32L130 28Z"></path>
+<path fill-opacity="0.5" fill="#5A0F00" d="M118 17.9998L143 22.9998V42.9998L118 37.9998V17.9998Z"></path>
+<path fill-opacity="0.5" fill="#260600" d="M143 22.9998L145.001 18.9998V38.9998L143 42.9998V22.9998Z"></path>
+<path fill-opacity="0.5" fill="#801500" d="M118 17.9998L120.001 14L145.001 18.9998L143 22.9998L118 17.9998Z"></path>
+</svg>

@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 110 110" height="110" width="110">
+<path fill="url(#paint0_radial_312_8)" d="M45 55C45 49.4772 49.4772 45 55 45C60.5228 45 65 49.4772 65 55C65 60.5228 60.5228 65 55 65C49.4772 65 45 60.5228 45 55Z"></path>
+<ellipse fill="#98FEFF" transform="rotate(45 59.3028 50.3033)" ry="3" rx="4.5" cy="50.3033" cx="59.3028"></ellipse>
+<ellipse fill="#98FEFF" transform="rotate(30 50.4821 61.299)" ry="1.5" rx="2" cy="61.299" cx="50.4821"></ellipse>
+<circle fill="#98FEFF" r="1" cy="54" cx="56"></circle>
+<defs>
+<radialGradient gradientTransform="translate(55 55) rotate(90) scale(10 10)" gradientUnits="userSpaceOnUse" r="1" cy="0" cx="0" id="paint0_radial_312_8">
+<stop stop-opacity="0" stop-color="#99FFFF"></stop>
+<stop stop-opacity="0.385417" stop-color="#99FFFF" offset="0.640625"></stop>
+<stop stop-color="#99FFFF" offset="1"></stop>
+</radialGradient>
+</defs>
+</svg>

@@ -43,6 +43,8 @@ let s:lines = [
       \ '        l.delete(1);',
       \ '        for i in 1..10 { }',
       \ '        x = (a ? b : c);',
+      \ 'metadata monitor Stage.score at 9,9 100x24 minimized;',
+      \ 'stage: rotation=all, video=on-flipped, tempo=120;',
       \ ]
 
 " (line, snippet, expected group)
@@ -59,7 +61,9 @@ let s:expect = [
       \ [4, 'name=', 'jswTargetKey'],
       \ [4, '"Empty"', 'jswString'],
       \ [5, 'metadata', 'jswDeclaration'],
-      \ [5, 'slider', 'jswMetadata'],
+      \ [5, 'slider', 'jswMonitorMode'],
+      \ [5, 'shown', 'jswMetadataFlag'],
+      \ [5, 'range', 'jswMetadata'],
       \ [5, 'Stage', 'jswNamespace'],
       \ [6, 'void', 'jswType'],
       \ [6, 'go(', 'jswFunctionCall'],
@@ -98,6 +102,12 @@ let s:expect = [
       \ [25, 'delete(', 'jswFunctionCall'],
       \ [26, 'in', 'jswRepeat'],
       \ [27, '?', 'jswNoTernary'],
+      \ [28, 'monitor', 'jswMetadataVerb'],
+      \ [28, 'minimized', 'jswMetadataFlag'],
+      \ [29, 'rotation', 'jswTargetKey'],
+      \ [29, 'all', 'jswTargetValue'],
+      \ [29, 'on-flipped', 'jswTargetValue'],
+      \ [29, 'tempo', 'jswTargetKey'],
       \ ]
 
 call setline(1, s:lines)

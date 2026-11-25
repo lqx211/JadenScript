@@ -23,13 +23,18 @@ sys.path.insert(0, str(ROOT / "tools"))
 from jswc.extensions import highlight_members, highlight_namespaces  # noqa: E402
 from jswc.keywords import (  # noqa: E402
     BUILTIN_NAMESPACES,
+    FLAG_VALUES,
     KEYWORDS,
     LITERALS,
+    METADATA_ANNOTATIONS,
+    METADATA_FLAGS,
     METADATA_WORDS,
     MODIFIERS,
     MONITOR_MODES,
     RESERVED,
+    ROTATION_VALUES,
     TYPES,
+    VIDEO_VALUES,
 )
 from gen_tm_grammar import BUILTIN_FUNCTIONS  # noqa: E402
 
@@ -62,7 +67,12 @@ GENERIC_KEYWORDS = (
 )
 
 #: Monitoring and metadata words: colours for the words the decompiler writes.
-METADATA_KEYWORD = set(MONITOR_MODES) | set(METADATA_WORDS)
+#: Split by type so a colourscheme can tell a mode (``slider``) from the
+#: monitor's state (``shown``) from the layout words (``at``/``range``).
+METADATA_KEYWORD = set(METADATA_WORDS)
+METADATA_MODES = set(MONITOR_MODES)
+METADATA_STATES = set(METADATA_FLAGS)
+METADATA_VERBS = set(METADATA_ANNOTATIONS)
 #: What a ``// comment`` annotation may start with.
 ANNOTATION_WORDS = (
     "proccode", "receiver at", "hook:", "monitor", "watch", "comment",
@@ -191,10 +201,22 @@ def syntax_file() -> str:
         "",
         '" -- metadata lines: ``stage:``, ``Sprite:``, ``Name: name="..."`` -',
         r"syn region jswMetadataLine matchgroup=jswDeclaration start=/^\s*metadata\>/ end=/;/ oneline"
-        r" contains=jswMetadata,jswTarget,jswTargetKey,jswString,jswChar,jswNumber,jswComment,jswIdentifier,jswNamespace,jswFunctionCall",
+        r" contains=jswMetadataVerb,jswMonitorMode,jswMetadataFlag,jswMetadata,jswTarget,jswTargetKey,"
+        r"jswTargetValue,jswString,jswChar,jswNumber,jswComment,jswIdentifier,jswNamespace,jswFunctionCall",
         r"syn keyword jswMetadata contained " + _words(METADATA_KEYWORD),
+        r"syn keyword jswMonitorMode contained " + _words(METADATA_MODES),
+        r"syn keyword jswMetadataFlag contained " + _words(METADATA_STATES),
+        r"syn keyword jswMetadataVerb contained " + _words(METADATA_VERBS),
         r"syn match jswTarget /^\s*\h\w*\ze:.\{-}\<name=/",
-        r"syn match jswTargetKey /[(:,]\s*\zs\h\w*\ze=[^=]/",
+        # A lookbehind, not a literal prefix: a match cannot *start* inside an
+        # earlier one, so ``[(:,]\s*\zs`` lost every key after a comma (the
+        # delimiter had already claimed it). ``\@<=`` puts the start on the key.
+        r"syn match jswTargetKey /\%([(:,]\s*\)\@<=\h\w*\ze=[^=]/",
+        '" The value of a target key: ``rotation=all``, ``video=on``, ``show=1``.',
+        '" They are only values in that position - ``all`` is a fine variable name.',
+        r"syn match jswTargetValue /\%(rotation\s*=\s*\)\@<=\%(" + _alternation(ROTATION_VALUES) + r"\)\>/",
+        r"syn match jswTargetValue /\%(video\%(State\)\=\s*=\s*\)\@<=\%(" + _alternation(VIDEO_VALUES) + r"\)\>/",
+        r"syn match jswTargetValue /\%(show\|draggable\)\s*=\s*\zs\%(" + _alternation(FLAG_VALUES) + r"\)\>/",
         "",
         '" -- the words -----------------------------------------------------',
         r"syn match jswTemp /\<_[A-Za-z0-9_$]\+\>/",
@@ -257,7 +279,11 @@ def syntax_file() -> str:
         "hi def link jswFeature PreProc",
         "hi def link jswTarget PreProc",
         "hi def link jswTargetKey Identifier",
+        "hi def link jswTargetValue Constant",
         "hi def link jswMetadata Statement",
+        "hi def link jswMonitorMode Constant",
+        "hi def link jswMetadataFlag Constant",
+        "hi def link jswMetadataVerb Keyword",
         "",
         "let b:current_syntax = 'jsw'",
         "",

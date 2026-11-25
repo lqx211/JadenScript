@@ -23,6 +23,14 @@ function check(name, ok, detail) {
   console.error(`FAIL ${name}${detail ? " — " + detail : ""}`);
 }
 
+/** Hover the word after the `|` marker. */
+function hoverAt(source) {
+  const offset = source.indexOf("|");
+  const text = source.slice(0, offset) + source.slice(offset + 1);
+  const info = engine.provideHover(text, offset, data);
+  return info ? info.contents.value : "";
+}
+
 /** Complete at the marker ``|`` in `source` (or at its end). */
 function completeAt(source) {
   const offset = source.includes("|") ? source.indexOf("|") : source.length;
@@ -104,17 +112,53 @@ check("annotation completion", completeAt("// proc").includes("proccode"));
 check("annotation receiver", completeAt("// receiv").includes("receiver at"));
 check("no keywords in comments", !completeAt("// pub").includes("public"));
 
-// metadata: the monitor modes, then the structural words
+// metadata: the forms, the monitor modes, then the structural words
+check("metadata form pos", completeAt("metadata p").includes("pos"));
+check("metadata form monitor", completeAt("metadata mon").includes("monitor"));
+check("metadata form comment", completeAt("metadata com").includes("comment"));
 check("metadata mode", completeAt("metadata l").includes("list"));
 check("metadata mode large", completeAt("metadata lar").includes("large"));
+check("metadata mode largeReadout", completeAt("metadata largeR").includes("largeReadout"));
 check("metadata words", completeAt("metadata list Stage.x ").includes("at"));
 check("metadata hidden", completeAt("metadata list Stage.x h").includes("hidden"));
+check("metadata state", completeAt("metadata note Stage at 1,2 3x4 m").includes("minimized"));
 check("metadata pos", completeAt("metadata Stage.tick p").includes("pos"));
+check("pos is not offered after a target",
+  !completeAt("metadata monitor Stage.x po").includes("pos"), "the target already decided the form");
 
-// stage:/sprite property keys, with `=` already typed
+// a typed value only after its own key
+check("rotation values", completeAt("stage: rotation=").includes("leftright"));
+check("video values", completeAt("stage: video=").includes("on-flipped"));
+check("show is a flag", completeAt("Empty: show=").includes("1"));
+check("rotation values are not offered for show",
+  !completeAt("Empty: show=").includes("leftright"));
+
+// keySim: the dropdown arguments are the hint -- a *key* name, a mouse
+// button, or the and-wait item. `press("space")` alone compiles to " ".
+check("keysim key", completeAt('keySim.press("').includes("up arrow"));
+check("keysim key prefix", completeAt('keySim.press("sp').length === 1);
+check("keysim hold", completeAt('keySim.hold("').includes("space"));
+check("keysim release", completeAt('keySim.release("').includes("enter"));
+check("keysim bare key", completeAt("keySim.press(").includes("space"));
+check("keysim buttons", completeAt("keySim.holdButton(").includes("2"));
+check("keysim and-wait", completeAt('keySim.click(0, 1, 2, 0.5, "').includes("and wait"));
+check("keysim does not hijack other calls", !completeAt('Looks.say("').includes("up arrow"));
+check("keysim key hover", hoverAt('keySim.press("sp|ace", 0.2);').includes('\" \"'));
+check("keysim arrow hover", hoverAt('keySim.hold("up |arrow");').includes("ArrowUp"));
+
+// stage:/sprite property keys, with `=` already typed, filtered by target
 check("stage keys", completeAt("stage: cos").includes("costume"));
 check("sprite keys", completeAt("Empty: nam").includes("namespace"));
+check("sprite keys exclude stage-only keys",
+  !completeAt("Empty: temp").includes("tempo"), "tempo is a Stage property");
+check("stage keys exclude sprite-only keys",
+  !completeAt("stage: x").includes("x"), "the Stage has no position");
 check("target keys are not offered in code", !completeAt("    cos").includes("costume"));
+
+// the `// Sprite:` comment carries the same keys
+check("sprite comment keys", completeAt("// Sprite: main (0,0) siz").includes("size"));
+check("sprite comment excludes position", !completeAt("// Sprite: main (0,0) x").includes("x"));
+check("stage comment keys", completeAt("// Stage: temp").includes("tempo"));
 
 // asset annotations inside the import comment
 check("asset keys", completeAt("// costume cen").includes("centerx"));
@@ -147,6 +191,24 @@ const hover = engine.provideHover(hoverText, hoverText.indexOf("setPenSize") + 2
 check("hover on member", hover && hover.contents.value.includes("setPenSize"), JSON.stringify(hover));
 const hoverKw = engine.provideHover("if (a) {}", 1, data);
 check("hover on keyword", hoverKw && hoverKw.contents.value.includes("**if**"), JSON.stringify(hoverKw));
+
+
+// hover: the whole metadata grammar on the keyword, then the type of each word
+const metaHover = hoverAt("|metadata slider Stage.x at 0,0 10x10 shown;");
+for (const needle of ["pos", "monitor", "slider", "comment", "type", "mode", "layout"]) {
+  check(`metadata hover mentions ${needle}`, metaHover.toLowerCase().includes(needle), metaHover.slice(0, 120));
+}
+check("hover on a mode", hoverAt("metadata sli|der Stage.x at 0,0 10x10 shown;").includes("metadata ·"));
+check("hover on pos", hoverAt("metadata Stage.tick po|s 1,2;").includes("pos <x>,<y>"));
+check("hover on a flag", hoverAt("metadata list Stage.x at 0,0 10x10 sh|own;").includes("monitor state"));
+check("hover on a target key type",
+  hoverAt("Empty: si|ze=100;").includes("number"), "a key hover names its type");
+check("hover on a stage key",
+  hoverAt("stage: temp|o=120;").includes("stage"), "tempo is a Stage property");
+check("hover on a rotation value", hoverAt("Sprite: name=\"x\", rotation=a|ll;").includes("rotation=all"));
+check("hover on a flag value", hoverAt("Empty: show=|1;").includes("show=1"));
+check("hover on a dashed value", hoverAt("stage: videoState=on-|flipped;").includes("on-flipped"));
+check("no hover for a plain word", hoverAt("x = value|s;") === "", "prose is not metadata");
 
 // Real files: every `Namespace.member` the compiler accepts must be offered by
 // completion right after the dot, so the data cannot drift from the corpus.

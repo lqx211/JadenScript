@@ -10,6 +10,9 @@
       "include": "#comments"
     },
     {
+      "include": "#keysim"
+    },
+    {
       "include": "#strings"
     },
     {
@@ -123,6 +126,61 @@
     "comments": {
       "patterns": [
         {
+          "name": "comment.line.double-slash.jsw",
+          "begin": "//\\s*(?=(?:Sprite:|Stage:))",
+          "end": "$",
+          "patterns": [
+            {
+              "name": "keyword.control.directive.jsw",
+              "match": "(?:\\bSprite:|\\bStage\\b)"
+            },
+            {
+              "comment": "rotation=all|leftright|none",
+              "match": "\\b(rotation)\\s*=\\s*(\\b(?:leftright|none|all)\\b)",
+              "captures": {
+                "1": {
+                  "name": "keyword.other.target-key.jsw"
+                },
+                "2": {
+                  "name": "constant.language.rotation-style.jsw"
+                }
+              }
+            },
+            {
+              "comment": "video=on|off|on-flipped",
+              "match": "\\b(video(?:State)?)\\s*=\\s*(\\b(?:on-flipped|off|on)\\b)",
+              "captures": {
+                "1": {
+                  "name": "keyword.other.target-key.jsw"
+                },
+                "2": {
+                  "name": "constant.language.video-state.jsw"
+                }
+              }
+            },
+            {
+              "comment": "show=0|1, draggable=0|1",
+              "match": "\\b(show|draggable)\\s*=\\s*(\\b(?:false|true|0|1)\\b)",
+              "captures": {
+                "1": {
+                  "name": "keyword.other.target-key.jsw"
+                },
+                "2": {
+                  "name": "constant.language.metadata-flag.jsw"
+                }
+              }
+            },
+            {
+              "name": "keyword.other.target-key.jsw",
+              "match": "\\b(?:videoTransparency|videoState|direction|draggable|namespace|rotation|costume|volume|layer|tempo|video|name|show|size|ns|x|y)\\b(?=\\s*=)"
+            },
+            {
+              "name": "constant.numeric.jsw",
+              "match": "-?\\b\\d+(?:\\.\\d+)?\\b"
+            }
+          ]
+        },
+        {
           "comment": "A decompiler annotation: the words carry meaning, so they get their own scope.",
           "name": "comment.line.double-slash.jsw",
           "begin": "//",
@@ -167,6 +225,31 @@
           "name": "comment.block.jsw",
           "begin": "/\\*",
           "end": "\\*/"
+        }
+      ]
+    },
+    "keysim": {
+      "comment": "keySim.press(\"space\", 0.2) — the key argument is a name the extension compares against KeyboardEvent.key.",
+      "patterns": [
+        {
+          "match": "(\\b(keySim)(\\s*\\.\\s*)(press|pressAndWait|hold|release)(\\s*\\(\\s*))(\\\"(?:[^\\\"\\\\]|\\\\.)*\\\"|'(?:[^'\\\\]|\\\\.)*')",
+          "captures": {
+            "2": {
+              "name": "support.class.builtin.jsw"
+            },
+            "3": {
+              "name": "punctuation.accessor.jsw"
+            },
+            "4": {
+              "name": "support.function.extension.jsw"
+            },
+            "5": {
+              "name": "punctuation.section.parens.jsw"
+            },
+            "6": {
+              "name": "string.quoted.keysim-key.jsw"
+            }
+          }
         }
       ]
     },
@@ -349,7 +432,7 @@
           "patterns": [
             {
               "name": "keyword.other.target-key.jsw",
-              "match": "\\b(?:videoTransparency|direction|draggable|namespace|rotation|costume|volume|layer|tempo|video|name|show|size|ns|x|y)\\b(?=\\s*=)"
+              "match": "\\b(?:videoTransparency|videoState|direction|draggable|namespace|rotation|costume|volume|layer|tempo|video|name|show|size|ns|x|y)\\b(?=\\s*=)"
             },
             {
               "name": "string.quoted.double.jsw",
@@ -464,14 +547,24 @@
           },
           "patterns": [
             {
-              "comment": "list / large / slider / normal / default",
-              "name": "constant.language.monitor-mode.jsw",
-              "match": "\\b(?:largeReadout|default|normal|slider|large|list)\\b"
+              "comment": "monitor / watch / comment / note - the annotation that opens the line. The parser folds case here, so SLIDER compiles just like slider.",
+              "name": "keyword.other.metadata-annotation.jsw",
+              "match": "(?i:\\b(?:comment|monitor|watch|note)\\b)"
             },
             {
-              "comment": "pos / at / hidden / shown / range / watchers",
+              "comment": "list / large / slider / normal / default",
+              "name": "constant.language.monitor-mode.jsw",
+              "match": "(?i:\\b(?:largeReadout|default|normal|slider|large|list)\\b)"
+            },
+            {
+              "comment": "shown / hidden / minimized - the monitor's state, not its layout.",
+              "name": "constant.language.metadata-flag.jsw",
+              "match": "\\b(?:minimized|hidden|shown)\\b"
+            },
+            {
+              "comment": "pos / at / range / watchers / discrete …",
               "name": "keyword.other.metadata.jsw",
-              "match": "\\b(?:continuous|discrete|watchers|hidden|range|shown|max|min|pos|at)\\b"
+              "match": "\\b(?:continuous|discrete|watchers|range|max|min|pos|at)\\b"
             },
             {
               "comment": "Stage.Lyrics.zh - the annotated target.",
@@ -537,9 +630,45 @@
           },
           "patterns": [
             {
+              "comment": "rotation=all|leftright|none",
+              "match": "\\b(rotation)\\s*=\\s*(\\b(?:leftright|none|all)\\b)",
+              "captures": {
+                "1": {
+                  "name": "keyword.other.target-key.jsw"
+                },
+                "2": {
+                  "name": "constant.language.rotation-style.jsw"
+                }
+              }
+            },
+            {
+              "comment": "video=on|off|on-flipped",
+              "match": "\\b(video(?:State)?)\\s*=\\s*(\\b(?:on-flipped|off|on)\\b)",
+              "captures": {
+                "1": {
+                  "name": "keyword.other.target-key.jsw"
+                },
+                "2": {
+                  "name": "constant.language.video-state.jsw"
+                }
+              }
+            },
+            {
+              "comment": "show=0|1, draggable=0|1",
+              "match": "\\b(show|draggable)\\s*=\\s*(\\b(?:false|true|0|1)\\b)",
+              "captures": {
+                "1": {
+                  "name": "keyword.other.target-key.jsw"
+                },
+                "2": {
+                  "name": "constant.language.metadata-flag.jsw"
+                }
+              }
+            },
+            {
               "comment": "costume / volume / layer / tempo / video …",
               "name": "keyword.other.target-key.jsw",
-              "match": "\\b(?:videoTransparency|direction|draggable|namespace|rotation|costume|volume|layer|tempo|video|name|show|size|ns|x|y)\\b(?=\\s*=)"
+              "match": "\\b(?:videoTransparency|videoState|direction|draggable|namespace|rotation|costume|volume|layer|tempo|video|name|show|size|ns|x|y)\\b(?=\\s*=)"
             },
             {
               "name": "string.quoted.double.jsw",

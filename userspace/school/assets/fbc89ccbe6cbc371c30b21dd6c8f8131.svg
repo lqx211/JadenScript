@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 200 200" height="200" width="200">
+<path fill="#FEFA4D" d="M121 109L129 93L79 83L71 99L121 109Z"></path>
+<path fill="#CCC93E" d="M71 103L121 113V109L71 99V103Z"></path>
+<path fill="#807D27" d="M121 113L129 97V93L121 109V113Z"></path>
+<path fill="#997A22" d="M121 117L129 101V97L121 113V117Z"></path>
+<path fill="#D2A730" d="M81 109L121 117V113L71 103L81 105V109Z"></path>
+<path fill="#AA7B25" d="M81 109L91 111V107L71 103L81 105V109Z"></path>
+<path fill="#AA7B25" d="M101 113L111 115V111L101 109V113Z"></path>
+<path fill="#AA7B25" d="M129 101L121 117V113L129 97V101Z"></path>
+<path fill="#D2A730" d="M71 107L81 109V105L71 103V107Z"></path>
+</svg>

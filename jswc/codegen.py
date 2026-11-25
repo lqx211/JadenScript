@@ -516,6 +516,17 @@ class Codegen:
                 # inside the sprite stays local.
                 self.class_qualified[(cls.name, f.qualified)] = f
                 self.funcs_by_qualified.setdefault(f.qualified, (cls.name, f))
+        # A function written outside a class belongs to the Stage, and is called
+        # from another one of them (`FPS(1)`) -- so the Stage's own procedures
+        # have to be in the same table. Without this every call between two
+        # top-level functions was "unknown function" (E0036).
+        stage = self.program.stage
+        if stage is not None:
+            self.class_funcs.setdefault("Stage", {})
+            for f in stage.funcs:
+                self.class_funcs["Stage"].setdefault(f.proccode, f)
+                self.class_qualified.setdefault(("Stage", f.qualified), f)
+                self.funcs_by_qualified.setdefault(f.qualified, ("Stage", f))
         # Class name -> the target name in the project. Declarations replaced
         # the ``// Sprite:`` comment, so a sprite called ``obj loader`` is
         # declared as ``obj_loader: name="obj loader"``.
@@ -1305,6 +1316,14 @@ class Codegen:
                     f"metadata {key!r} takes all, leftright or none, not {text!r}",
                 )
                 return False
+        elif kind == "video":
+            if text.strip().strip("\"'").lower() not in _VIDEO_STATES:
+                self.diag(
+                    node,
+                    "E0079",
+                    f"metadata {key!r} takes on, off or on-flipped, not {text!r}",
+                )
+                return False
         return True
 
     def _sprite_metadata(self, cls: A.ClassDecl) -> dict:
@@ -1603,7 +1622,12 @@ class Codegen:
         return "true" if warp else "false"
 
     def _emit_func(self, target: Target, cls: A.ClassDecl, fn: A.FuncDecl) -> None:
-        self.class_name = cls.name
+        # Name resolution follows the *target*, not the class declaration that
+        # happens to be in hand: a `stage { }` script is given the first class
+        # only to name the sprite for state lookup, and taking its name here
+        # made every call between two Stage functions "unknown function"
+        # (E0036) -- and every bare variable a lookup in that other sprite.
+        self.class_name = "Stage" if target is self.project.stage else cls.name
         self.scope = Scope(params=set(fn.params))
         annotation = fn.annotation or ""
         placed = _AT_RE.search(annotation)
@@ -4311,10 +4335,19 @@ class Codegen:
     def _as_bool(self, value: object, negate: bool = False) -> object:
         if isinstance(value, Lit):
             truthy = value.value not in ("", "0", "false", "False")
-            block = self._new("operator_equals")
-            block.set_input("OPERAND1", Lit(O.TEXT, "1" if truthy else "0"))
-            block.set_input("OPERAND2", Lit(O.TEXT, "0" if truthy else "1"))
-            ref: object = Ref(block)
+            if negate:
+                truthy = not truthy
+                negate = False
+            # Scratch has no boolean literal, and `= ` is the only comparison a
+            # Boolean slot accepts. ``not (<1 = 0>)`` is the constant true and
+            # ``not (<0 = 0>)`` the constant false -- the other way round
+            # (``<1 = 0>``) reads as false and made ``if (true)`` never run.
+            equals = self._new("operator_equals")
+            equals.set_input("OPERAND1", Lit(O.TEXT, "1" if truthy else "0"))
+            equals.set_input("OPERAND2", Lit(O.TEXT, "0"))
+            test = self._new("operator_not")
+            test.set_input("OPERAND", Ref(equals))
+            return Ref(test)
         elif isinstance(value, Ref):
             if (value.block.opcode in BOOLEAN_REPORTERS
                     or is_extension_opcode(value.block.opcode)):
@@ -4614,10 +4647,14 @@ _STAGE_META_KEYS = {
     "volume": "number",
     "layer": "integer",
     "tempo": "number",
-    "video": "text",
-    "videoState": "text",
+    "video": "video",
+    "videoState": "video",
     "videoTransparency": "number",
 }
+
+#: The only values the VM's ``videoState`` understands. A project with anything
+#: else carries a state the camera blocks cannot act on.
+_VIDEO_STATES = {"on", "off", "on-flipped"}
 
 _ROTATION_STYLES = {
     "all": "all around",

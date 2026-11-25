@@ -179,8 +179,11 @@ _alias("console", "logTimer", "Timerlog", ["string"])
 # -- Runtime (runtimeoptions) ----------------------------------------------
 _alias("Runtime", "turboMode", "getEnabled", thing="turbo mode")
 _alias("Runtime", "isTurboMode", "getEnabled", thing="turbo mode")
-_alias("Runtime", "framerateLimit", "getFramerate", ["fps"])
-_alias("Runtime", "cloneLimit", "getCloneLimit", ["limit"])
+# Both of these blocks read a value; they take no argument at all, so the
+# alias must not either -- declaring ``fps``/``limit`` turned every
+# ``Runtime.framerateLimit()`` in a source into "takes 1 argument(s), not 0".
+_alias("Runtime", "framerateLimit", "getFramerate")
+_alias("Runtime", "cloneLimit", "getCloneLimit")
 _alias("Runtime", "stageWidth", "getDimension", dimension="width")
 _alias("Runtime", "stageHeight", "getDimension", dimension="height")
 _alias("Runtime", "compilerEnabled", "getEnabled", thing="compiler")
@@ -253,8 +256,12 @@ _alias("TurboWarp", "getButtonIsDown", "getButtonIsDown", ["MOUSE_BUTTON"], cano
 # `click mouse button at` -- and it takes a menu for the button. These aliases
 # are the same blocks with the button folded into the name, which is how the
 # call reads: `keySim.clickLeft(-240, 0)`.
-_alias("keySim", "press", "pressKey", ["KEY", "SECONDS"], AND_WAIT="without waiting")
-_alias("keySim", "pressAndWait", "pressKey", ["KEY", "SECONDS"], AND_WAIT="and wait")
+# `press(key)` is `press(key, 0.1)`: the extension declares `defaultValue:
+# "0.1"` for SECONDS, so a tap needs no duration -- same as `clickLeft(x, y)`.
+_alias("keySim", "press", "pressKey", ["KEY"], optional=["SECONDS"],
+       AND_WAIT="without waiting", SECONDS="0.1")
+_alias("keySim", "pressAndWait", "pressKey", ["KEY"], optional=["SECONDS"],
+       AND_WAIT="and wait", SECONDS="0.1")
 _alias("keySim", "hold", "holdKey", ["KEY"])
 _alias("keySim", "release", "releaseKey", ["KEY"])
 _alias("keySim", "moveTo", "moveMouse", ["X", "Y"])

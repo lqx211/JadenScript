@@ -4,6 +4,7 @@
     python3 tools/serve.py                 # http://localhost:8000/
     python3 tools/serve.py --port 8080
     python3 tools/serve.py --root build
+    python3 tools/serve.py --root tmp --csp packaged   # preview a --html build
 
 TurboWarp loads a project with
 
@@ -57,7 +58,34 @@ TYPES = {
 }
 
 
+#: ``--csp packaged`` — the policy a ``jswc build --html`` file needs.
+#:
+#: A packaged page is not one script: each extension is a ``data:`` URL, and
+#: ``gtm`` injects TensorFlow.js from a CDN and fetches the model from Google.
+#: A host that sends ``script-src 'self'`` makes the page load and do nothing,
+#: with a console error that names the header rather than the build -- so this
+#: flag reproduces the header a real host has to send, to test that it works.
+PACKAGED_CSP = (
+    "default-src 'self'; "
+    "script-src 'self' 'unsafe-inline' 'unsafe-eval' data: blob: "
+    "https://static.cloudflareinsights.com https://www.google.com "
+    "https://www.gstatic.com https://cdn.jsdelivr.net; "
+    "style-src 'self' 'unsafe-inline'; "
+    "img-src 'self' data: blob: https:; media-src 'self' data: blob: https:; "
+    "font-src 'self' data:; "
+    "connect-src 'self' https://cloudflareinsights.com "
+    "https://teachablemachine.withgoogle.com https://storage.googleapis.com "
+    "https://cdn.jsdelivr.net ws: wss:; "
+    "frame-src 'self' blob: https://spessasus.github.io https://www.google.com; "
+    "worker-src 'self' blob:; object-src 'none'; base-uri 'self'; "
+    "form-action 'self'; frame-ancestors 'self'"
+)
+
+
 class Handler(http.server.SimpleHTTPRequestHandler):
+    #: ``--csp packaged``; ``""`` sends no policy at all, which is the default.
+    csp: str = ""
+
     """Static files with the headers a browser needs to fetch them cross-origin."""
 
     def end_headers(self) -> None:
@@ -66,6 +94,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Headers", "*")
         self.send_header("Access-Control-Expose-Headers", "Content-Length, Content-Range")
         self.send_header("Cache-Control", "no-store")
+        if self.csp:
+            self.send_header("Content-Security-Policy", self.csp)
+            self.send_header("Permissions-Policy", "camera=(self), microphone=(self)")
         super().end_headers()
 
     def do_OPTIONS(self) -> None:                # the CORS preflight
@@ -93,13 +124,24 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--port", type=int, default=int(os.environ.get("PORT", 8000)))
     parser.add_argument("--root", default=str(root), help="directory to serve (default: the repository)")
+    parser.add_argument(
+        "--csp",
+        choices=("off", "packaged"),
+        default="off",
+        help="'packaged' sends the Content-Security-Policy a --html build needs, "
+             "so the header a real host will send can be tested here",
+    )
     args = parser.parse_args(argv)
+    if args.csp == "packaged":
+        Handler.csp = PACKAGED_CSP
 
     directory = str(Path(args.root).expanduser().resolve())
     handler = functools.partial(Handler, directory=directory)
     with Server(("127.0.0.1", args.port), handler) as httpd:
         print(f"serving {directory}")
         print(f"  http://localhost:{args.port}/")
+        if args.csp != "off":
+            print(f"  csp: {args.csp} (Content-Security-Policy + Permissions-Policy)")
         print("  ctrl-c to stop", flush=True)
         try:
             httpd.serve_forever()

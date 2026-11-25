@@ -81,6 +81,33 @@ class BlockTableTests(unittest.TestCase):
             self.assertIsNotNone(call, name)
             self.assertEqual(call.full_opcode, f"{KEYSIM_EXTENSION}_{name}")
 
+    def test_the_editor_offers_every_key_the_extension_knows(self):
+        """The completion list is generated, but it has to be complete.
+
+        A key the extension accepts and the editor never offers is a hint
+        nobody can find; a key the editor offers and the compiler rejects is
+        worse, because it compiles to a block that can never fire.
+        """
+        data = json.loads((ROOT / "vscode-jsw" / "data" / "jsw.json").read_text("utf-8"))
+        offered = {entry["label"]: entry["value"] for entry in data["keysimKeys"]}
+        for label, value in KEYSIM_KEY_LABELS.items():
+            with self.subTest(key=label):
+                self.assertEqual(offered.get(label), value)
+        for value in KEYSIM_KEYS:
+            if value == " ":
+                self.assertEqual(offered.get("space"), " ")  # spelled as the name
+                continue
+            with self.subTest(key=value):
+                self.assertIn(value, offered.values())
+        self.assertEqual(
+            {entry["label"] for entry in data["keysimButtons"]},
+            set(KEYSIM_BLOCKS[KEYSIM_EXTENSION]["menus"]["BUTTONS"]),
+        )
+        self.assertEqual(
+            {entry["label"] for entry in data["keysimWait"]},
+            set(KEYSIM_BLOCKS[KEYSIM_EXTENSION]["menus"]["AND_WAIT"]),
+        )
+
 
 class AliasTests(unittest.TestCase):
     def test_the_friendly_names_are_the_same_blocks(self):
@@ -120,8 +147,18 @@ class AliasTests(unittest.TestCase):
         self.assertNotIn("SECONDS", long.values)
         self.assertIsNone(extensions.resolve("keySim", "clickMiddle", 4))
 
+    def test_a_press_takes_an_optional_duration(self):
+        """`press(key)` is `press(key, 0.1)` -- the extension's own default."""
+        tap = extensions.resolve("keySim", "press", 1)
+        self.assertEqual(tap.values["SECONDS"], "0.1")
+        self.assertEqual(tap.values["AND_WAIT"], "without waiting")
+        held = extensions.resolve("keySim", "pressAndWait", 2)
+        self.assertNotIn("SECONDS", held.values)
+        self.assertEqual(held.values["AND_WAIT"], "and wait")
+        self.assertIsNone(extensions.resolve("keySim", "press", 3))
+
     def test_an_alias_rejects_the_wrong_number_of_arguments(self):
-        self.assertIsNone(extensions.resolve("keySim", "press", 1))
+        self.assertIsNone(extensions.resolve("keySim", "hold", 0))
         self.assertIsNone(extensions.resolve("JSON", "isArray", 2))
 
 
@@ -162,10 +199,10 @@ class CompileTests(unittest.TestCase):
         self.assertFalse([d for d in codegen.diagnostics if "W0034" in d])
 
     def test_the_wrong_arity_names_the_form_that_fits(self):
-        codegen, _ = compile_source("class a { void f(){ keySim.press(1); } }")
+        codegen, _ = compile_source("class a { void f(){ keySim.hold(); } }")
         messages = [d for d in codegen.diagnostics if "E0076" in d]
         self.assertTrue(messages, codegen.diagnostics)
-        self.assertIn("takes 2 argument(s), not 1", messages[0])
+        self.assertIn("takes 1 argument(s), not 0", messages[0])
 
     def test_a_command_alias_suggests_the_longer_name(self):
         # `clickMiddle` is the 0.1 s form; the duration form is `clickLeft`'s

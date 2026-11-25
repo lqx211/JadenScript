@@ -14,7 +14,20 @@ import sys
 import unittest
 from pathlib import Path
 
-from jswc.keywords import ALL_KEYWORDS, BUILTIN_NAMESPACES, FEATURES, RESERVED
+from jswc.keywords import (
+    ALL_KEYWORDS,
+    BUILTIN_NAMESPACES,
+    FEATURES,
+    METADATA_ANNOTATIONS,
+    METADATA_FLAGS,
+    METADATA_WORDS,
+    MONITOR_MODES,
+    RESERVED,
+    ROTATION_VALUES,
+    TARGET_KEYS,
+    TARGET_KEY_SCOPES,
+    TARGET_KEY_TYPES,
+)
 from jswc.lexer import tokenize
 from jswc.parser import Parser
 
@@ -234,6 +247,90 @@ class KeywordCoverageTests(unittest.TestCase):
 
 
 
+class MetadataVocabularyTests(unittest.TestCase):
+    """One vocabulary, three readers: the grammar, the data file, the compiler.
+
+    ``metadata`` has its own word sets in ``jswc.keywords``; the highlighters and
+    the editor data are both generated from them, so a word that compiles must
+    never end up unhighlighted, uncompleted, or documented as another type.
+    """
+
+    def scope_for_metadata_word(self, word: str) -> set[str]:
+        return scopes_for(f"metadata list Stage.x at 0,0 0x0 {word};", word)
+
+    def test_every_metadata_word_is_scoped(self):
+        for word in sorted(METADATA_ANNOTATIONS | MONITOR_MODES | METADATA_WORDS
+                           | METADATA_FLAGS):
+            with self.subTest(word=word):
+                self.assertTrue(
+                    self.scope_for_metadata_word(word),
+                    f"{word!r} compiles but has no scope",
+                )
+
+    def test_every_target_key_and_value_is_scoped(self):
+        for key in sorted(TARGET_KEYS):
+            with self.subTest(key=key):
+                self.assertIn(
+                    "keyword.other.target-key.jsw",
+                    scopes_for(f"stage: {key}=1;", key),
+                )
+        for word, scope in (
+            ("all", "constant.language.rotation-style.jsw"),
+            ("leftright", "constant.language.rotation-style.jsw"),
+            ("none", "constant.language.rotation-style.jsw"),
+            ("on", "constant.language.video-state.jsw"),
+            ("off", "constant.language.video-state.jsw"),
+            ("on-flipped", "constant.language.video-state.jsw"),
+            ("1", "constant.language.metadata-flag.jsw"),
+            ("0", "constant.language.metadata-flag.jsw"),
+        ):
+            key = "rotation" if scope.endswith("rotation-style.jsw") else (
+                "video" if scope.endswith("video-state.jsw") else "show"
+            )
+            with self.subTest(value=word):
+                self.assertIn(scope, scopes_for(f"Sprite: name=\"x\", {key}={word};", word))
+
+    def test_the_compiler_and_the_editor_agree_on_the_types(self):
+        from jswc.codegen import _ROTATION_STYLES, _SPRITE_META_KEYS, _STAGE_META_KEYS
+
+        editor = TARGET_KEY_TYPES
+        self.assertEqual(set(editor), set(TARGET_KEYS))
+        self.assertEqual(set(TARGET_KEY_SCOPES), set(TARGET_KEYS))
+        for key, kind in _SPRITE_META_KEYS.items():
+            with self.subTest(key=key):
+                self.assertEqual(editor[key], kind, "sprite key type drifted")
+                self.assertIn(TARGET_KEY_SCOPES[key], ("sprite", "both"))
+        for key, kind in _STAGE_META_KEYS.items():
+            with self.subTest(key=key):
+                self.assertEqual(editor[key], kind, "stage key type drifted")
+                self.assertIn(TARGET_KEY_SCOPES[key], ("stage", "both"))
+        self.assertEqual(set(_ROTATION_STYLES) & set(ROTATION_VALUES), set(ROTATION_VALUES))
+
+    def test_the_editor_data_carries_every_type(self):
+        import json as _json
+
+        data = _json.loads(
+            (ROOT / "vscode-jsw" / "data" / "jsw.json").read_text(encoding="utf-8")
+        )
+        keys = {entry["label"]: entry for entry in data["targetKeys"]}
+        self.assertEqual(set(keys), set(TARGET_KEYS))
+        for key, kind in TARGET_KEY_TYPES.items():
+            with self.subTest(key=key):
+                self.assertEqual(keys[key]["type"], kind)
+                self.assertEqual(keys[key]["scope"], TARGET_KEY_SCOPES[key])
+                self.assertIn(kind, keys[key]["detail"])
+        labels = {form["label"] for form in data["metadataForms"]}
+        self.assertTrue(set(MONITOR_MODES) <= labels | {
+            mode["label"] for mode in data["monitorModes"]
+        })
+        self.assertEqual(labels, set(METADATA_FORM_DOCS_NAMES))
+
+
+#: The forms the hover advertises: every way a metadata line can be written.
+METADATA_FORM_DOCS_NAMES = {"pos", "monitor", "watch", "slider", "list", "large",
+                            "comment", "note"}
+
+
 class OrderingTests(unittest.TestCase):
     """Rules are tried in order, so the specific one has to come first."""
 
@@ -330,10 +427,30 @@ class ConstructTests(unittest.TestCase):
         ("metadata list Stage.x at 0,0 0x0 hidden;", "list", "constant.language.monitor-mode.jsw"),
         ("metadata large Stage.x at 0,0 0x0 hidden;", "large", "constant.language.monitor-mode.jsw"),
         ("metadata list Stage.x at 0,0 0x0 hidden;", "at", "keyword.other.metadata.jsw"),
-        ("metadata list Stage.x at 0,0 0x0 hidden;", "hidden", "keyword.other.metadata.jsw"),
+        ("metadata list Stage.x at 0,0 0x0 hidden;", "hidden",
+         "constant.language.metadata-flag.jsw"),
         ("metadata Stage.tick pos 1,2;", "pos", "keyword.other.metadata.jsw"),
         ("metadata list Stage.Lyrics.zh at 5,5 0x0 hidden;", "Stage.Lyrics.zh",
          "variable.other.member.jsw"),
+        # the statement opens with one of four annotations
+        ("metadata monitor Stage.x at 0,0 0x0 shown;", "monitor",
+         "keyword.other.metadata-annotation.jsw"),
+        ("metadata watch Stage.x at 0,0 0x0 shown;", "watch",
+         "keyword.other.metadata-annotation.jsw"),
+        ("metadata comment Stage at 1,2 3x4: \"hi\";", "comment",
+         "keyword.other.metadata-annotation.jsw"),
+        ("metadata note Stage at 1,2 3x4 minimized: \"hi\";", "minimized",
+         "constant.language.metadata-flag.jsw"),
+        ("metadata slider Stage.x at 0,0 0x0 shown range 0..10 discrete;", "discrete",
+         "keyword.other.metadata.jsw"),
+        # target metadata: the value types, only right after their own key
+        ("Sprite: name=\"x\", rotation=all;", "all", "constant.language.rotation-style.jsw"),
+        ("stage: video=on-flipped;", "on-flipped", "constant.language.video-state.jsw"),
+        ("Sprite: name=\"x\", show=1;", "1", "constant.language.metadata-flag.jsw"),
+        ("stage: videoState=off;", "videoState", "keyword.other.target-key.jsw"),
+        # the comment spelling carries the same keys
+        ("// Sprite: main (12,34) size=100 ns=Np", "size", "keyword.other.target-key.jsw"),
+        ("// Stage: costume=0, tempo=120;", "tempo", "keyword.other.target-key.jsw"),
         # variables
         ('    public c_en = "hi";', "c_en", "variable.other.readwrite.jsw"),
         # calls: bare custom block, underscore-prefixed, extension method

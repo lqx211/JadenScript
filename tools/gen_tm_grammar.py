@@ -27,14 +27,19 @@ from jswc.keywords import (  # noqa: E402
     ASSET_COMMENT_WORDS,
     BUILTIN_NAMESPACES,
     FEATURES,
+    FLAG_VALUES,
     KEYWORDS,
     LITERALS,
+    METADATA_ANNOTATIONS,
+    METADATA_FLAGS,
     METADATA_WORDS,
     MODIFIERS,
     MONITOR_MODES,
     RESERVED,
+    ROTATION_VALUES,
     TARGET_KEYS,
     TYPES,
+    VIDEO_VALUES,
 )
 
 GRAMMAR_PATH = ROOT / "vscode-jsw" / "syntaxes" / "jsw.tmLanguage.json"
@@ -91,6 +96,61 @@ def _word_re(words) -> str:
     return r"\b(?:" + "|".join(sorted(words, key=lambda w: (-len(w), w))) + r")\b"
 
 
+def _target_value_rules() -> list:
+    """``rotation=all``, ``video=on``, ``show=1`` — the value of a target key.
+
+    These are matched as a ``key=value`` pair rather than as keywords: ``all``
+    is a fine variable name and ``on`` is a fine word, so the value only reads
+    as a value in that one position.
+    """
+
+    def pair(key: str, values, comment: str, scope: str) -> dict:
+        return {
+            "comment": comment,
+            "match": rf"\b({key})\s*=\s*(" + _word_re(values) + ")",
+            "captures": {
+                "1": {"name": "keyword.other.target-key.jsw"},
+                "2": {"name": scope},
+            },
+        }
+
+    return [
+        pair("rotation", ROTATION_VALUES, "rotation=all|leftright|none",
+             "constant.language.rotation-style.jsw"),
+        pair("video(?:State)?", VIDEO_VALUES, "video=on|off|on-flipped",
+             "constant.language.video-state.jsw"),
+        pair("show|draggable", FLAG_VALUES, "show=0|1, draggable=0|1",
+             "constant.language.metadata-flag.jsw"),
+    ]
+
+
+def _sprite_comment_rule() -> dict:
+    """``// Sprite: name (12,34) size=100 ns=Np`` — the comment spelling.
+
+    The decompiler writes target metadata as a comment, so the keys and their
+    values have to read the same there as on a ``name: …;`` line. Only lines
+    that open with the tag get this rule; prose stays prose.
+    """
+    return {
+        "name": "comment.line.double-slash.jsw",
+        # ``Sprite:`` ends in punctuation, so ``\b`` would never match after it.
+        "begin": r"//\s*(?=(?:Sprite:|Stage:))",
+        "end": r"$",
+        "patterns": [
+            {
+                "name": "keyword.control.directive.jsw",
+                "match": _annotation_re({"Sprite:", "Stage"}),
+            },
+            *_target_value_rules(),
+            {
+                "name": "keyword.other.target-key.jsw",
+                "match": _word_re(TARGET_KEYS) + r"(?=\s*=)",
+            },
+            {"name": "constant.numeric.jsw", "match": r"-?\b\d+(?:\.\d+)?\b"},
+        ],
+    }
+
+
 def build_grammar() -> dict:
     return {
         "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
@@ -102,6 +162,9 @@ def build_grammar() -> dict:
         "patterns": [
             {"include": "#directives"},
             {"include": "#comments"},
+            # Before #strings: the key argument of a keySim block is a quoted
+            # string, but it is a key name, not prose.
+            {"include": "#keysim"},
             {"include": "#strings"},
             {"include": "#includes"},
             {"include": "#imports"},
@@ -162,6 +225,7 @@ def build_grammar() -> dict:
             },
             "comments": {
                 "patterns": [
+                    _sprite_comment_rule(),
                     {
                         "comment": "A decompiler annotation: the words carry meaning, so they get their own scope.",
                         "name": "comment.line.double-slash.jsw",
@@ -201,6 +265,28 @@ def build_grammar() -> dict:
                         "end": r"\*/",
                     },
                 ]
+            },
+            "keysim": {
+                "comment": "keySim.press(\"space\", 0.2) — the key argument is a "
+                           "name the extension compares against KeyboardEvent.key.",
+                "patterns": [
+                    {
+                        # Each part is captured so the namespace, the dot, the
+                        # member and the paren read exactly as they do in every
+                        # other call; only the key gets a scope of its own.
+                        "match": (
+                            r"(\b(keySim)(\s*\.\s*)(press|pressAndWait|hold|release)"
+                            r"(\s*\(\s*))(\"(?:[^\"\\]|\\.)*\"|'(?:[^'\\]|\\.)*')"
+                        ),
+                        "captures": {
+                            "2": {"name": "support.class.builtin.jsw"},
+                            "3": {"name": "punctuation.accessor.jsw"},
+                            "4": {"name": "support.function.extension.jsw"},
+                            "5": {"name": "punctuation.section.parens.jsw"},
+                            "6": {"name": "string.quoted.keysim-key.jsw"},
+                        },
+                    }
+                ],
             },
             "strings": {
                 "patterns": [
@@ -402,12 +488,26 @@ def build_grammar() -> dict:
                         "endCaptures": {"0": {"name": "punctuation.terminator.jsw"}},
                         "patterns": [
                             {
-                                "comment": "list / large / slider / normal / default",
-                                "name": "constant.language.monitor-mode.jsw",
-                                "match": _word_re(MONITOR_MODES),
+                                "comment": "monitor / watch / comment / note - the "
+                                           "annotation that opens the line. The "
+                                           "parser folds case here, so SLIDER "
+                                           "compiles just like slider.",
+                                "name": "keyword.other.metadata-annotation.jsw",
+                                "match": r"(?i:" + _word_re(METADATA_ANNOTATIONS) + ")",
                             },
                             {
-                                "comment": "pos / at / hidden / shown / range / watchers",
+                                "comment": "list / large / slider / normal / default",
+                                "name": "constant.language.monitor-mode.jsw",
+                                "match": r"(?i:" + _word_re(MONITOR_MODES) + ")",
+                            },
+                            {
+                                "comment": "shown / hidden / minimized - the monitor's "
+                                           "state, not its layout.",
+                                "name": "constant.language.metadata-flag.jsw",
+                                "match": _word_re(METADATA_FLAGS),
+                            },
+                            {
+                                "comment": "pos / at / range / watchers / discrete …",
                                 "name": "keyword.other.metadata.jsw",
                                 "match": _word_re(METADATA_WORDS),
                             },
@@ -447,6 +547,7 @@ def build_grammar() -> dict:
                         "end": r";|$",
                         "endCaptures": {"0": {"name": "punctuation.terminator.jsw"}},
                         "patterns": [
+                            *_target_value_rules(),
                             {
                                 "comment": "costume / volume / layer / tempo / video …",
                                 "name": "keyword.other.target-key.jsw",

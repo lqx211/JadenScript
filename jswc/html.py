@@ -12,6 +12,12 @@ re-implementation of it. That matters for more than effort:
   ``.sb3`` only carries the URL, and on another computer ``localhost`` is that
   computer, so the editor crashes rather than degrade (docs/GTM.md).
 
+``self_hosted=True`` is for a host that sends a strict
+``Content-Security-Policy``: a ``data:`` script and a CDN are both refused
+there, so the extensions, TensorFlow.js and the model are written next to the
+page and every URL in it is same-origin. See "Hosting the packaged file" in
+docs/CLI.md.
+
 The one thing this module adds on top of the packager is the reachability
 check. The packager *warns* when it cannot fetch an extension and leaves the
 original URL in the HTML, which produces a file that looks packaged and fails
@@ -21,11 +27,14 @@ with the URL and the fix, is worth more than a 1.9 MB file that half works.
 
 from __future__ import annotations
 
+import io
 import json
+import re
 import shutil
 import subprocess
 import urllib.error
 import urllib.request
+import zipfile
 from pathlib import Path
 
 #: The packager's Node API is explicitly unstable across minor releases, so the
@@ -85,9 +94,206 @@ def _hint_for(missing: list[str]) -> str:
     return "\n".join(lines)
 
 
+#: The libraries a packaged page loads at run time, and where they land.
+#: ``@tensorflow/tfjs@1.3.1`` is the version ``gtm`` injects (it is the last one
+#: that still exports ``tf.fromPixels``), and a pose model needs Teachable
+#: Machine's own pose runtime on top of it.
+#: Mirrored with their CDN path, not renamed: `gtm` builds a library URL as
+#: ``<base>@tensorflow/tfjs@1.3.1/dist/tf.min.js``, so the copy has to answer at
+#: exactly that relative path -- the base is the only thing the page changes.
+VENDORED_LIBRARIES = (
+    "@tensorflow/tfjs@1.3.1/dist/tf.min.js",
+    "@teachablemachine/pose@0.8.3/dist/teachablemachine-pose.min.js",
+)
+CDN = "https://cdn.jsdelivr.net/npm/"
+
+#: Pretrained weights a library fetches by absolute URL, keyed by the prefix the
+#: page rewrites at run time (``window.GTM_MIRROR_MAP``). Only a pose model needs
+#: these: the pose runtime loads posenet's own weights from Google.
+MIRROR_PREFIXES = {"https://storage.googleapis.com/tfjs-models/": "lib/tfjs-models/"}
+
+
+def _posenet_files(metadata: dict) -> list[str]:
+    """The posenet base model a pose project's runtime pulls, as CDN paths.
+
+    Derived from the model's own ``modelSettings.posenet``: the runtime builds
+    ``mobilenet/float/<multiplier as 3 digits>/model-stride<stride>.json`` from
+    it, so the mirror has to answer at exactly that path.
+    """
+    settings = (metadata.get("modelSettings") or {}).get("posenet") or {}
+    multiplier = settings.get("multiplier")
+    stride = settings.get("outputStride")
+    if multiplier is None or stride is None:
+        return []
+    folder = f"savedmodel/posenet/mobilenet/float/{round(float(multiplier) * 100):03d}"
+    manifest = f"{folder}/model-stride{int(stride)}.json"
+    files = [manifest]
+    try:
+        document = json.loads(_fetch("https://storage.googleapis.com/tfjs-models/" + manifest))
+    except (urllib.error.URLError, OSError, ValueError):
+        return files
+    for group in document.get("weightsManifest") or []:
+        for relative in group.get("paths") or []:
+            files.append(f"{folder}/{Path(relative).name}")
+    return files
+
+
+#: A Teachable Machine share link anywhere in the project: the model a mirrored
+#: build has to copy. Only literals are found, so a computed URL is reported
+#: rather than silently left pointing at the network.
+_SHARE_LINK = re.compile(
+    r"https://teachablemachine\.withgoogle\.com/models/([A-Za-z0-9_-]+)"
+)
+
+
+def _fetch(url: str, timeout: float = 60.0) -> bytes:
+    request = urllib.request.Request(url, headers={"User-Agent": "jswc-html"})
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        return response.read()
+
+
+def _rewrite_extension_urls(sb3: bytes, mapping: dict[str, str]) -> bytes:
+    """A copy of ``sb3`` with ``extensionURLs`` pointing at ``mapping``.
+
+    The archive itself is left alone -- only ``project.json`` changes -- so the
+    build writes the same ``.sb3`` it would have written anyway, and only the
+    packaged page differs.
+    """
+    source = zipfile.ZipFile(io.BytesIO(sb3))
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as target:
+        for item in source.infolist():
+            payload = source.read(item.filename)
+            if item.filename == "project.json":
+                project = json.loads(payload)
+                urls = project.get("extensionURLs") or {}
+                for key, value in mapping.items():
+                    if key in urls:
+                        urls[key] = value
+                if urls:
+                    project["extensionURLs"] = urls
+                payload = json.dumps(project, separators=(",", ":")).encode("utf-8")
+            target.writestr(item, payload)
+    return buffer.getvalue()
+
+
+def _mirror_model(model_id: str, directory: Path) -> list[Path]:
+    """The three (or more) files of a Teachable Machine model, on disk.
+
+    ``model.json`` names its weight files relative to itself, so they are read
+    out of the manifest instead of being guessed: a sharded export has several.
+    """
+    directory.mkdir(parents=True, exist_ok=True)
+    written: list[Path] = []
+    base = f"https://teachablemachine.withgoogle.com/models/{model_id}/"
+    for name in ("metadata.json", "model.json"):
+        path = directory / name
+        path.write_bytes(_fetch(base + name))
+        written.append(path)
+    manifest = json.loads((directory / "model.json").read_text("utf-8"))
+    for group in manifest.get("weightsManifest") or []:
+        for relative in group.get("paths") or []:
+            name = Path(relative).name
+            path = directory / name
+            path.write_bytes(_fetch(base + name))
+            written.append(path)
+    return written
+
+
+#: The one line in the packaged page that loads an extension. It is the
+#: scaffolding's own call, and it is patched because the VM insists on an
+#: *absolute* URL (`new URL(u)` with no base throws, and the error is "Invalid
+#: extension URL") -- while the whole point of the self-hosted mode is to name
+#: the files relative to the page, so the folder can be moved.
+EXTENSION_LOAD_CALL = "vm.extensionManager.loadExtensionURL(extension);"
+EXTENSION_LOAD_ABSOLUTE = (
+    "vm.extensionManager.loadExtensionURL(new URL(extension, document.baseURI).href);"
+)
+
+
+def _absolutise_extension_urls(page: str) -> str:
+    """Make the page resolve its extension paths against its own location."""
+    if EXTENSION_LOAD_CALL not in page:
+        raise HtmlError(
+            "the packaged page does not have the extension-loading call this "
+            "build patches (the packager's scaffolding changed); build without "
+            "--self-hosted, or pin the packager version in package.json"
+        )
+    return page.replace(EXTENSION_LOAD_CALL, EXTENSION_LOAD_ABSOLUTE)
+
+
+def self_hosted(sb3: bytes, output: str | Path, *, extension_urls=None,
+                title: str | None = None, timeout: int = PACKAGE_TIMEOUT) -> dict:
+    """Write the page plus its own copy of everything it loads.
+
+    ``extension_urls`` is ``{extension id: url}``; each is fetched and written
+    to ``<stem>_files/ext/<id>.js``, and the packaged project points there. The
+    libraries and any Teachable Machine model the project names go to the same
+    folder, and one inline script tells ``gtm`` where they are.
+    """
+    output = Path(output)
+    assets = output.parent / (output.stem + "_files")
+    assets.mkdir(parents=True, exist_ok=True)
+    prefix = assets.name
+
+    mapping: dict[str, str] = {}
+    for extension_id, url in (extension_urls or {}).items():
+        if not url or url.startswith("data:"):
+            continue
+        target = assets / "ext" / f"{extension_id}.js"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(_fetch(url))
+        mapping[extension_id] = f"{prefix}/ext/{extension_id}.js"
+
+    for relative in VENDORED_LIBRARIES:
+        target = assets / "lib" / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(_fetch(CDN + relative))
+
+    project_text = zipfile.ZipFile(io.BytesIO(sb3)).read("project.json").decode("utf-8")
+    models = list(dict.fromkeys(_SHARE_LINK.findall(project_text)))
+    for model_id in models:
+        directory = assets / "model" / model_id
+        _mirror_model(model_id, directory)
+        metadata = json.loads((directory / "metadata.json").read_text("utf-8"))
+        for relative in _posenet_files(metadata):
+            target = assets / "lib" / "tfjs-models" / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(_fetch("https://storage.googleapis.com/tfjs-models/" + relative))
+
+    mirrors = {
+        remote: prefix + "/" + local for remote, local in MIRROR_PREFIXES.items()
+    }
+    globals_js = (
+        f"window.GTM_LIB_BASE = {json.dumps(prefix + '/lib/')};"
+        f"window.GTM_MODEL_MIRROR = {json.dumps(prefix + '/model/')};"
+        f"window.GTM_MIRROR_MAP = {json.dumps(mirrors)};"
+    )
+    patched = _rewrite_extension_urls(sb3, mapping) if mapping else sb3
+    pack(
+        patched,
+        output,
+        extension_urls=(),
+        title=title,
+        timeout=timeout,
+        bake=False,
+        custom_js=globals_js,
+    )
+    if mapping:
+        page = output.read_text("utf-8")
+        output.write_text(_absolutise_extension_urls(page), "utf-8")
+    return {"assets": assets, "extensions": mapping, "models": models}
+
+
 def pack(sb3: bytes, output: str | Path, *, extension_urls=(), title: str | None = None,
-         timeout: int = PACKAGE_TIMEOUT) -> Path:
-    """Write ``sb3`` to ``output`` as one standalone HTML file."""
+         timeout: int = PACKAGE_TIMEOUT, bake: bool = True,
+         custom_js: str | None = None) -> Path:
+    """Write ``sb3`` to ``output`` as one standalone HTML file.
+
+    ``bake=False`` keeps the project's extension URLs instead of inlining them
+    as ``data:`` scripts -- the self-hosted mode in :func:`self_hosted` -- and
+    ``custom_js`` is injected into the page before the project starts.
+    """
     usable, reason = available()
     if not usable:
         raise HtmlError(f"--html needs Node.js: {reason}")
@@ -100,6 +306,10 @@ def pack(sb3: bytes, output: str | Path, *, extension_urls=(), title: str | None
     command = ["node", str(PACKAGER_SCRIPT), "--out", str(output)]
     if title:
         command += ["--title", title]
+    if not bake:
+        command += ["--no-bake"]
+    if custom_js:
+        command += ["--custom-js", custom_js]
     try:
         result = subprocess.run(command, input=sb3, capture_output=True, timeout=timeout)
     except subprocess.TimeoutExpired:

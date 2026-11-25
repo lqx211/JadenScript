@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 200 200" height="200" width="200">
+<path fill="#FEFA4D" d="M121 109L129 93L29 73L21 89L121 109Z"></path>
+<path fill="#CCC93E" d="M21 93L121 113V109L21 89V93Z"></path>
+<path fill="#807D27" d="M121 113L129 97V93L121 109V113Z"></path>
+<path fill="#997A22" d="M121 117L129 101V97L121 113V117Z"></path>
+<path fill="#D2A730" d="M31 99L121 117V113L21 93L31 95V99Z"></path>
+<path fill="#AA7B25" d="M31 99L41 101V97L21 93L31 95V99Z"></path>
+<path fill="#AA7B25" d="M51 103L61 105V101L51 99V103Z"></path>
+<path fill="#AA7B25" d="M71 107L81 109V105L71 103V107Z"></path>
+<path fill="#AA7B25" d="M91 111L101 113V109L91 107V111Z"></path>
+<path fill="#AA7B25" d="M111 115L121 117V113L111 111V115Z"></path>
+<path fill="#D2A730" d="M21 97L31 99V95L21 93V97Z"></path>
+</svg>

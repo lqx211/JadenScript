@@ -45,10 +45,18 @@ syn match jswDirective /^\s*#\h\w*/
 syn region jswFeature matchgroup=jswDirective start=/#enable_feature</ end=/>/ oneline
 
 " -- metadata lines: ``stage:``, ``Sprite:``, ``Name: name="..."`` -
-syn region jswMetadataLine matchgroup=jswDeclaration start=/^\s*metadata\>/ end=/;/ oneline contains=jswMetadata,jswTarget,jswTargetKey,jswString,jswChar,jswNumber,jswComment,jswIdentifier,jswNamespace,jswFunctionCall
-syn keyword jswMetadata contained at continuous default discrete hidden large largeReadout list max min normal pos range shown slider watchers
+syn region jswMetadataLine matchgroup=jswDeclaration start=/^\s*metadata\>/ end=/;/ oneline contains=jswMetadataVerb,jswMonitorMode,jswMetadataFlag,jswMetadata,jswTarget,jswTargetKey,jswTargetValue,jswString,jswChar,jswNumber,jswComment,jswIdentifier,jswNamespace,jswFunctionCall
+syn keyword jswMetadata contained at continuous discrete max min pos range watchers
+syn keyword jswMonitorMode contained default large largeReadout list normal slider
+syn keyword jswMetadataFlag contained hidden minimized shown
+syn keyword jswMetadataVerb contained comment monitor note watch
 syn match jswTarget /^\s*\h\w*\ze:.\{-}\<name=/
-syn match jswTargetKey /[(:,]\s*\zs\h\w*\ze=[^=]/
+syn match jswTargetKey /\%([(:,]\s*\)\@<=\h\w*\ze=[^=]/
+" The value of a target key: ``rotation=all``, ``video=on``, ``show=1``.
+" They are only values in that position - ``all`` is a fine variable name.
+syn match jswTargetValue /\%(rotation\s*=\s*\)\@<=\%(leftright\|none\|all\)\>/
+syn match jswTargetValue /\%(video\%(State\)\=\s*=\s*\)\@<=\%(on-flipped\|off\|on\)\>/
+syn match jswTargetValue /\%(show\|draggable\)\s*=\s*\zs\%(false\|true\|0\|1\)\>/
 
 " -- the words -----------------------------------------------------
 syn match jswTemp /\<_[A-Za-z0-9_$]\+\>/
@@ -119,6 +127,10 @@ hi def link jswDirective PreProc
 hi def link jswFeature PreProc
 hi def link jswTarget PreProc
 hi def link jswTargetKey Identifier
+hi def link jswTargetValue Constant
 hi def link jswMetadata Statement
+hi def link jswMonitorMode Constant
+hi def link jswMetadataFlag Constant
+hi def link jswMetadataVerb Keyword
 
 let b:current_syntax = 'jsw'

@@ -1,0 +1,16 @@
+public my_variable = 0;
+
+stage: costume=0, volume=100, layer=0, tempo=60, video="on", videoTransparency=50;
+stage {
+    import "assets/cd21514d0531fdffb22204e0ec5ed84a.svg" as backdrop1; // costume centerx=240 centery=180 res=1
+}
+
+Sprite1: name="Sprite1", x=0, y=0, size=100, direction=90, show=1, costume=0, volume=100, layer=1, rotation="all", draggable=0;
+class Sprite1 {
+    import "assets/927d672925e7b99f7813735c484c6922.svg" as costume1; // costume centerx=30.74937882782359 centery=58.864768144346826 res=1
+
+    loose { // at 300,140
+        // cubesterKeySimulation_pressKey
+                // unsupported block: cubesterKeySimulation_pressKey
+    }
+}

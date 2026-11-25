@@ -183,10 +183,18 @@ class IncludeExpansionTests(unittest.TestCase):
         self.assertIn("keyword now", str(caught.exception))
         self.assertIn("m.jsw", str(caught.exception))
 
+    def test_a_path_needs_no_quotes(self) -> None:
+        """`include m.jsw` is what a reader tries first, so it is accepted."""
+        self.write("m.jsw", "public X.m = 1;\n")
+        for line in ("include m.jsw\n", "include m.jsw;\n", "include 'm.jsw'\n"):
+            with self.subTest(line=line):
+                host = self.write("h.jsw", line)
+                self.assertIn("public X.m = 1;", include.expand(host).text)
+
     def test_an_unreadable_include_line_says_how_to_write_it(self) -> None:
-        """A path without quotes would reach the parser as a bare keyword and
-        fail somewhere that never mentions this line."""
-        host = self.write("h.jsw", "include m.jsw\n")
+        """Two paths on one line, or a path with a space, would reach the parser
+        as a bare keyword and fail somewhere that never mentions this line."""
+        host = self.write("h.jsw", "include a.jsw and b.jsw\n")
         with self.assertRaises(include.IncludeError) as caught:
             include.expand(host)
         self.assertIn("h.jsw:1", str(caught.exception))

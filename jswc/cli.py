@@ -7,6 +7,7 @@ import dataclasses
 import json
 import sys
 import time
+import urllib.error
 from pathlib import Path
 
 from . import __version__, html, include, lints, ui
@@ -418,13 +419,26 @@ def cmd_build(args: argparse.Namespace) -> int:
         # After the project is on disk: a packaging failure must not lose the
         # build that already succeeded.
         try:
-            html_path = html.pack(
-                payload,
-                Path(path).with_suffix(".html"),
-                extension_urls=project.extension_urls.values(),
-                title=args.html_title,
-            )
-        except html.HtmlError as exc:
+            if args.self_hosted:
+                # Everything the page loads, from the folder it lives in: a host
+                # with `script-src 'self'` / `connect-src 'self'` refuses the
+                # `data:` extensions and the CDN alike.
+                hosted = html.self_hosted(
+                    payload,
+                    Path(path).with_suffix(".html"),
+                    extension_urls=project.extension_urls,
+                    title=args.html_title,
+                )
+                html_path = Path(path).with_suffix(".html")
+                hosted["path"] = html_path
+            else:
+                html_path = html.pack(
+                    payload,
+                    Path(path).with_suffix(".html"),
+                    extension_urls=project.extension_urls.values(),
+                    title=args.html_title,
+                )
+        except (html.HtmlError, urllib.error.URLError, OSError) as exc:
             _err(ui.failure(str(exc)))
             _err(ui.muted(f"  {path} was written; --html produced nothing"))
             return EXIT_FAILED
@@ -613,6 +627,11 @@ def build_parser() -> argparse.ArgumentParser:
                             "needs node and `npm install`)")
     build.add_argument("--html-title", metavar="TEXT",
                        help="page title for the --html file (default: the file name)")
+    build.add_argument("--self-hosted", action="store_true",
+                       help="with --html: write the extensions, TensorFlow.js and the "
+                            "project's model next to the page and point every URL at "
+                            "them, for a host whose Content-Security-Policy allows "
+                            "nothing but its own origin")
     build.add_argument("--layout", choices=("auto", "always", "never"), default="auto",
                        help="block placement: auto (default) lays out scripts that have no "
                             "recorded position, always ignores recorded positions and cleans "

@@ -559,6 +559,8 @@ the player: the pressed key is one the project did not receive from anyone, and
 
 ```jsw
 keySim.press("space", 0.2);        // press it for 0.2 s, then carry on
+keySim.press("left arrow");        // the duration is optional: 0.1 s, the
+                                   // extension's own default
 keySim.pressAndWait("enter", 1);   // … and wait the second out
 keySim.hold("shift");              // down until released
 keySim.release("shift");
@@ -585,6 +587,14 @@ out: `"space"` becomes `" "`, `"up arrow"` becomes `"ArrowUp"`, and a single
 character stays itself. A literal the extension does not know is `W0034` — it
 would compile to a block that can never fire. A computed key is passed through
 untouched (the dropdown accepts a reporter).
+
+The editor knows the dropdown: inside `press`/`pressAndWait`/`hold`/`release`
+the completion list is the 18 named keys (`space`, `up arrow`, `enter`, …) plus
+every printable character, hovering a name shows what it compiles to, and the
+key argument is coloured apart from an ordinary string
+(`string.quoted.keysim-key`). `click`/`holdButton`/`releaseButton` offer the
+button numbers, and the last argument of `click` offers `and wait` /
+`without waiting`.
 
 ```jsw
 keySim.press("spce", 0.2);   // W0034: not a key Key Simulation knows
@@ -1083,13 +1093,22 @@ There is no separate bytecode call stack: the native custom-block call is the
 call stack. `stop this script` inside a virtualised custom block halts the
 frame and returns to its caller, matching Scratch.
 
-A `// warp` custom block is left native, and so is every procedure reachable
-from one. The interpreter's `__vm_run` is a `while (1)` loop and must yield at
-the end of each iteration; Scratch's warp mode skips that yield, so putting the
-interpreter inside a warp call chain would freeze the tab. A virtualised
-caller can still call a native warp custom block, so only the warp chain loses
-protection. The same rule explains the conservative counts below: i386's CPU
-is almost entirely warp procedures.
+A `// warp` custom block is left native, and so is every procedure it calls.
+The interpreter's `__vm_run` is a `while (1)` loop and must yield at the end of
+each iteration; Scratch's warp mode skips that yield, so the interpreter must
+never run *inside* a warp frame. Warp mode is scoped to the callee's stack frame
+(`sequencer.stepToProcedure` sets it on the frame it pushes and `popStack` drops
+it again), so the rule is about the direction of the call:
+
+* a **warp** procedure, and everything it calls, stays native;
+* a **non-warp** procedure that calls a warp procedure keeps its protection —
+  the warp frame is popped when the call returns and the interpreter carries on
+  yielding normally.
+
+An earlier cut closed the warp set over *callers* instead of callees, which left
+every caller of a warp helper native for no reason (a project's `main()`, for
+instance, only because it called one warp sampling loop). The same rule explains
+the conservative counts below: i386's CPU is almost entirely warp procedures.
 
 The field values of a block (`effect`, `mathop`, `rotation style`) are literals
 in Scratch, so they are written straight into the generated call; the input
@@ -1597,6 +1616,31 @@ class main { … }
 stage { … }
 ```
 
+Every key takes one of six types, and the compiler checks it (`E0078` unknown
+key, `E0079` wrong type):
+
+| key | type | where | notes |
+| --- | --- | --- | --- |
+| `name` | text | sprite | the name the project shows |
+| `x`, `y` | number | sprite | stage position, in project units |
+| `size` | number | sprite | size percentage |
+| `direction` | number | sprite | degrees, 90 points right |
+| `show` | flag | sprite | `1`/`0` (`true`/`false` also work) |
+| `draggable` | flag | sprite | `1`/`0` |
+| `rotation` | rotation | sprite | `all`, `leftright`, `none` |
+| `namespace` · `ns` | text | sprite | prefix for this class's state and blocks |
+| `costume` | integer | both | index of the current costume / backdrop |
+| `volume` | number | both | sound volume percentage |
+| `layer` | integer | both | layer order, larger is nearer the viewer |
+| `tempo` | number | stage | bpm |
+| `video`, `videoState` | video | stage | `on`, `off` or `on-flipped` |
+| `videoTransparency` | number | stage | percentage |
+
+The same values can be written three ways — a standalone `name: …;` line, the
+class parameters (`class main(size=80) { … }`), and the `// Sprite:` /
+`// Stage:` comment the decompiler writes. All three go through the same
+checker, and hovering any key in VS Code shows its type.
+
 `name=` is what the sprite is actually called in the project, so a sprite called
 `obj loader` is `obj_loader: name="obj loader", …;` — the class name stays a
 valid identifier.
@@ -1663,6 +1707,19 @@ metadata note <target> at <x>,<y> <W>x<H> [minimized]: "text";
 | `<variable>` | `Owner.name`: `Stage.Score`, `main.lives`, `"obj loader".score` |
 | `<mode>` | `default` · `large` · `slider` · `list` — see below |
 | `<W>x<H>` | the monitor box, e.g. `100x24` |
+
+Every word on the line is one of four kinds, and VS Code colours them apart
+(and explains each one on hover):
+
+| kind | words | highlighting |
+| --- | --- | --- |
+| annotation | `monitor` · `watch` · `comment` · `note` | `keyword.other.metadata-annotation` |
+| mode | `default` · `normal` · `large` · `largeReadout` · `slider(min,max)` · `list` | `constant.language.monitor-mode` |
+| state | `shown` · `hidden` · `minimized` | `constant.language.metadata-flag` |
+| layout | `pos` · `at` · `range` · `discrete` · `continuous` · `min` · `max` · `watchers` | `keyword.other.metadata` |
+
+The parser folds case for the annotations and the modes, so `SLIDER` is the
+slider mode; the layout words are lower-case only.
 
 **Monitor modes.** Omitting the mode is the same as writing `default`: an
 ordinary read-out. The other modes are Scratch's own, with the spellings a
@@ -2241,6 +2298,10 @@ JadenScript if the compiler ignores them.
 | `// undefined` | the project calls this custom block but never defines it |
 | `// costume centerx=… centery=… res=…` | costume anchor and bitmap resolution |
 | `// sound rate=… samples=…` | sound playback metadata |
+
+The two metadata annotations are spelled the same way as a `name: …;` line, so
+the keys have the same types (see the table in "Target metadata, without
+comments"), and the editors colour them inside the comment too.
 
 `void whenCloned()` is recognised by name (`control_start_as_clone`), and
 `void greenFlag()` needs no directive.

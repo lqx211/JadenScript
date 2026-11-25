@@ -1917,7 +1917,7 @@
      "cloneLimit",
      {
       "kind": "reporter",
-      "detail": "cloneLimit(limit) → value",
+      "detail": "cloneLimit → value",
       "doc": "getCloneLimit"
      }
     ],
@@ -1933,7 +1933,7 @@
      "framerateLimit",
      {
       "kind": "reporter",
-      "detail": "framerateLimit(fps) → value",
+      "detail": "framerateLimit → value",
       "doc": "getFramerate"
      }
     ],
@@ -3101,112 +3101,112 @@
      "click",
      {
       "kind": "command",
-      "detail": "click(BUTTON, X, Y, SECONDS, AND_WAIT)",
-      "doc": "clickMouse"
+      "detail": "click(button, x, y, seconds, \"and wait\")",
+      "doc": "Click a mouse button at a point; `button` is 0 left, 1 middle, 2 right."
      }
     ],
     [
      "clickLeft",
      {
       "kind": "command",
-      "detail": "clickLeft(X, Y)",
-      "doc": "clickMouse"
+      "detail": "clickLeft(x, y[, seconds])",
+      "doc": "Click the left button for 0.1 s, or for `seconds`."
      }
     ],
     [
      "clickMiddle",
      {
       "kind": "command",
-      "detail": "clickMiddle(X, Y)",
-      "doc": "clickMouse"
+      "detail": "clickMiddle(x, y[, seconds])",
+      "doc": "Click the middle button for 0.1 s, or for `seconds`."
      }
     ],
     [
      "clickRight",
      {
       "kind": "command",
-      "detail": "clickRight(X, Y)",
-      "doc": "clickMouse"
+      "detail": "clickRight(x, y[, seconds])",
+      "doc": "Click the right button for 0.1 s, or for `seconds`."
      }
     ],
     [
      "hold",
      {
       "kind": "command",
-      "detail": "hold(KEY)",
-      "doc": "holdKey"
+      "detail": "hold(key)",
+      "doc": "Hold a key down until `release`."
      }
     ],
     [
      "holdButton",
      {
       "kind": "command",
-      "detail": "holdButton(BUTTON, X, Y)",
-      "doc": "holdMouse"
+      "detail": "holdButton(button, x, y)",
+      "doc": "Hold any button down at a point; `button` is 0 left, 1 middle, 2 right."
      }
     ],
     [
      "holdLeft",
      {
       "kind": "command",
-      "detail": "holdLeft(X, Y)",
-      "doc": "holdMouse"
+      "detail": "holdLeft(x, y)",
+      "doc": "Hold the left button down at a point until `releaseLeft`."
      }
     ],
     [
      "holdMiddle",
      {
       "kind": "command",
-      "detail": "holdMiddle(X, Y)",
-      "doc": "holdMouse"
+      "detail": "holdMiddle(x, y)",
+      "doc": "Hold the middle button down at a point until `releaseMiddle`."
      }
     ],
     [
      "holdRight",
      {
       "kind": "command",
-      "detail": "holdRight(X, Y)",
-      "doc": "holdMouse"
+      "detail": "holdRight(x, y)",
+      "doc": "Hold the right button down at a point until `releaseRight`."
      }
     ],
     [
      "moveTo",
      {
       "kind": "command",
-      "detail": "moveTo(X, Y)",
-      "doc": "moveMouse"
+      "detail": "moveTo(x, y)",
+      "doc": "Move the pointer without clicking."
      }
     ],
     [
      "press",
      {
       "kind": "command",
-      "detail": "press(KEY, SECONDS)",
-      "doc": "pressKey"
+      "detail": "press(key, seconds)",
+      "doc": "Press and release a key; the press lasts `seconds` and the script carries on."
      }
     ],
     [
      "pressAndWait",
      {
       "kind": "command",
-      "detail": "pressAndWait(KEY, SECONDS)",
-      "doc": "pressKey"
+      "detail": "pressAndWait(key, seconds)",
+      "doc": "Press and release a key and wait the `seconds` out."
      }
     ],
     [
      "release",
      {
       "kind": "command",
-      "detail": "release(KEY)",
-      "doc": "releaseKey"
+      "detail": "release(key)",
+      "doc": "Release a key that `hold` pressed."
      }
     ],
     [
      "releaseButton",
      {
       "kind": "command",
-      "detail": "releaseButton(BUTTON)",
-      "doc": "releaseMouse"
+      "detail": "releaseButton(button)",
+      "doc": "Release a button that `holdButton` pressed."
      }
     ],
     [
@@ -3214,7 +3214,7 @@
      {
       "kind": "command",
       "detail": "releaseLeft()",
-      "doc": "releaseMouse"
+      "doc": "Release a held left button."
      }
     ],
     [
@@ -3222,7 +3222,7 @@
      {
       "kind": "command",
       "detail": "releaseMiddle()",
-      "doc": "releaseMouse"
+      "doc": "Release a held middle button."
      }
     ],
     [
@@ -3230,7 +3230,7 @@
      {
       "kind": "command",
       "detail": "releaseRight()",
-      "doc": "releaseMouse"
+      "doc": "Release a held right button."
      }
     ]
    ]
@@ -3512,146 +3512,383 @@
   {
    "label": "list",
    "kind": "constant",
+   "detail": "metadata mode",
    "doc": "Shows the list monitor for the target."
   },
   {
    "label": "large",
    "kind": "constant",
+   "detail": "metadata mode",
    "doc": "A large (read-only) variable readout."
+  },
+  {
+   "label": "largeReadout",
+   "kind": "constant",
+   "detail": "metadata mode",
+   "doc": "The long spelling of `large`."
   },
   {
    "label": "slider",
    "kind": "constant",
-   "doc": "A slider; add `range min..max`."
+   "detail": "metadata mode",
+   "doc": "A slider; add `range min..max`, or write `slider(min,max)`."
   },
   {
    "label": "normal",
    "kind": "constant",
+   "detail": "metadata mode",
    "doc": "The default variable readout."
   },
   {
    "label": "default",
    "kind": "constant",
+   "detail": "metadata mode",
    "doc": "Same as `normal`, but deleted when its target is deleted."
+  }
+ ],
+ "metadataForms": [
+  {
+   "label": "pos",
+   "kind": "snippet",
+   "detail": "metadata · metadata <script> pos <x>,<y>;",
+   "usage": "metadata <script> pos <x>,<y>;",
+   "doc": "Where a script sits on the canvas: `metadata Stage.tick pos 10,20;`. `<script>` is the method as written, e.g. `greenFlag` or `Events.keyPressed`."
+  },
+  {
+   "label": "monitor",
+   "kind": "snippet",
+   "detail": "metadata · metadata monitor <Target.name> at <x>,<y> <W>x<H> <shown|hidden>;",
+   "usage": "metadata monitor <Target.name> at <x>,<y> <W>x<H> <shown|hidden>;",
+   "doc": "A read-out for one variable, in either order: the mode may come before or after the target. `// monitor …` is the comment spelling."
+  },
+  {
+   "label": "watch",
+   "kind": "snippet",
+   "detail": "metadata · metadata watch <Target.name> at <x>,<y> <W>x<H> <shown|hidden>;",
+   "usage": "metadata watch <Target.name> at <x>,<y> <W>x<H> <shown|hidden>;",
+   "doc": "Alias of `monitor`."
+  },
+  {
+   "label": "slider",
+   "kind": "snippet",
+   "detail": "metadata · metadata slider(<min>,<max>) <Target.name> at <x>,<y> <W>x<H> shown;",
+   "usage": "metadata slider(<min>,<max>) <Target.name> at <x>,<y> <W>x<H> shown;",
+   "doc": "A slider. Whole-number bounds are steps, so `slider(0,2)` is a three-state switch; the decompiler writes it `range 0..2 discrete`."
+  },
+  {
+   "label": "list",
+   "kind": "snippet",
+   "detail": "metadata · metadata list <Target.list> at <x>,<y> <W>x<H> <shown|hidden>;",
+   "usage": "metadata list <Target.list> at <x>,<y> <W>x<H> <shown|hidden>;",
+   "doc": "The list's contents in a monitor box."
+  },
+  {
+   "label": "large",
+   "kind": "snippet",
+   "detail": "metadata · metadata large <Target.name> at <x>,<y> <W>x<H> <shown|hidden>;",
+   "usage": "metadata large <Target.name> at <x>,<y> <W>x<H> <shown|hidden>;",
+   "doc": "The big number, for one value someone is watching."
+  },
+  {
+   "label": "comment",
+   "kind": "snippet",
+   "detail": "metadata · metadata comment <owner> at <x>,<y> <W>x<H>: \"text\";",
+   "usage": "metadata comment <owner> at <x>,<y> <W>x<H>: \"text\";",
+   "doc": "A workspace comment: the `// comment` spelling with a position."
+  },
+  {
+   "label": "note",
+   "kind": "snippet",
+   "detail": "metadata · metadata note <owner> at <x>,<y> <W>x<H>: \"text\";",
+   "usage": "metadata note <owner> at <x>,<y> <W>x<H>: \"text\";",
+   "doc": "Alias of `comment`."
   }
  ],
  "metadataWords": [
   {
    "label": "pos",
    "kind": "keyword",
+   "detail": "metadata word",
    "doc": "Script position: `metadata Stage.tick pos 10,20;`."
   },
   {
    "label": "at",
    "kind": "keyword",
+   "detail": "metadata word",
    "doc": "Monitor position and size: `at 0,0 100x24`."
-  },
-  {
-   "label": "hidden",
-   "kind": "keyword",
-   "doc": "The monitor starts hidden."
-  },
-  {
-   "label": "shown",
-   "kind": "keyword",
-   "doc": "The monitor starts visible."
   },
   {
    "label": "range",
    "kind": "keyword",
+   "detail": "metadata word",
    "doc": "Slider bounds: `range 0..10`."
+  },
+  {
+   "label": "discrete",
+   "kind": "keyword",
+   "detail": "metadata word",
+   "doc": "The slider steps by 1 instead of sliding continuously."
+  },
+  {
+   "label": "continuous",
+   "kind": "keyword",
+   "detail": "metadata word",
+   "doc": "The explicit opposite of `discrete`."
   },
   {
    "label": "watchers",
    "kind": "keyword",
+   "detail": "metadata word",
    "doc": "Whether more than one watcher may exist."
   },
   {
    "label": "min",
    "kind": "keyword",
+   "detail": "metadata word",
    "doc": "Lower bound for `range`."
   },
   {
    "label": "max",
    "kind": "keyword",
+   "detail": "metadata word",
    "doc": "Upper bound for `range`."
+  }
+ ],
+ "metadataFlags": [
+  {
+   "label": "shown",
+   "kind": "constant",
+   "detail": "monitor state · shown|hidden|minimized",
+   "doc": "The monitor starts visible."
+  },
+  {
+   "label": "hidden",
+   "kind": "constant",
+   "detail": "monitor state · shown|hidden|minimized",
+   "doc": "The monitor starts hidden."
+  },
+  {
+   "label": "minimized",
+   "kind": "constant",
+   "detail": "monitor state · shown|hidden|minimized",
+   "doc": "A workspace comment starts collapsed."
+  }
+ ],
+ "targetValues": [
+  {
+   "label": "all",
+   "kind": "enum",
+   "keys": [
+    "rotation"
+   ],
+   "detail": "value of rotation",
+   "doc": "Rotate in any direction (the default)."
+  },
+  {
+   "label": "leftright",
+   "kind": "enum",
+   "keys": [
+    "rotation"
+   ],
+   "detail": "value of rotation",
+   "doc": "Only mirror left and right."
+  },
+  {
+   "label": "none",
+   "kind": "enum",
+   "keys": [
+    "rotation"
+   ],
+   "detail": "value of rotation",
+   "doc": "Never rotate."
+  },
+  {
+   "label": "on",
+   "kind": "enum",
+   "keys": [
+    "video",
+    "videoState"
+   ],
+   "detail": "value of video, videoState",
+   "doc": "Show the camera picture."
+  },
+  {
+   "label": "off",
+   "kind": "enum",
+   "keys": [
+    "video",
+    "videoState"
+   ],
+   "detail": "value of video, videoState",
+   "doc": "No camera picture."
+  },
+  {
+   "label": "on-flipped",
+   "kind": "enum",
+   "keys": [
+    "video",
+    "videoState"
+   ],
+   "detail": "value of video, videoState",
+   "doc": "Show the camera, mirrored."
+  },
+  {
+   "label": "1",
+   "kind": "enum",
+   "keys": [
+    "show",
+    "draggable"
+   ],
+   "detail": "value of show, draggable",
+   "doc": "On."
+  },
+  {
+   "label": "0",
+   "kind": "enum",
+   "keys": [
+    "show",
+    "draggable"
+   ],
+   "detail": "value of show, draggable",
+   "doc": "Off."
   }
  ],
  "targetKeys": [
   {
    "label": "name",
    "kind": "keyword",
+   "detail": "text · sprite",
+   "type": "text",
+   "scope": "sprite",
    "doc": "The name the project shows: `name=\"obj loader\"`."
   },
   {
    "label": "x",
    "kind": "keyword",
+   "detail": "number · sprite",
+   "type": "number",
+   "scope": "sprite",
    "doc": "Stage position, in project units."
   },
   {
    "label": "y",
    "kind": "keyword",
+   "detail": "number · sprite",
+   "type": "number",
+   "scope": "sprite",
    "doc": "Stage position, in project units."
   },
   {
    "label": "size",
    "kind": "keyword",
+   "detail": "number · sprite",
+   "type": "number",
+   "scope": "sprite",
    "doc": "Sprite size percentage."
   },
   {
    "label": "direction",
    "kind": "keyword",
+   "detail": "number · sprite",
+   "type": "number",
+   "scope": "sprite",
    "doc": "Rotation in degrees, 90 is to the right."
   },
   {
    "label": "show",
    "kind": "keyword",
+   "detail": "flag · sprite",
+   "type": "flag",
+   "scope": "sprite",
    "doc": "1 visible, 0 hidden."
   },
   {
    "label": "costume",
    "kind": "keyword",
+   "detail": "integer · both",
+   "type": "integer",
+   "scope": "both",
    "doc": "Index of the current costume."
   },
   {
    "label": "volume",
    "kind": "keyword",
+   "detail": "number · both",
+   "type": "number",
+   "scope": "both",
    "doc": "Sound volume percentage."
   },
   {
    "label": "layer",
    "kind": "keyword",
+   "detail": "integer · both",
+   "type": "integer",
+   "scope": "both",
    "doc": "Layer order; larger is nearer the viewer."
   },
   {
    "label": "tempo",
    "kind": "keyword",
-   "doc": "Stage tempo in bpm (stage only)."
+   "detail": "number · stage",
+   "type": "number",
+   "scope": "stage",
+   "doc": "Stage tempo in bpm."
   },
   {
    "label": "video",
    "kind": "keyword",
-   "doc": "\"on\" or \"off\" (stage only)."
+   "detail": "video · stage",
+   "type": "video",
+   "scope": "stage",
+   "doc": "Camera on/off."
+  },
+  {
+   "label": "videoState",
+   "kind": "keyword",
+   "detail": "video · stage",
+   "type": "video",
+   "scope": "stage",
+   "doc": "The same thing as `video`."
   },
   {
    "label": "videoTransparency",
    "kind": "keyword",
+   "detail": "number · stage",
+   "type": "number",
+   "scope": "stage",
    "doc": "Video transparency percentage."
   },
   {
    "label": "rotation",
    "kind": "keyword",
+   "detail": "rotation · sprite",
+   "type": "rotation",
+   "scope": "sprite",
    "doc": "all, leftright or none."
   },
   {
    "label": "draggable",
    "kind": "keyword",
+   "detail": "flag · sprite",
+   "type": "flag",
+   "scope": "sprite",
    "doc": "1 if the sprite can be dragged."
   },
   {
    "label": "namespace",
    "kind": "keyword",
+   "detail": "text · sprite",
+   "type": "text",
+   "scope": "sprite",
    "doc": "Prefix for this class's public state and blocks."
+  },
+  {
+   "label": "ns",
+   "kind": "keyword",
+   "detail": "text · sprite",
+   "type": "text",
+   "scope": "sprite",
+   "doc": "Short spelling of `namespace`, used by `// Sprite:`."
   }
  ],
  "assetWords": [
@@ -3807,6 +4044,574 @@
    "kind": "key",
    "detail": "key name",
    "doc": ""
+  }
+ ],
+ "keysimKeys": [
+  {
+   "label": "space",
+   "kind": "key",
+   "detail": "key · the space bar",
+   "value": " ",
+   "doc": "Compiles to `\" \"`; the extension compares against `KeyboardEvent.key`."
+  },
+  {
+   "label": "up arrow",
+   "kind": "key",
+   "detail": "key · `ArrowUp`",
+   "value": "ArrowUp",
+   "doc": "Compiles to `\"ArrowUp\"`; the extension compares against `KeyboardEvent.key`."
+  },
+  {
+   "label": "down arrow",
+   "kind": "key",
+   "detail": "key · `ArrowDown`",
+   "value": "ArrowDown",
+   "doc": "Compiles to `\"ArrowDown\"`; the extension compares against `KeyboardEvent.key`."
+  },
+  {
+   "label": "left arrow",
+   "kind": "key",
+   "detail": "key · `ArrowLeft`",
+   "value": "ArrowLeft",
+   "doc": "Compiles to `\"ArrowLeft\"`; the extension compares against `KeyboardEvent.key`."
+  },
+  {
+   "label": "right arrow",
+   "kind": "key",
+   "detail": "key · `ArrowRight`",
+   "value": "ArrowRight",
+   "doc": "Compiles to `\"ArrowRight\"`; the extension compares against `KeyboardEvent.key`."
+  },
+  {
+   "label": "enter",
+   "kind": "key",
+   "detail": "key · `Enter`",
+   "value": "Enter",
+   "doc": "Compiles to `\"Enter\"`; the extension compares against `KeyboardEvent.key`."
+  },
+  {
+   "label": "backspace",
+   "kind": "key",
+   "detail": "key · `Backspace`",
+   "value": "Backspace",
+   "doc": "Compiles to `\"Backspace\"`; the extension compares against `KeyboardEvent.key`."
+  },
+  {
+   "label": "delete",
+   "kind": "key",
+   "detail": "key · `Delete`",
+   "value": "Delete",
+   "doc": "Compiles to `\"Delete\"`; the extension compares against `KeyboardEvent.key`."
+  },
+  {
+   "label": "shift",
+   "kind": "key",
+   "detail": "key · `Shift`",
+   "value": "Shift",
+   "doc": "Compiles to `\"Shift\"`; the extension compares against `KeyboardEvent.key`."
+  },
+  {
+   "label": "caps lock",
+   "kind": "key",
+   "detail": "key · `CapsLock`",
+   "value": "CapsLock",
+   "doc": "Compiles to `\"CapsLock\"`; the extension compares against `KeyboardEvent.key`."
+  },
+  {
+   "label": "scroll lock",
+   "kind": "key",
+   "detail": "key · `ScrollLock`",
+   "value": "ScrollLock",
+   "doc": "Compiles to `\"ScrollLock\"`; the extension compares against `KeyboardEvent.key`."
+  },
+  {
+   "label": "control",
+   "kind": "key",
+   "detail": "key · `Control`",
+   "value": "Control",
+   "doc": "Compiles to `\"Control\"`; the extension compares against `KeyboardEvent.key`."
+  },
+  {
+   "label": "escape",
+   "kind": "key",
+   "detail": "key · `Escape`",
+   "value": "Escape",
+   "doc": "Compiles to `\"Escape\"`; the extension compares against `KeyboardEvent.key`."
+  },
+  {
+   "label": "insert",
+   "kind": "key",
+   "detail": "key · `Insert`",
+   "value": "Insert",
+   "doc": "Compiles to `\"Insert\"`; the extension compares against `KeyboardEvent.key`."
+  },
+  {
+   "label": "home",
+   "kind": "key",
+   "detail": "key · `Home`",
+   "value": "Home",
+   "doc": "Compiles to `\"Home\"`; the extension compares against `KeyboardEvent.key`."
+  },
+  {
+   "label": "end",
+   "kind": "key",
+   "detail": "key · `End`",
+   "value": "End",
+   "doc": "Compiles to `\"End\"`; the extension compares against `KeyboardEvent.key`."
+  },
+  {
+   "label": "page up",
+   "kind": "key",
+   "detail": "key · `PageUp`",
+   "value": "PageUp",
+   "doc": "Compiles to `\"PageUp\"`; the extension compares against `KeyboardEvent.key`."
+  },
+  {
+   "label": "page down",
+   "kind": "key",
+   "detail": "key · `PageDown`",
+   "value": "PageDown",
+   "doc": "Compiles to `\"PageDown\"`; the extension compares against `KeyboardEvent.key`."
+  },
+  {
+   "label": "a",
+   "kind": "key",
+   "detail": "key · the character itself",
+   "value": "a",
+   "doc": ""
+  },
+  {
+   "label": "b",
+   "kind": "key",
+   "detail": "key · the character itself",
+   "value": "b",
+   "doc": ""
+  },
+  {
+   "label": "c",
+   "kind": "key",
+   "detail": "key · the character itself",
+   "value": "c",
+   "doc": ""
+  },
+  {
+   "label": "d",
+   "kind": "key",
+   "detail": "key · the character itself",
+   "value": "d",
+   "doc": ""
+  },
+  {
+   "label": "e",
+   "kind": "key",
+   "detail": "key · the character itself",
+   "value": "e",
+   "doc": ""
+  },
+  {
+   "label": "f",
+   "kind": "key",
+   "detail": "key · the character itself",
+   "value": "f",
+   "doc": ""
+  },
+  {
+   "label": "g",
+   "kind": "key",
+   "detail": "key · the character itself",
+   "value": "g",
+   "doc": ""
+  },
+  {
+   "label": "h",
+   "kind": "key",
+   "detail": "key · the character itself",
+   "value": "h",
+   "doc": ""
+  },
+  {
+   "label": "i",
+   "kind": "key",
+   "detail": "key · the character itself",
+   "value": "i",
+   "doc": ""
+  },
+  {
+   "label": "j",
+   "kind": "key",
+   "detail": "key · the character itself",
+   "value": "j",
+   "doc": ""
+  },
+  {
+   "label": "k",
+   "kind": "key",
+   "detail": "key · the character itself",
+   "value": "k",
+   "doc": ""
+  },
+  {
+   "label": "l",
+   "kind": "key",
+   "detail": "key · the character itself",
+   "value": "l",
+   "doc": ""
+  },
+  {
+   "label": "m",
+   "kind": "key",
+   "detail": "key · the character itself",
+   "value": "m",
+   "doc": ""
+  },
+  {
+   "label": "n",
+   "kind": "key",
+   "detail": "key · the character itself",
+   "value": "n",
+   "doc": ""
+  },
+  {
+   "label": "o",
+   "kind": "key",
+   "detail": "key · the character itself",
+   "value": "o",
+   "doc": ""
+  },
+  {
+   "label": "p",
+   "kind": "key",
+   "detail": "key · the character itself",
+   "value": "p",
+   "doc": ""
+  },
+  {
+   "label": "q",
+   "kind": "key",
+   "detail": "key · the character itself",
+   "value": "q",
+   "doc": ""
+  },
+  {
+   "label": "r",
+   "kind": "key",
+   "detail": "key · the character itself",
+   "value": "r",
+   "doc": ""
+  },
+  {
+   "label": "s",
+   "kind": "key",
+   "detail": "key · the character itself",
+   "value": "s",
+   "doc": ""
+  },
+  {
+   "label": "t",
+   "kind": "key",
+   "detail": "key · the character itself",
+   "value": "t",
+   "doc": ""
+  },
+  {
+   "label": "u",
+   "kind": "key",
+   "detail": "key · the character itself",
+   "value": "u",
+   "doc": ""
+  },
+  {
+   "label": "v",
+   "kind": "key",
+   "detail": "key · the character itself",
+   "value": "v",
+   "doc": ""
+  },
+  {
+   "label": "w",
+   "kind": "key",
+   "detail": "key · the character itself",
+   "value": "w",
+   "doc": ""
+  },
+  {
+   "label": "x",
+   "kind": "key",
+   "detail": "key · the character itself",
+   "value": "x",
+   "doc": ""
+  },
+  {
+   "label": "y",
+   "kind": "key",
+   "detail": "key · the character itself",
+   "value": "y",
+   "doc": ""
+  },
+  {
+   "label": "z",
+   "kind": "key",
+   "detail": "key · the character itself",
+   "value": "z",
+   "doc": ""
+  },
+  {
+   "label": "0",
+   "kind": "key",
+   "detail": "key · the character itself",
+   "value": "0",
+   "doc": ""
+  },
+  {
+   "label": "1",
+   "kind": "key",
+   "detail": "key · the character itself",
+   "value": "1",
+   "doc": ""
+  },
+  {
+   "label": "2",
+   "kind": "key",
+   "detail": "key · the character itself",
+   "value": "2",
+   "doc": ""
+  },
+  {
+   "label": "3",
+   "kind": "key",
+   "detail": "key · the character itself",
+   "value": "3",
+   "doc": ""
+  },
+  {
+   "label": "4",
+   "kind": "key",
+   "detail": "key · the character itself",
+   "value": "4",
+   "doc": ""
+  },
+  {
+   "label": "5",
+   "kind": "key",
+   "detail": "key · the character itself",
+   "value": "5",
+   "doc": ""
+  },
+  {
+   "label": "6",
+   "kind": "key",
+   "detail": "key · the character itself",
+   "value": "6",
+   "doc": ""
+  },
+  {
+   "label": "7",
+   "kind": "key",
+   "detail": "key · the character itself",
+   "value": "7",
+   "doc": ""
+  },
+  {
+   "label": "8",
+   "kind": "key",
+   "detail": "key · the character itself",
+   "value": "8",
+   "doc": ""
+  },
+  {
+   "label": "9",
+   "kind": "key",
+   "detail": "key · the character itself",
+   "value": "9",
+   "doc": ""
+  },
+  {
+   "label": "-",
+   "kind": "key",
+   "detail": "key · the character itself",
+   "value": "-",
+   "doc": ""
+  },
+  {
+   "label": ",",
+   "kind": "key",
+   "detail": "key · the character itself",
+   "value": ",",
+   "doc": ""
+  },
+  {
+   "label": ".",
+   "kind": "key",
+   "detail": "key · the character itself",
+   "value": ".",
+   "doc": ""
+  },
+  {
+   "label": "`",
+   "kind": "key",
+   "detail": "key · the character itself",
+   "value": "`",
+   "doc": ""
+  },
+  {
+   "label": "=",
+   "kind": "key",
+   "detail": "key · the character itself",
+   "value": "=",
+   "doc": ""
+  },
+  {
+   "label": "[",
+   "kind": "key",
+   "detail": "key · the character itself",
+   "value": "[",
+   "doc": ""
+  },
+  {
+   "label": "]",
+   "kind": "key",
+   "detail": "key · the character itself",
+   "value": "]",
+   "doc": ""
+  },
+  {
+   "label": ";",
+   "kind": "key",
+   "detail": "key · the character itself",
+   "value": ";",
+   "doc": ""
+  },
+  {
+   "label": "'",
+   "kind": "key",
+   "detail": "key · the character itself",
+   "value": "'",
+   "doc": ""
+  },
+  {
+   "label": "/",
+   "kind": "key",
+   "detail": "key · the character itself",
+   "value": "/",
+   "doc": ""
+  },
+  {
+   "label": "~",
+   "kind": "key",
+   "detail": "key · the character itself",
+   "value": "~",
+   "doc": ""
+  },
+  {
+   "label": "+",
+   "kind": "key",
+   "detail": "key · the character itself",
+   "value": "+",
+   "doc": ""
+  },
+  {
+   "label": "!",
+   "kind": "key",
+   "detail": "key · the character itself",
+   "value": "!",
+   "doc": ""
+  },
+  {
+   "label": ":",
+   "kind": "key",
+   "detail": "key · the character itself",
+   "value": ":",
+   "doc": ""
+  },
+  {
+   "label": "*",
+   "kind": "key",
+   "detail": "key · the character itself",
+   "value": "*",
+   "doc": ""
+  },
+  {
+   "label": "#",
+   "kind": "key",
+   "detail": "key · the character itself",
+   "value": "#",
+   "doc": ""
+  },
+  {
+   "label": "(",
+   "kind": "key",
+   "detail": "key · the character itself",
+   "value": "(",
+   "doc": ""
+  },
+  {
+   "label": ")",
+   "kind": "key",
+   "detail": "key · the character itself",
+   "value": ")",
+   "doc": ""
+  },
+  {
+   "label": "?",
+   "kind": "key",
+   "detail": "key · the character itself",
+   "value": "?",
+   "doc": ""
+  },
+  {
+   "label": "<",
+   "kind": "key",
+   "detail": "key · the character itself",
+   "value": "<",
+   "doc": ""
+  },
+  {
+   "label": ">",
+   "kind": "key",
+   "detail": "key · the character itself",
+   "value": ">",
+   "doc": ""
+  },
+  {
+   "label": "@",
+   "kind": "key",
+   "detail": "key · the character itself",
+   "value": "@",
+   "doc": ""
+  }
+ ],
+ "keysimButtons": [
+  {
+   "label": "0",
+   "kind": "key",
+   "detail": "mouse button",
+   "doc": "Left button."
+  },
+  {
+   "label": "1",
+   "kind": "key",
+   "detail": "mouse button",
+   "doc": "Middle button."
+  },
+  {
+   "label": "2",
+   "kind": "key",
+   "detail": "mouse button",
+   "doc": "Right button."
+  }
+ ],
+ "keysimWait": [
+  {
+   "label": "without waiting",
+   "kind": "key",
+   "detail": "and wait",
+   "doc": "`and wait` holds the script until the click finishes; `without waiting` is the *continue* item."
+  },
+  {
+   "label": "and wait",
+   "kind": "key",
+   "detail": "and wait",
+   "doc": "`and wait` holds the script until the click finishes; `without waiting` is the *continue* item."
   }
  ],
  "hats": [

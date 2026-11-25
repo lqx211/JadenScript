@@ -62,6 +62,38 @@ class ListClearTests(unittest.TestCase):
         self.assertEqual([str(x) for x in project.stage.lists[lid][1]], ["1", "2", "3"])
 
 
+class BooleanLiteralTests(unittest.TestCase):
+    """``if (true)`` has to be a constant the Boolean slot reads as true.
+
+    Scratch has no boolean literal, so the compiler spells one as
+    ``not (<1 = 0>)``.  The old shape was ``<1 = 0>``, which reads as *false*:
+    ``if (true)`` never ran and ``Control.waitUntil(true)`` waited forever.
+    """
+
+    def test_a_boolean_literal_is_a_constant_boolean(self):
+        _, project = compile_source(
+            "public x = 0;\nclass a { public void greenFlag() {\n"
+            "  if (true) { x = 1; }\n"
+            "  if (false) { x = 2; }\n"
+            "} }\n"
+        )
+        blocks = blocks_of(project, "a")
+        conditions = [
+            block for block in blocks.values()
+            if isinstance(block, dict) and block["opcode"] == "control_if"
+        ]
+        self.assertEqual(len(conditions), 2)
+        operands = []
+        for block in conditions:
+            negate = blocks[block["inputs"]["CONDITION"][1]]
+            self.assertEqual(negate["opcode"], "operator_not")
+            equals = blocks[negate["inputs"]["OPERAND"][1]]
+            self.assertEqual(equals["opcode"], "operator_equals")
+            self.assertEqual(equals["inputs"]["OPERAND2"], [1, [10, "0"]])
+            operands.append(equals["inputs"]["OPERAND1"])
+        self.assertEqual(operands, [[1, [10, "1"]], [1, [10, "0"]]])
+
+
 class CodegenTests(unittest.TestCase):
     def test_sprite_metadata(self):
         _, project = compile_source(SOURCE)
@@ -693,6 +725,24 @@ class VanillaScratchTests(unittest.TestCase):
         names = {v[0] for v in project.stage.lists.values()}
         self.assertEqual(names, {"TimerNames", "TimerStarts"})
 
+    def test_a_zero_argument_runtime_probe_compiles(self):
+        """``Runtime.framerateLimit()`` takes no argument: it is a property.
+
+        The alias table used to declare a parameter for it, so every source
+        that wrote the natural call got ``E0076 takes 1 argument(s), not 0``.
+        """
+        codegen, project = compile_source(
+            "public w = 0;\npublic h = 0;\n"
+            "class a { void f() { w = Runtime.stageWidth(); h = Runtime.framerateLimit(); } }\n"
+        )
+        self.assertFalse(
+            [line for line in codegen.diagnostics if line.split()[1].startswith("E")],
+            codegen.diagnostics,
+        )
+        emitted = opcodes(project, "a")
+        self.assertIn("runtimeoptions_getDimension", emitted)
+        self.assertIn("runtimeoptions_getFramerate", emitted)
+
     def test_the_runtime_probe_answers_what_scratch_is(self):
         """A project may ask the player about itself; Scratch's answers are fixed."""
         _, project = compile_source("""
@@ -1059,6 +1109,19 @@ class MetadataValidationTests(unittest.TestCase):
     def test_a_bad_stage_value_is_not_applied(self) -> None:
         notes = self.diagnostics("stage: tempo=fast;\nstage {\n    public void greenFlag() { }\n}\n")
         self.assertTrue(any("E0079" in n and "'tempo'" in n for n in notes), notes)
+
+    def test_a_bad_video_state_is_an_error(self) -> None:
+        notes = self.diagnostics('stage: video="yes";\nstage {\n    public void greenFlag() { }\n}\n')
+        self.assertTrue(any("E0079" in n and "'video'" in n for n in notes), notes)
+
+    def test_the_three_video_states_are_accepted(self) -> None:
+        for state in ("on", "off", "on-flipped"):
+            with self.subTest(state=state):
+                codegen, _ = compile_source(
+                    f'stage: video="{state}";\nstage {{\n    public void greenFlag() {{ }}\n}}\n'
+                )
+                self.assertEqual(codegen.diagnostics, [])
+                self.assertEqual(codegen.project.stage.video_state, state)
 
     def test_a_good_one_still_works(self) -> None:
         codegen, _ = compile_source(
