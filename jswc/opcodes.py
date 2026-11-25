@@ -76,6 +76,10 @@ class Param:
     prim: int
     menu: str | None = None  # shadow block used for a dropdown
     field: str | None = None  # field name inside that shadow block
+    #: Written value -> the text the block stores, for dropdowns whose stored
+    #: value is a phrase (``set rotation style`` keeps "all around" while the
+    #: source says ``0``/``1``/``2``). Decompiling uses the reverse map.
+    values: dict[str, str] | None = None
 
 
 @dataclass(frozen=True)
@@ -113,6 +117,22 @@ class Property:
     @property
     def change_slot(self) -> str:
         return self.change_input or self.set_input
+
+
+#: ``set rotation style`` keeps a phrase, but the three states are the VM's
+#: rotation types in order, so the source spells them 0, 1, 2. The word
+#: spellings stay accepted and are what an unknown project value decompiles to.
+ROTATION_STYLE_VALUES: dict[str, str] = {
+    "0": "don't rotate",
+    "1": "left-right",
+    "2": "all around",
+    "none": "don't rotate",
+    "don't rotate": "don't rotate",
+    "left-right": "left-right",
+    "leftright": "left-right",
+    "all": "all around",
+    "all around": "all around",
+}
 
 
 COMMANDS: dict[str, Command] = {
@@ -234,6 +254,12 @@ COMMANDS: dict[str, Command] = {
     "Motion.turnLeft": Command("motion_turnleft", (Param("DEGREES", MATH_NUM),)),
     "Motion.goto": Command("motion_goto", (Param("TO", MENU, "motion_goto_menu", "TO"),)),
     "Motion.setXY": Command("motion_gotoxy", (Param("X", MATH_NUM), Param("Y", MATH_NUM))),
+    # ``set rotation style`` stores a phrase, but the source spells the three
+    # states the way the VM orders them: 0 none, 1 left-right, 2 all around.
+    "Motion.setRotationStyle": Command(
+        "motion_setrotationstyle", (Param("STYLE", FIELD, values=ROTATION_STYLE_VALUES),)
+    ),
+    "Motion.bounceIfOnEdge": Command("motion_ifonedgebounce"),
     "Looks.switchCostume": Command(
         "looks_switchcostumeto", (Param("COSTUME", MENU, "looks_costume", "COSTUME"),)
     ),
@@ -367,7 +393,9 @@ PROPERTIES: dict[str, Property] = {
     "Sound.volume": Property(
         "sound_volume", "sound_setvolumeto", "sound_changevolumeby", "VOLUME"
     ),
-    "Looks.size": Property("looks_size", "looks_setsizeto", "looks_changesizeby", "SIZE"),
+    "Looks.size": Property(
+        "looks_size", "looks_setsizeto", "looks_changesizeby", "SIZE", "CHANGE"
+    ),
 }
 
 # Community extensions are not built into the TurboWarp editor: the project

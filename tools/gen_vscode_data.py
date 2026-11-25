@@ -188,6 +188,15 @@ EXTRA_MEMBERS = [
     ("Stage", "get", "reporter", "get(name)", "Read stage state by name."),
     ("Stage", "set", "command", "set(name, value)", "Set stage state by name."),
     ("Stage", "change", "command", "change(name, delta)", "Change stage state by name."),
+    # ``set rotation style`` stores a phrase in a field, so the source uses the
+    # VM's rotation-type numbers and the choice cannot come from a variable.
+    ("Motion", "setRotationStyle", "command", "setRotationStyle(0 | 1 | 2)",
+     "0 = don't rotate (sprite stays upright), 1 = left-right (flips on the "
+     "vertical axis), 2 = all around (rotates freely). The style is a fixed "
+     "field, so the argument must be a literal."),
+    ("Motion", "bounceIfOnEdge", "command", "bounceIfOnEdge()",
+     "If on edge, bounce — turns the sprite back from the stage edge without "
+     "moving it."),
     # The two blocks a decompiled project needs and the tables above spell with
     # their raw argument names.
     ("Looks", "changeEffect", "command", "changeEffect(effect, delta)",

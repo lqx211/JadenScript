@@ -269,11 +269,16 @@ class Decompiler:
             # Calls without a definition are inert in the project; naming the
             # procedure after the broadcast would turn them into live
             # broadcast-and-wait calls instead.
-            defined = {
-                (proto.get("mutation") or {}).get("proccode", "")
-                for proto in blocks.values()
-                if proto["opcode"] == "procedures_prototype"
-            }
+            defined = {}
+            for proto in blocks.values():
+                if proto["opcode"] != "procedures_prototype":
+                    continue
+                mutation = proto.get("mutation") or {}
+                try:
+                    arity = len(json_loads(mutation.get("argumentids", "[]")))
+                except ValueError:
+                    arity = 0
+                defined[mutation.get("proccode", "")] = arity
             for block in blocks.values():
                 if block["opcode"] != "event_whenbroadcastreceived":
                     continue
@@ -293,7 +298,11 @@ class Decompiler:
                 if body.get("next") is not None:
                     continue
                 proccode = (body.get("mutation") or {}).get("proccode", "")
-                if proccode and proccode in defined:
+                # A merged receiver is rebuilt as a broadcast hat that calls
+                # the procedure with no arguments, so it can only stand for a
+                # procedure that takes none. A parameterised one keeps its hat
+                # as a separate method, which forwards the original arguments.
+                if proccode and defined.get(proccode) == 0:
                     self.broadcast_links[(target["name"], proccode)] = broadcast
                     self.broadcast_positions[(target["name"], proccode)] = (
                         block.get("x", 0),
@@ -1358,12 +1367,32 @@ class Decompiler:
         for param in spec.params:
             if getattr(param, "prim", None) == O.FIELD:
                 field = (block.get("fields") or {}).get(param.name) or ["", None]
-                args.append(_quote(str(field[0])))
+                args.append(self._field_text(param, str(field[0])))
             elif param.menu:
                 args.append(self._menu_value(blocks, block, param))
             else:
                 args.append(self._value(blocks, block, param.name))
         return ", ".join(args)
+
+    @staticmethod
+    def _field_text(param, raw: str) -> str:
+        """A stored field value written back in the source's spelling.
+
+        ``motion_setrotationstyle`` stores "all around"; the source says ``2``.
+        The first written form wins, so the numeric spelling is the one used.
+        """
+        values = getattr(param, "values", None)
+        if values:
+            inverse: dict[str, str] = {}
+            for written, stored in values.items():
+                inverse.setdefault(stored, written)
+            written = inverse.get(raw)
+            if written is not None:
+                try:
+                    return str(int(written))
+                except ValueError:
+                    return _quote(written)
+        return _quote(raw)
 
     def _if_chain(self, blocks: dict, block: dict) -> list[str]:
         branches: list[tuple[str, list[str]]] = []

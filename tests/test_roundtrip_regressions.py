@@ -1509,6 +1509,174 @@ class DroppedBlockTests(unittest.TestCase):
         self.assertIn("sensing_current", opcodes(again, "a"))
 
 
+class SizeChangeInputTests(unittest.TestCase):
+    """``set size to`` takes ``SIZE``, ``change size by`` takes ``CHANGE``.
+
+    Crossy Road animates its prize sprites with
+    ``change size by ((target - (size)) / (FPS / 20))``. Both halves were lost:
+    the compiler wrote the value into an input the block does not have (so the
+    VM read an empty ``CHANGE`` and the sprite never resized), and the
+    decompiler asked for that same wrong input, so the expression came out as
+    ``Looks.size += ""``.
+    """
+
+    def test_change_size_writes_the_change_input(self):
+        _, data = compile_source(
+            'class a { public void greenFlag() { Looks.size += 10; } }'
+        )
+        block = next(b for b in target(data, "a")["blocks"].values()
+                     if isinstance(b, dict) and b["opcode"] == "looks_changesizeby")
+        self.assertEqual(list(block["inputs"]), ["CHANGE"])
+
+    def test_set_size_still_writes_size(self):
+        _, data = compile_source(
+            'class a { public void greenFlag() { Looks.size = 10; } }'
+        )
+        block = next(b for b in target(data, "a")["blocks"].values()
+                     if isinstance(b, dict) and b["opcode"] == "looks_setsizeto")
+        self.assertEqual(list(block["inputs"]), ["SIZE"])
+
+    def test_a_computed_size_change_keeps_its_expression(self):
+        source = (
+            'public FPS = 60; class a { public void greenFlag() { '
+            'Looks.size += (250 - Looks.size) / (FPS / 20); } }'
+        )
+        _, data = compile_source(source)
+        text, _ = decompile(data)
+        self.assertIn("Looks.size += (250 - Looks.size) / (FPS / 20)", text)
+        self.assertNotIn('Looks.size += ""', text)
+        _, again = compile_source(text)
+        self.assertIn("looks_size", opcodes(again, "a"))
+        self.assertIn("looks_changesizeby", opcodes(again, "a"))
+
+
+class ParameterisedReceiverTests(unittest.TestCase):
+    """A broadcast hat may call a My Block that takes arguments.
+
+    Crossy Road's ``EditorUI`` has both a ``Decalage %s %s %s`` definition and a
+    ``when I receive [Editor : Remove]`` hat whose body is one call with literal
+    arguments. Merging the two into ``public void Decalage(...)`` cannot be
+    rebuilt — a broadcast hat carries no arguments — so the hat disappeared and
+    the editor never removed anything.
+    """
+
+    SOURCE = """
+        class a {
+            private void slide(Start, Steps) {
+                Looks.say(Start);
+            }
+            public void editorRemove() { // hook: broadcast Editor : Remove
+                slide(5, 1);
+            }
+        }
+    """
+
+    def test_the_hat_stays_a_hat(self):
+        _, data = compile_source(self.SOURCE)
+        self.assertIn("event_whenbroadcastreceived", opcodes(data, "a"))
+        text, _ = decompile(data)
+        self.assertNotIn("receiver at", text)
+        self.assertIn("hook: broadcast Editor : Remove", text)
+        _, again = compile_source(text)
+        self.assertIn("event_whenbroadcastreceived", opcodes(again, "a"))
+        self.assertIn("procedures_call", opcodes(again, "a"))
+
+    def test_the_arguments_survive(self):
+        _, data = compile_source(self.SOURCE)
+        text, _ = decompile(data)
+        self.assertIn("slide(5, 1)", text)
+        _, again = compile_source(text)
+        call = next(b for b in target(again, "a")["blocks"].values()
+                    if isinstance(b, dict) and b["opcode"] == "procedures_call")
+        ids = json.loads(call["mutation"]["argumentids"])
+        self.assertEqual([call["inputs"][i][1][1] for i in ids], ["5", "1"])
+
+    def test_an_argumentless_receiver_is_still_merged(self):
+        source = """
+            class a {
+                private void init() { Looks.say("hi"); }
+                public void start() { // hook: broadcast init
+                    init();
+                }
+            }
+        """
+        _, data = compile_source(source)
+        text, _ = decompile(data)
+        self.assertIn("receiver at", text)
+        _, again = compile_source(text)
+        self.assertIn("event_whenbroadcastreceived", opcodes(again, "a"))
+        self.assertIn("procedures_definition", opcodes(again, "a"))
+
+
+class MotionStyleTests(unittest.TestCase):
+    """``set rotation style`` stores a phrase; the source writes 0, 1, 2.
+
+    ``s3emu`` (the DOS emulator) sets the rotation style of its on-screen
+    sprites and bounces them off the edges; both blocks used to come out as
+    ``// unsupported block`` and the sprites turned the wrong way.
+    """
+
+    def test_the_numbers_are_the_three_rotation_types(self):
+        expected = {0: "don't rotate", 1: "left-right", 2: "all around"}
+        source = "class a { public void f() { %s } }" % "".join(
+            f"Motion.setRotationStyle({style}); " for style in expected
+        )
+        _, data = compile_source(source)
+        stored = [b["fields"]["STYLE"][0] for b in target(data, "a")["blocks"].values()
+                  if isinstance(b, dict) and b["opcode"] == "motion_setrotationstyle"]
+        self.assertEqual(stored, list(expected.values()))
+
+    def test_decompiling_writes_the_numbers_back(self):
+        source = "class a { public void f() { Motion.setRotationStyle(2); } }"
+        _, data = compile_source(source)
+        text, _ = decompile(data)
+        self.assertIn("Motion.setRotationStyle(2)", text)
+        self.assertNotIn("all around", text)
+
+    def test_the_words_still_compile(self):
+        source = 'class a { public void f() { Motion.setRotationStyle("all around"); } }'
+        _, data = compile_source(source)
+        block = next(b for b in target(data, "a")["blocks"].values()
+                     if isinstance(b, dict) and b["opcode"] == "motion_setrotationstyle")
+        self.assertEqual(block["fields"]["STYLE"][0], "all around")
+
+    def test_a_variable_style_is_refused(self):
+        source = """
+            public style = 1;
+            class a { public void f() { Motion.setRotationStyle(style); } }
+        """
+        gen = Codegen(Parser(tokenize(source)).parse(), features={"commentMetadata"},
+                      allow_undefined=True)
+        gen.compile()
+        self.assertTrue(any("E0088" in d for d in gen.diagnostics))
+
+    def test_bounce_survives_a_round_trip(self):
+        source = "class a { public void f() { Motion.bounceIfOnEdge(); } }"
+        _, data = compile_source(source)
+        self.assertIn("motion_ifonedgebounce", opcodes(data, "a"))
+        text, _ = decompile(data)
+        self.assertNotIn("unsupported block", text)
+        self.assertIn("Motion.bounceIfOnEdge()", text)
+        _, again = compile_source(text)
+        self.assertIn("motion_ifonedgebounce", opcodes(again, "a"))
+
+    def test_x_and_y_are_readable_and_writable(self):
+        source = (
+            "class a { public void f() { "
+            "Motion.x = 10; Motion.y += 5; Looks.say(Motion.x + Motion.y); } }"
+        )
+        _, data = compile_source(source)
+        ops = opcodes(data, "a")
+        for wanted in ("motion_setx", "motion_changeyby", "motion_xposition", "motion_yposition"):
+            self.assertIn(wanted, ops)
+        text, _ = decompile(data)
+        self.assertIn("Motion.x = 10", text)
+        self.assertIn("Motion.y += 5", text)
+        self.assertIn("Looks.say(Motion.x + Motion.y)", text)
+        _, again = compile_source(text)
+        self.assertEqual(opcodes(again, "a"), ops)
+
+
 class GlobalListScopeTests(unittest.TestCase):
     """A Stage list is visible from a sprite by its bare name.
 

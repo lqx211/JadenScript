@@ -1744,7 +1744,7 @@ target is named explicitly, so its position in the file does not matter.
 A `stage: …;` line only carries the Stage's own properties — it does not open a
 block.
 
-## 3. Names and scope\n## 3. Names and scope
+## 3. Names and scope
 
 | written as | meaning | lowered to |
 | --- | --- | --- |
@@ -1753,6 +1753,13 @@ block.
 | `x` (bare) | local | sprite-local variable, or `lmsTempVars2` thread variable with `--locals=thread` |
 | parameter name | custom block argument | `argument_reporter_string_number` |
 | `Motion.x`, `Sound.volume`, … | Scratch property | `motion_setx`, `sound_setvolumeto`, … |
+
+A property is both readable and writable: `Motion.x` on the right of an `=` is
+`motion_xposition` (or `motion_yposition`, `looks_size`, `sound_volume`), and on
+the left it is the setter, with `+=` / `-=` becoming `motion_changexby`,
+`motion_changeyby`, `looks_changesizeby`, `sound_changevolumeby`. `Looks.size`
+is the one pair whose slots are spelled differently: `looks_setsizeto` takes
+`SIZE`, `looks_changesizeby` takes `CHANGE`.
 
 **Aliases.** A few blocks have a second, friendlier spelling. Both compile to
 the same opcode, so a project may use either:
@@ -2118,6 +2125,25 @@ implemented yet and produces a diagnostic.
 Only the mappings listed in [`jswc/opcodes.py`](./jswc/opcodes.py) are
 implemented; the table is verified against `scratch-vm/src/blocks` and the pen
 and music extensions.
+
+### Rotation style is a number
+
+`set rotation style` keeps a *phrase* in a field, but the field holds the VM's
+rotation type, so the source spells the three states as the numbers the VM
+orders them by:
+
+```jsw
+Motion.setRotationStyle(0);   // don't rotate — the sprite stays upright
+Motion.setRotationStyle(1);   // left-right — flips on the vertical axis
+Motion.setRotationStyle(2);   // all around  — rotates freely
+Motion.bounceIfOnEdge();      // if on edge, bounce
+```
+
+The decompiler writes the same numbers, so a project that stored `"all around"`
+comes back as `Motion.setRotationStyle(2)`. The words stay accepted
+(`"all around"`, `"left-right"`, `"none"`, `"all"`), and because the choice is a
+fixed field rather than an input, a variable there is `E0088` — branch on the
+value and write each literal in its own branch instead.
 
 There is no `c ? a : b`. `?` is not a JadenScript operator: write the ternary
 the postfix way (`x = (1) if (c) else (2);`, above). A `?` in an expression is

@@ -413,6 +413,13 @@ MESSAGES: tuple[Message, ...] = (
             "``utilities_ternaryOperator``. The C-shaped ``c ? a : b`` is not "
             "part of the language, so ``?`` never lexes into anything."),
 
+    Message("E0088", "error", "this dropdown only takes a literal",
+            "The block stores its choice as a fixed field, not as an input, so "
+            "the VM cannot be handed a variable there. Write one of the literal "
+            "values the block documents (``set rotation style`` takes 0, 1 or "
+            "2); to pick at run time, branch on the value and write each "
+            "literal in its own branch."),
+
     Message("W0033", "warning", "the loop changes the list it is walking",
             "A ``for … in <list>`` loop reads ``item (i) of`` the list as it "
             "goes; deleting or inserting inside the body shifts the rest of the "

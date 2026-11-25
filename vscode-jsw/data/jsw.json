@@ -1410,6 +1410,14 @@
   "Motion": {
    "members": [
     [
+     "bounceIfOnEdge",
+     {
+      "kind": "command",
+      "detail": "bounceIfOnEdge()",
+      "doc": "If on edge, bounce — turns the sprite back from the stage edge without moving it."
+     }
+    ],
+    [
      "direction",
      {
       "kind": "property",
@@ -1439,6 +1447,14 @@
       "kind": "command",
       "detail": "move(steps)",
       "doc": "motion_movesteps"
+     }
+    ],
+    [
+     "setRotationStyle",
+     {
+      "kind": "command",
+      "detail": "setRotationStyle(0 | 1 | 2)",
+      "doc": "0 = don't rotate (sprite stays upright), 1 = left-right (flips on the vertical axis), 2 = all around (rotates freely). The style is a fixed field, so the argument must be a literal."
      }
     ],
     [

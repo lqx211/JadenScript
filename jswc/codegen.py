@@ -3661,6 +3661,24 @@ class Codegen:
         block.set_field(field.value, value.value)
         return Ref(block)
 
+    def _field_value(self, param: O.Param, arg: A.Expr | None) -> str:
+        """The text a dropdown field stores for ``arg``.
+
+        Most dropdowns take the literal as written. The ones carrying a
+        ``values`` map are written one way and stored another (``set rotation
+        style 2`` stores "all around"), and they cannot take a variable at all
+        because the choice lives in a field, not in an input.
+        """
+        value = self._eval(arg)
+        if not isinstance(value, Lit):
+            if param.values is not None:
+                self.diag(arg, "E0088", f"{param.name.lower()} needs a literal value")
+            return ""
+        text = value.value
+        if param.values is not None:
+            return param.values.get(text.strip().lower(), param.values.get(text, text))
+        return text
+
     def _join_string(self, arg: A.Expr | None) -> Ref:
         block = self._new("operator_join")
         block.set_input("STRING1", self._as_input(self._eval(arg), O.TEXT))
@@ -3674,8 +3692,7 @@ class Codegen:
             block.set_field(name, value)
         for param, arg in zip(spec.params, args):
             if param.prim == O.FIELD:
-                value = self._eval(arg)
-                block.set_field(param.name, value.value if isinstance(value, Lit) else "")
+                block.set_field(param.name, self._field_value(param, arg))
             elif param.menu:
                 block.set_input(
                     param.name, self._menu_input(param, self._eval(arg), block, arg)
@@ -3834,8 +3851,7 @@ class Codegen:
                 block.set_field(name, value)
             for param, arg in zip(spec.params, call.args):
                 if param.prim == O.FIELD:
-                    value = self._eval(arg)
-                    block.set_field(param.name, value.value if isinstance(value, Lit) else "")
+                    block.set_field(param.name, self._field_value(param, arg))
                 elif param.menu:
                     block.set_input(
                         param.name, self._menu_input(param, self._eval(arg), block, arg)

@@ -2743,20 +2743,20 @@ class EditorUI {
         Control.deleteThisClone();
     }
 
-    metadata Editor___Remove pos 2356,64;
-    public void Editor___Remove(Start, Decalage, Progress) { // proccode Decalage %s %s %s // warp // receiver at 2356,976 "Editor : Remove"
+    metadata Decalage pos 2356,64;
+    private void Decalage(Start, Decalage, Progress) { // warp
         if (Decalage > 0) {
             if (Progress > Start) {
                 if (MovingObjectsData.contains(join("#", Progress - 1))) {
                     MovingObjectsData.set(MovingObjectsData.indexOf(join("#", Progress - 1)), join("#", Progress));
                 }
-                Editor___Remove(Start, Decalage, Progress - 1);
+                Decalage(Start, Decalage, Progress - 1);
             }
         } elif (Start + Progress < FloorData.length() + 2) {
             if (MovingObjectsData.contains(join("#", Start + Progress))) {
                 MovingObjectsData.set(MovingObjectsData.indexOf(join("#", Start + Progress)), join("#", Start + Progress - 1));
             }
-            Editor___Remove(Start, Decalage, Progress + 1);
+            Decalage(Start, Decalage, Progress + 1);
         }
     }
 
@@ -2769,7 +2769,7 @@ class EditorUI {
             FloorData.insert(Y, "Water");
             ObjectsData.insert(Y, "000000000000000");
         }
-        Editor___Remove(Y, 1, FloorData.length() + 1);
+        Decalage(Y, 1, FloorData.length() + 1);
         MovingObjectsData.add(join("#", Y));
         MovingObjectsData.add(2);
         MovingObjectsData.add(5 * (((Y / 2 == Operators.round(Y / 2)) - 0.5) * 2));
@@ -2785,7 +2785,7 @@ class EditorUI {
             FloorData.insert(Y, "Rails");
             ObjectsData.insert(Y, "000000000000000");
         }
-        Editor___Remove(Y, 1, FloorData.length() + 1);
+        Decalage(Y, 1, FloorData.length() + 1);
         MovingObjectsData.add(join("#", Y));
         MovingObjectsData.add(Operators.random(5, 10));
         MovingObjectsData.add((Operators.random(0, 1) - 0.5) * 100);
@@ -2917,11 +2917,16 @@ class EditorUI {
             FloorData.insert(Y, "Road");
             ObjectsData.insert(Y, "000000000000000");
         }
-        Editor___Remove(Y, 1, FloorData.length() + 1);
+        Decalage(Y, 1, FloorData.length() + 1);
         MovingObjectsData.add(join("#", Y));
         MovingObjectsData.add(2);
         MovingObjectsData.add(5 * ((Operators.random(0, 1) - 0.5) * 2));
         MovingObjectsData.add(Operators.random(1, 6));
+    }
+
+    metadata Editor___Remove pos 2356,976;
+    public void Editor___Remove() { // hook: broadcast Editor : Remove
+        Decalage(SelectedY, -1, 0);
     }
 
     metadata AddLilypads pos 2356,1152;
@@ -2933,7 +2938,7 @@ class EditorUI {
             FloorData.insert(Y, "Lilypads");
             ObjectsData.insert(Y, "000000070000000");
         }
-        Editor___Remove(Y, 1, FloorData.length() + 1);
+        Decalage(Y, 1, FloorData.length() + 1);
     }
 
     metadata AddGrass pos 4063,1560;
@@ -2945,7 +2950,7 @@ class EditorUI {
             FloorData.insert(Y, "Grass");
             ObjectsData.insert(Y, "000000000000000");
         }
-        Editor___Remove(Y, 1, FloorData.length());
+        Decalage(Y, 1, FloorData.length());
     }
 }
 
@@ -3727,12 +3732,12 @@ class FreeGift {
             Sound.playSound("Free Gift");
             repeat (FPS * 1.5) {
                 Temp = Operators.random(200, 225);
-                Looks.size += "";
+                Looks.size += (Temp - Looks.size) / (FPS / 20);
             }
             Temp = 500;
             Sound.playSound("Free Gift Open Gift");
             repeat (FPS * 0.1) {
-                Looks.size += "";
+                Looks.size += (Temp - Looks.size) / (FPS / 20);
             }
             if (Operators.random(1, 3) == 1) {
                 Temp = Operators.random(1, 5);
@@ -4450,7 +4455,7 @@ class WinAPrize {
                 WinACharacter();
                 Looks.size = 100;
                 while (!(_CurrentMenu == 0)) {
-                    Looks.size += "";
+                    Looks.size += (250 - Looks.size) / (FPS / 5);
                 }
             }
             Control.deleteThisClone();
@@ -4469,7 +4474,7 @@ class WinAPrize {
             Control.wait(0.5);
             Looks.goToFront();
             while (!(Operators.round(Motion.x) == 0)) {
-                Looks.size += "";
+                Looks.size += (300 - Looks.size) / (FPS / 5);
                 Motion.x += (0 - Motion.x) / (FPS / 5);
                 Motion.y += (0 - Motion.y) / (FPS / 5);
             }
