@@ -415,6 +415,7 @@ def cmd_build(args: argparse.Namespace) -> int:
         path, _data = write_sb3(project, output)
         payload = Path(path).read_bytes() if args.html else b""
     html_path = None
+    hosted = None
     if args.html:
         # After the project is on disk: a packaging failure must not lose the
         # build that already succeeded.
@@ -430,7 +431,6 @@ def cmd_build(args: argparse.Namespace) -> int:
                     title=args.html_title,
                 )
                 html_path = Path(path).with_suffix(".html")
-                hosted["path"] = html_path
             else:
                 html_path = html.pack(
                     payload,
@@ -457,9 +457,22 @@ def cmd_build(args: argparse.Namespace) -> int:
               f"{ui.THEME.paint(', '.join(project.extensions), ui.THEME.magenta)}")
     if html_path is not None:
         size = html_path.stat().st_size
+        note = "extensions next to the page" if hosted else "self-contained"
         print(f"  {ui.muted('html      ')}"
               f"{ui.THEME.paint(str(html_path), ui.THEME.bold)} "
-              f"{ui.muted(f'({size / 1_000_000:.1f} MB, self-contained)')}")
+              f"{ui.muted(f'({size / 1_000_000:.1f} MB, {note})')}")
+        if hosted:
+            assets = hosted["assets"]
+            files = [p for p in assets.rglob("*") if p.is_file()]
+            moved = sum(p.stat().st_size for p in files)
+            print(f"  {ui.muted('assets    ')}"
+                  f"{ui.THEME.paint(str(assets), ui.THEME.bold)} "
+                  f"{ui.muted(f'({len(files)} files, {moved / 1_000_000:.1f} MB)')}")
+            print(ui.muted("            upload the page and that folder together; "
+                           "the page does not run without it"))
+        else:
+            print(ui.muted("            a host that sends a Content-Security-Policy "
+                           "needs --self-hosted"))
     if errors or warnings or info:
         print(_tally(errors, warnings, info))
         if errors:
