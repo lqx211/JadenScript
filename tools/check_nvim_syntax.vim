@@ -48,6 +48,7 @@ let s:lines = [
       \ '    private void slide(start, steps) {',
       \ '        loose { Looks.show(); } // hook: when [timer] > 2',
       \ '        // proccode draw %s at 1,2',
+      \ 'metadata watch Stage.sensing_timer id="x" mode=default at 0,0 0x0 hidden;',
       \ ]
 
 " (line, snippet, expected group)
@@ -116,6 +117,8 @@ let s:expect = [
       \ [31, 'loose', 'jswLoose'],
       \ [31, 'timer]', 'jswHookMenu'],
       \ [32, '%s', 'jswProccodeHole'],
+      \ [33, 'id=', 'jswTargetKey'],
+      \ [33, 'mode=', 'jswTargetKey'],
       \ ]
 
 call setline(1, s:lines)

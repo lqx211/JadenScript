@@ -34,6 +34,7 @@ from jswc.keywords import (  # noqa: E402
     LITERALS,
     METADATA_ANNOTATIONS,
     METADATA_FLAGS,
+    METADATA_KEYS,
     METADATA_WORDS,
     MODIFIERS,
     MONITOR_MODES,
@@ -574,6 +575,12 @@ def build_grammar() -> dict:
                                 },
                             },
                             {
+                                # ``metadata watch Stage.sensing_timer id="…" mode=default``
+                                "comment": "id=… mode=… - the watch spelling's keys",
+                                "name": "keyword.other.target-key.jsw",
+                                "match": _word_re(METADATA_KEYS) + r"(?=\s*=)",
+                            },
+                            {
                                 # ``metadata note s2 at …`` / ``metadata note Stage at …``:
                                 # a bare owner. It comes after the modes and words
                                 # above, so ``list`` and ``shown`` keep their own
@@ -589,6 +596,9 @@ def build_grammar() -> dict:
                                 "patterns": [{"name": "constant.character.escape.jsw", "match": r"\\."}],
                             },
                             {"name": "constant.numeric.jsw", "match": r"\b0[xX][0-9a-fA-F]+\b"},
+                            # ``pos -2,1259`` - a negative coordinate is one number,
+                            # not a minus sign next to one.
+                            {"name": "constant.numeric.jsw", "match": r"(?<![\w.])-\d+(?:\.\d+)?"},
                             # ``100x24`` - a monitor's size: the numbers either
                             # side, and the ``x`` between them, which otherwise
                             # reads as a variable called x.
@@ -634,7 +644,7 @@ def build_grammar() -> dict:
                                 "end": '"',
                                 "patterns": [{"name": "constant.character.escape.jsw", "match": r"\\."}],
                             },
-                            {"name": "constant.numeric.jsw", "match": r"\b\d+(?:\.\d+)?\b"},
+                            {"name": "constant.numeric.jsw", "match": r"(?<![\w.])-?\d+(?:\.\d+)?\b"},
                             {"name": "keyword.operator.assignment.jsw", "match": "="},
                             {"name": "punctuation.separator.jsw", "match": ","},
                         ],

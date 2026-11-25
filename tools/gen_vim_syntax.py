@@ -29,6 +29,7 @@ from jswc.keywords import (  # noqa: E402
     LITERALS,
     METADATA_ANNOTATIONS,
     METADATA_FLAGS,
+    METADATA_KEYS,
     METADATA_WORDS,
     MODIFIERS,
     MONITOR_MODES,
@@ -79,6 +80,8 @@ METADATA_KEYWORD = set(METADATA_WORDS)
 METADATA_MODES = set(MONITOR_MODES)
 METADATA_STATES = set(METADATA_FLAGS)
 METADATA_VERBS = set(METADATA_ANNOTATIONS)
+#: ``id="…"`` and ``mode=default`` — the keys only ``metadata watch`` carries.
+METADATA_KEY_NAMES = set(METADATA_KEYS)
 #: What a ``// comment`` annotation may start with.
 ANNOTATION_WORDS = (
     "proccode", "receiver at", "hook:", "monitor", "watch", "comment",
@@ -219,6 +222,10 @@ def syntax_file() -> str:
         r"syn keyword jswMonitorMode contained " + _words(METADATA_MODES),
         r"syn keyword jswMetadataFlag contained " + _words(METADATA_STATES),
         r"syn keyword jswMetadataVerb contained " + _words(METADATA_VERBS),
+        # ``id="…"`` and ``mode=default`` - the keys only ``metadata watch``
+        # carries. Contained, so ``mode`` stays an ordinary name elsewhere.
+        r"syn match jswTargetKey contained /\%(\s\)\@<=\%("
+        + _alternation(METADATA_KEY_NAMES) + r"\)\ze\s*=/",
         r"syn match jswTarget /^\s*\h\w*\ze:.\{-}\<name=/",
         # A lookbehind, not a literal prefix: a match cannot *start* inside an
         # earlier one, so ``[(:,]\s*\zs`` lost every key after a comma (the

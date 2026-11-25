@@ -185,6 +185,11 @@ METADATA_WORDS: frozenset[str] = frozenset(
     {"pos", "at", "range", "watchers", "min", "max", "discrete", "continuous"}
 )
 
+#: The keys only the ``metadata watch`` spelling carries: the monitor's id and
+#: its mode, written ``id="…" mode=default``. The decompiler emits them for a
+#: monitor that shows a plain reporter (``sensing_timer`` and friends).
+METADATA_KEYS: frozenset[str] = frozenset({"id", "mode", "properties"})
+
 #: The monitor's own state. These are values, not syntax: a monitor is
 #: ``shown``, ``hidden`` or ``minimized``.
 METADATA_FLAGS: frozenset[str] = frozenset({"shown", "hidden", "minimized"})

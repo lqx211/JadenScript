@@ -52,6 +52,7 @@ syn keyword jswMetadata contained at continuous discrete max min pos range watch
 syn keyword jswMonitorMode contained default large largeReadout list normal slider
 syn keyword jswMetadataFlag contained hidden minimized shown
 syn keyword jswMetadataVerb contained comment monitor note watch
+syn match jswTargetKey contained /\%(\s\)\@<=\%(properties\|mode\|id\)\ze\s*=/
 syn match jswTarget /^\s*\h\w*\ze:.\{-}\<name=/
 syn match jswTargetKey /\%([(:,]\s*\)\@<=\h\w*\ze=[^=]/
 " The value of a target key: ``rotation=all``, ``video=on``, ``show=1``.

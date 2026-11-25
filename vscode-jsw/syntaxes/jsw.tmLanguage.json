@@ -639,6 +639,11 @@
               }
             },
             {
+              "comment": "id=… mode=… - the watch spelling's keys",
+              "name": "keyword.other.target-key.jsw",
+              "match": "\\b(?:properties|mode|id)\\b(?=\\s*=)"
+            },
+            {
               "comment": "A bare sprite or class name: the thing the monitor watches.",
               "name": "entity.name.type.class.jsw",
               "match": "(?<=\\s)[A-Za-z_$][\\w$]*(?=\\s|$)"
@@ -657,6 +662,10 @@
             {
               "name": "constant.numeric.jsw",
               "match": "\\b0[xX][0-9a-fA-F]+\\b"
+            },
+            {
+              "name": "constant.numeric.jsw",
+              "match": "(?<![\\w.])-\\d+(?:\\.\\d+)?"
             },
             {
               "name": "constant.numeric.jsw",
@@ -784,7 +793,7 @@
             },
             {
               "name": "constant.numeric.jsw",
-              "match": "\\b\\d+(?:\\.\\d+)?\\b"
+              "match": "(?<![\\w.])-?\\d+(?:\\.\\d+)?\\b"
             },
             {
               "name": "keyword.operator.assignment.jsw",

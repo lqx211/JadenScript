@@ -90,6 +90,14 @@ const EXPECT = [
   // a space in it, and the member after the dot is still a member.
   ['metadata note "obj loader".tip at 0,0 1x1: "x";', 'tip', 'variable.other.member.jsw'],
   ['metadata note "obj loader".tip at 0,0 1x1: "x";', '.', 'punctuation.accessor.jsw'],
+  // `metadata watch … id="…" mode=default` - the two keys only that spelling has.
+  ['metadata watch Stage.sensing_timer id="x" mode=default at 0,0 0x0 hidden;', 'id',
+   'keyword.other.target-key.jsw'],
+  ['metadata watch Stage.sensing_timer id="x" mode=default at 0,0 0x0 hidden;', 'mode',
+   'keyword.other.target-key.jsw'],
+  // A negative coordinate is one number.
+  ['metadata greenFlag pos -2,1259;', '-2', 'constant.numeric.jsw'],
+  ['s4: name="s4", x=-240;', '-240', 'constant.numeric.jsw'],
   // `video=on` was the one line where `=` was not an assignment: the
   // key=value rule matched it without capturing the equals.
   ['stage: video=on;', '=', 'keyword.operator.assignment.jsw'],
