@@ -43,7 +43,11 @@ group of 36 tokens — the only way to know a Vim regex really matches.
 | `jswMember` | `Identifier` | the `notes` in `Player.notes` |
 | `jswClassName` | `Type` | the name after `class` |
 | `jswRepeat` / `jswConditional` / `jswStatement` | `Repeat` / `Conditional` / `Statement` | `for`, `if`, `return` |
+| `jswLoose` | `PreProc` | `loose { … }` — raw blocks are not control flow |
+| `jswParameter` | `Identifier` | the `start, steps` of `void slide(start, steps)` |
 | `jswAnnotationWord` | `SpecialComment` | `// proccode`, `// hook:`, `// Sprite:` |
+| `jswHookMenu` | `Constant` | the `timer` of `// hook: when [timer] > 2` |
+| `jswProccodeHole` | `SpecialChar` | the `%s` of `// proccode draw %s` |
 | `jswTarget` / `jswTargetKey` / `jswTargetValue` | `PreProc` / `Identifier` / `Constant` | `Empty: name=…`, `rotation=all` |
 | `jswMetadata` / `jswMetadataVerb` / `jswMonitorMode` / `jswMetadataFlag` | `Statement` / `Keyword` / `Constant` / `Constant` | `metadata … pos`, `monitor`, `slider`, `shown` |
 

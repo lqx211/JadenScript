@@ -28,6 +28,8 @@ from jswc.keywords import (  # noqa: E402
     BUILTIN_NAMESPACES,
     FEATURES,
     FLAG_VALUES,
+    HOOK_MENUS,
+    PROCCODE_PLACEHOLDERS,
     KEYWORDS,
     LITERALS,
     METADATA_ANNOTATIONS,
@@ -46,7 +48,7 @@ GRAMMAR_PATH = ROOT / "vscode-jsw" / "syntaxes" / "jsw.tmLanguage.json"
 
 CONTROL = {
     "if", "elif", "else", "for", "while", "repeat", "switch", "case",
-    "default", "break", "continue", "return", "call", "loose",
+    "default", "break", "continue", "return", "call",
 }
 WORD_OPERATORS = {"and", "or", "not"}
 DECLARATIONS = KEYWORDS - CONTROL - WORD_OPERATORS - LITERALS - MODIFIERS - TYPES - {"import", "include", "as"}
@@ -105,12 +107,17 @@ def _target_value_rules() -> list:
     """
 
     def pair(key: str, values, comment: str, scope: str) -> dict:
+        # The whole ``key=value`` is one match, so the ``=`` has to be captured
+        # too: a token the rule matches but does not capture keeps the enclosing
+        # region's scope, which made `video=on` the only line where `=` was not
+        # an assignment.
         return {
             "comment": comment,
-            "match": rf"\b({key})\s*=\s*(" + _word_re(values) + ")",
+            "match": rf"\b({key})\s*(=)\s*(" + _word_re(values) + ")",
             "captures": {
                 "1": {"name": "keyword.other.target-key.jsw"},
-                "2": {"name": scope},
+                "2": {"name": "keyword.operator.assignment.jsw"},
+                "3": {"name": scope},
             },
         }
 
@@ -147,6 +154,8 @@ def _sprite_comment_rule() -> dict:
                 "match": _word_re(TARGET_KEYS) + r"(?=\s*=)",
             },
             {"name": "constant.numeric.jsw", "match": r"-?\b\d+(?:\.\d+)?\b"},
+            {"name": "keyword.operator.assignment.jsw", "match": "="},
+            {"name": "punctuation.separator.jsw", "match": r"[,:]"},
         ],
     }
 
@@ -246,6 +255,21 @@ def build_grammar() -> dict:
                                 "comment": "// costume … / // sound …",
                                 "name": "keyword.other.annotation.jsw",
                                 "match": _word_re(ASSET_COMMENT_WORDS),
+                            },
+                            {
+                                # ``// hook: when [timer] > 10`` / ``when tilted [front]``
+                                "comment": "the bracketed menu of a hook annotation",
+                                "name": "constant.language.hook-menu.jsw",
+                                "match": r"(?<=\[)(?:" + "|".join(sorted(
+                                    HOOK_MENUS, key=lambda w: (-len(w), w))) + r")(?=\])",
+                            },
+                            {
+                                # ``// proccode Decalage %s %s %s``
+                                "comment": "the %-placeholders of a proccode",
+                                "name": "variable.parameter.proccode.jsw",
+                                "match": "|".join(sorted(
+                                    PROCCODE_PLACEHOLDERS, key=lambda w: (-len(w), w))
+                                ).replace("%", r"\%"),
                             },
                             {
                                 "comment": "centerx= centery= res= rate= samples=",
@@ -465,12 +489,31 @@ def build_grammar() -> dict:
                         },
                     },
                     {
-                        "comment": "void Namespace.name(...) / void name(...)",
-                        "match": r"\b(void)\s+([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*)",
-                        "captures": {
+                        "comment": "void Namespace.name(a, b) — the declaration, "
+                                   "and the parameters inside the parens.",
+                        "name": "meta.function-declaration.jsw",
+                        "begin": r"\b(void)\s+([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*)\s*(\()",
+                        "beginCaptures": {
                             "1": {"name": "storage.type.jsw"},
                             "2": {"name": "entity.name.function.jsw"},
+                            "3": {"name": "punctuation.section.parens.jsw"},
                         },
+                        "end": r"\)",
+                        "endCaptures": {"0": {"name": "punctuation.section.parens.jsw"}},
+                        "patterns": [
+                            # A parameter is a name in a scope of its own: it
+                            # reads as a variable everywhere else, but a call's
+                            # argument and a sprite variable are different
+                            # things and the theme colours them apart.
+                            {"name": "variable.parameter.jsw", "match": r"[A-Za-z_$][\w$]*"},
+                            {"name": "punctuation.separator.jsw", "match": ","},
+                        ],
+                    },
+                    {
+                        "comment": "loose { … } - raw blocks the decompiler could "
+                                   "not map. Not control flow: nothing is tested.",
+                        "name": "keyword.other.loose.jsw",
+                        "match": r"\b(loose)\b",
                     },
                 ]
             },
@@ -517,17 +560,49 @@ def build_grammar() -> dict:
                                 "match": r"\b[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)+",
                             },
                             {
+                                # ``metadata note "obj loader".tip at …`` - the
+                                # decompiler quotes a name with a space in it.
+                                "comment": 'a quoted target name: "obj loader".tip',
+                                "match": r'("[^"]*")(\.)([A-Za-z_$][\w$]*)',
+                                "captures": {
+                                    "1": {"name": "string.quoted.double.jsw"},
+                                    "2": {"name": "punctuation.accessor.jsw"},
+                                    # A part of the match that is not captured
+                                    # keeps the region's scope, so the member
+                                    # after the dot needs its own group.
+                                    "3": {"name": "variable.other.member.jsw"},
+                                },
+                            },
+                            {
+                                # ``metadata note s2 at …`` / ``metadata note Stage at …``:
+                                # a bare owner. It comes after the modes and words
+                                # above, so ``list`` and ``shown`` keep their own
+                                # colour and only a real name lands here.
+                                "comment": "A bare sprite or class name: the thing the monitor watches.",
+                                "name": "entity.name.type.class.jsw",
+                                "match": r"(?<=\s)[A-Za-z_$][\w$]*(?=\s|$)",
+                            },
+                            {
                                 "name": "string.quoted.double.jsw",
                                 "begin": '"',
                                 "end": '"',
                                 "patterns": [{"name": "constant.character.escape.jsw", "match": r"\\."}],
                             },
                             {"name": "constant.numeric.jsw", "match": r"\b0[xX][0-9a-fA-F]+\b"},
-                            # ``100x24`` - a monitor's size, scoped either side of
-                            # the x the way #numbers does it.
+                            # ``100x24`` - a monitor's size: the numbers either
+                            # side, and the ``x`` between them, which otherwise
+                            # reads as a variable called x.
                             {"name": "constant.numeric.jsw", "match": r"\b\d+(?:\.\d+)?(?=[x×])"},
                             {"name": "constant.numeric.jsw", "match": r"(?<=[x×])\d+(?:\.\d+)?\b"},
+                            {
+                                "name": "punctuation.separator.dimension.jsw",
+                                "match": r"(?<=\d)[x×](?=\d)",
+                            },
                             {"name": "constant.numeric.jsw", "match": r"\b\d+(?:\.\d+)?\b"},
+                            {"name": "keyword.operator.range.jsw", "match": r"\.\."},
+                            {"name": "keyword.operator.assignment.jsw", "match": "="},
+                            {"name": "punctuation.section.parens.jsw", "match": r"[()]"},
+                            {"name": "punctuation.separator.jsw", "match": r"[,:]"},
                         ],
                     }
                 ],
@@ -608,6 +683,12 @@ def build_grammar() -> dict:
                         "match": r"(?<=[x×])\d+(?:\.\d+)?\b",
                     },
                     {
+                        # The ``x`` of ``352x212``: a size separator, not a
+                        # variable that happens to be called x.
+                        "name": "punctuation.separator.dimension.jsw",
+                        "match": r"(?<=\d)[x×](?=\d)",
+                    },
+                    {
                         "name": "constant.numeric.jsw",
                         "match": r"\b\d+(?:\.\d+)?(?:[eE][+-]?\d+)?\b",
                     },
@@ -681,13 +762,16 @@ def build_grammar() -> dict:
                         "match": r"(?<=\.)(?:" + "|".join(sorted(MICROBIT_CONSTANTS)) + r")\b",
                     },
                     {
-                        "comment": "Method or property after a dot.",
+                        # ``(?<!\.\.)``: ``for i in 1..n`` puts an ``n`` right
+                        # after a dot, and it is the range's upper bound, not a
+                        # property of ``1.``.
+                        "comment": "Method or property after a single dot.",
                         "name": "entity.name.function.call.jsw",
-                        "match": r"(?<=\.)[A-Za-z_$][\w$]*(?=\s*\()",
+                        "match": r"(?<!\.\.)(?<=\.)[A-Za-z_$][\w$]*(?=\s*\()",
                     },
                     {
                         "name": "variable.other.property.jsw",
-                        "match": r"(?<=\.)[A-Za-z_$][\w$]*",
+                        "match": r"(?<!\.\.)(?<=\.)[A-Za-z_$][\w$]*",
                     },
                 ]
             },

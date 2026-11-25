@@ -238,6 +238,43 @@ TARGET_KEY_SCOPES: dict[str, str] = {
     **{key: "stage" for key in ("tempo", "video", "videoState", "videoTransparency")},
 }
 
+#: The bracketed menu a ``// hook:`` annotation can carry: the two values
+#: ``when [timer] > n`` may watch, and the gestures a micro:bit hat names.
+#: Shared by the grammar (so ``[timer]`` is not plain prose inside a comment)
+#: and by the completion inside ``// hook: when [ … ``.
+HOOK_MENUS: frozenset[str] = frozenset(
+    {
+        "timer",
+        "loudness",
+        "音量",
+        "moved",
+        "shaken",
+        "jumped",
+        "front",
+        "back",
+        "left",
+        "right",
+        "up",
+        "down",
+        "logo up",
+        "logo down",
+        "screen up",
+        "screen down",
+        "tilt left",
+        "tilt right",
+        "free fall",
+        "3g",
+        "6g",
+        "8g",
+    }
+)
+
+#: ``// proccode Decalage %s %s %s`` — the placeholders say what the arguments
+#: are, so they get a scope of their own instead of reading as prose.
+PROCCODE_PLACEHOLDERS: frozenset[str] = frozenset(
+    {"%s", "%b", "%d", "%n", "%c"}
+)
+
 #: ``// costume centerx=0 centery=0 res=1`` and
 #: ``// sound rate=48000 samples=8225`` — the annotation the asset import
 #: writes above an ``import`` line.

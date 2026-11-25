@@ -1708,7 +1708,7 @@ metadata note <target> at <x>,<y> <W>x<H> [minimized]: "text";
 | `<mode>` | `default` · `large` · `slider` · `list` — see below |
 | `<W>x<H>` | the monitor box, e.g. `100x24` |
 
-Every word on the line is one of four kinds, and VS Code colours them apart
+Every word on the line is one of five kinds, and VS Code colours them apart
 (and explains each one on hover):
 
 | kind | words | highlighting |
@@ -1717,9 +1717,22 @@ Every word on the line is one of four kinds, and VS Code colours them apart
 | mode | `default` · `normal` · `large` · `largeReadout` · `slider(min,max)` · `list` | `constant.language.monitor-mode` |
 | state | `shown` · `hidden` · `minimized` | `constant.language.metadata-flag` |
 | layout | `pos` · `at` · `range` · `discrete` · `continuous` · `min` · `max` · `watchers` | `keyword.other.metadata` |
+| target | `Stage.Score`, `"obj loader".score`, or a bare sprite name `s2` | `variable.other.member` / `entity.name.type.class` |
 
 The parser folds case for the annotations and the modes, so `SLIDER` is the
-slider mode; the layout words are lower-case only.
+slider mode; the layout words are lower-case only. The rest of the line is
+punctuation and numbers: the `,` and `:` between fields, the parentheses of
+`slider(…)`, the `..` of a `range`, and the `x` of `100x24` — that one is a size
+separator, not a variable called `x`.
+
+**In the editor.** Typing `metadata ` offers the eight shapes above; each one
+inserts the *whole* line with tab stops (`pos` writes `Stage.tick pos 10,20;`),
+because inserting the bare word produced `metadata pos`, which the parser
+rejects (`E0032`). The first word may also be a script this file declares — then
+only `pos` is offered — or the thing being watched, so the file's own state
+names are offered too. Hovering `metadata` prints the whole grammar, hovering a
+key names its type, hovering a target says which state the monitor watches, and
+`// hook: when [` completes the bracketed menu (`timer`, `loudness`, gestures).
 
 **Monitor modes.** Omitting the mode is the same as writing `default`: an
 ordinary read-out. The other modes are Scratch's own, with the spellings a
@@ -1760,6 +1773,18 @@ the left it is the setter, with `+=` / `-=` becoming `motion_changexby`,
 `motion_changeyby`, `looks_changesizeby`, `sound_changevolumeby`. `Looks.size`
 is the one pair whose slots are spelled differently: `looks_setsizeto` takes
 `SIZE`, `looks_changesizeby` takes `CHANGE`.
+
+**In the editor,** a parameter is a name in a scope of its own
+(`variable.parameter`): it reads as a variable inside the body, but the
+signature is where it is defined. The editor answers for your own declarations
+as well as the built-in ones: `slide(` shows the argument hint
+`slide(start, steps)` with the current parameter highlighted (for a My Block, a
+`Class.method` call, a namespace block, a builtin or a list method); hovering a
+call prints its signature, the class that owns it and the `//` comment written
+above the declaration; `Ctrl`-click jumps to that declaration; and the outline
+lists each class with its blocks and their signatures. A parameter is never
+offered as `Class.param` — it only exists inside the block whose signature
+names it.
 
 **Aliases.** A few blocks have a second, friendlier spelling. Both compile to
 the same opcode, so a project may use either:

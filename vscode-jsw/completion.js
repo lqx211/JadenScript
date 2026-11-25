@@ -171,23 +171,59 @@ function item(label, kind, detail, doc, extra) {
 
 const NAME = "[A-Za-z_$][\\w$]*";
 
-/** The runtime namespace names, so `Pen.x = 1` is never read as stage state. */
+/**
+ * The runtime namespace names, so `Pen.x = 1` is never read as stage state.
+ *
+ * Cached per `data` object: the scan cache is keyed by the identity of this
+ * set, and building a fresh one on every call made every scan a miss.
+ */
+const namespaceNameCache = new WeakMap();
 function namespaceNames(data) {
+  if (data && namespaceNameCache.has(data)) return namespaceNameCache.get(data);
   // ``namespaces`` only holds the ones with members; ``builtinNamespaces`` is
   // the compiler's full list, so an empty namespace still counts as one.
   const names = new Set(Object.keys((data && data.namespaces) || {}));
   for (const name of (data && data.builtinNamespaces) || []) names.add(name);
+  if (data) namespaceNameCache.set(data, names);
   return names;
 }
 const DOTTED = NAME + "(?:\\." + NAME + ")*";
+
+// A 60k-line project takes ~15-60 ms to scan, and one editor request asks for
+// the scan several times (completion asks for symbols too). A few entries are
+// kept so two open files do not evict each other; the key is the whole text, so
+// any edit invalidates its own entry.
+const SCAN_CACHE_SIZE = 4;
+const scanCache = [];
+
+/**
+ * `scanDocument`, memoised on the document text.
+ *
+ * @returns the same shape as `scanDocument`
+ */
+function scanCached(text, namespaceNames) {
+  for (const entry of scanCache) {
+    if (entry.text === text && entry.namespaces === namespaceNames) return entry.result;
+  }
+  const result = scanDocument(text, namespaceNames);
+  scanCache.push({ text, namespaces: namespaceNames, result });
+  if (scanCache.length > SCAN_CACHE_SIZE) scanCache.shift();
+  return result;
+}
 
 /**
  * Everything the document declares, so completion can answer "what is this
  * receiver?" instead of guessing. Returns:
  *
- * - `classes`: name -> `{ members: Map<leaf, {list: bool, method: bool}> }`
- * - `globals`: declared name (possibly dotted, `Player.notes`) -> `{list}`
+ * - `classes`: name -> `{ members: Map<leaf, member>, namespace, line, open, close }`
+ * - `globals`: declared name (possibly dotted, `Player.notes`) -> `{list, line}`
  * - `lists`:   names known to be lists (file scope and imported `.jsa`/`.jsl`)
+ * - `functions`: `Class.method` and a bare `method` -> the signature record, for
+ *   the argument hint, the hover and go-to-definition
+ *
+ * A `member` carries what the editor needs to describe it: `params` for a My
+ * Block, `line`/`nameStart` for go-to-definition, `isPublic` for the broadcast
+ * rule and `doc` for the comment written above the declaration.
  *
  * A `..` inside a name is not valid, so dotted names here are always the
  * `Prefix.leaf` spelling a stage variable uses.
@@ -197,6 +233,12 @@ function scanDocument(text, namespaceNames) {
   const classes = new Map();
   const globals = new Map();
   const lists = new Set();
+  /**
+   * Declared functions, by `Class.method` and by bare `method`. A bare name
+   * that two classes both declare keeps the first, which is also the order the
+   * compiler resolves a call inside its own class first.
+   */
+  const functions = new Map();
   /** @type {Array<{name: string, depth: number}>} */
   const open = [];
   let depth = 0;
@@ -205,26 +247,32 @@ function scanDocument(text, namespaceNames) {
   const owner = () => (open.length ? open[open.length - 1].name : null);
   const classOf = (name) => {
     if (!classes.has(name)) {
-      classes.set(name, { members: new Map(), namespace: "" });
+      classes.set(name, { members: new Map(), namespace: "", line: 0, open: 0, close: 0 });
     }
     return classes.get(name);
   };
-  const declare = (name, isList, isPublic) => {
+  const declare = (name, isList, isPublic, line, nameStart, isParam) => {
     if (!name) return;
     const host = owner();
+    const record = { list: isList, line: line || 0, nameStart: nameStart || 0 };
     if (host) {
       const member = name.startsWith(host + ".") ? name.slice(host.length + 1) : name;
       classOf(host).members.set(member, {
         list: isList,
         method: false,
         isPublic: isPublic !== false,
+        line: record.line,
+        nameStart: record.nameStart,
+        // A parameter is offered inside the class but is not `Class.member`:
+        // it only exists inside the block whose signature names it.
+        param: Boolean(isParam),
       });
       if (name.includes(".")) {
-        globals.set(name, { list: isList });
+        globals.set(name, record);
         if (isList) lists.add(name);
       }
     } else {
-      globals.set(name, { list: isList });
+      globals.set(name, record);
       if (isList) lists.add(name);
     }
   };
@@ -250,49 +298,118 @@ function scanDocument(text, namespaceNames) {
     "^(" + NAME + ")\\s*:\\s*[\\w\\s'\"=,.-]*?\\b(?:namespace|ns)\\s*=\\s*\"([^\"]*)\""
   );
   const spriteNamespaces = new Map();
+  // The `//` run directly above a declaration becomes its doc comment, the way
+  // a user writes "// what this does" over a My Block.
+  let docLines = [];
+  let inBlockComment = false;
 
+  // A signature is `void name(a, b)`; the `(` must be the first one after the
+  // name, or `void x` inside a `switch` arm would read as a declaration.
+  const signatureRe = new RegExp(
+    "\\b(public|private)?\\s*void\\s+(" + DOTTED + ")\\s*\\(([^)]*)\\)"
+  );
+
+  let lineNo = 0;
+  let lineOffset = 0;
   for (const raw of text.split("\n")) {
+    lineNo += 1;
+    const thisOffset = lineOffset;
+    lineOffset += raw.length + 1;
     const line = raw.trim();
+    const indent = raw.length - raw.replace(/^\s+/, "").length;
     const clean = stripStrings(line);
     let m;
+
+    if (inBlockComment) {
+      const close = line.indexOf("*/");
+      if (close === -1) continue;
+      inBlockComment = false;
+    }
+    if (line.startsWith("/*")) {
+      inBlockComment = line.indexOf("*/") === -1;
+      docLines = [];
+      continue;
+    }
+    if (line.startsWith("//")) {
+      docLines.push(line.replace(/^\/\/\s?/, ""));
+      continue;
+    }
+    if (!line) {
+      docLines = [];
+      continue;
+    }
+    const doc = docLines.join("\n");
+    docLines = [];
+
+    // Where a name sits in the file: go-to-definition needs the real offset.
+    const at = (name, from) => thisOffset + indent + (from || 0) + line.indexOf(name, from || 0);
 
     if ((m = spriteDeclRe.exec(line))) spriteNamespaces.set(m[1], m[2]);
     if ((m = classRe.exec(line))) {
       pending = m[1];
-      classOf(m[1]);
+      const record = classOf(m[1]);
+      record.line = lineNo;
+      if (!record.nameStart) record.nameStart = at(m[1]);
+      record.doc = doc;
       const ns = /\b(?:namespace|ns)\s*=\s*"([^"]*)"/.exec(line);
-      if (ns) classOf(m[1]).namespace = ns[1];
-      else if (spriteNamespaces.has(m[1])) classOf(m[1]).namespace = spriteNamespaces.get(m[1]);
+      if (ns) record.namespace = ns[1];
+      else if (spriteNamespaces.has(m[1])) record.namespace = spriteNamespaces.get(m[1]);
     }
-    if ((m = methodRe.exec(line))) {
-      const full = m[1];
+
+    if ((m = signatureRe.exec(line))) {
+      const full = m[2];
       const host = owner();
       const leaf = host && full.startsWith(host + ".") ? full.slice(host.length + 1) : full;
-      if (host) classOf(host).members.set(leaf, { list: false, method: true });
+      const params = m[3]
+        .split(",")
+        .map((part) => part.trim())
+        .filter((part) => /^[A-Za-z_$][\w$]*$/.test(part));
+      const isPublic = m[1] ? m[1] === "public" : false;
+      const nameStart = at(full);
+      const record = {
+        list: false,
+        method: true,
+        isPublic,
+        params,
+        line: lineNo,
+        nameStart,
+        doc,
+        qualified: host ? host + "." + leaf : leaf,
+        owner: host,
+      };
+      if (host) {
+        classOf(host).members.set(leaf, record);
+        functions.set(host + "." + leaf, record);
+        // `Lyrics.init()` from another class reaches the same declaration.
+        if (!functions.has(leaf)) functions.set(leaf, record);
+      } else {
+        functions.set(full, record);
+      }
     }
+
     if ((m = stateRe.exec(line)) && m[1] !== "void") {
-      declare(m[1], Boolean(m[3]), /^public\b/.test(line));
+      declare(m[1], Boolean(m[3]), /^public\b/.test(line), lineNo, at(m[1]));
     } else if ((m = bareRe.exec(line))) {
-      declare(m[1], false, /^public\b/.test(line));
+      declare(m[1], false, /^public\b/.test(line), lineNo, at(m[1]));
     }
     if ((m = importRe.exec(line))) {
       const alias = m[2] || m[3] || m[1].split("/").pop().replace(/\.[^.]+$/, "");
       const isList = /\.(?:jsa|jsl)$/i.test(m[1]);
-      declare(alias, isList);
+      declare(alias, isList, true, lineNo, at(alias));
     }
     if ((m = dottedAssignRe.exec(line))) {
       const head = m[1].split(".")[0];
-      if (!known.has(head) && !m[1].includes("..")) declare(m[1], false, true);
+      if (!known.has(head) && !m[1].includes("..")) declare(m[1], false, true, lineNo, at(m[1]));
     }
     if ((m = dottedMethodRe.exec(line))) {
       const head = m[1].split(".")[0];
-      if (!known.has(head)) declare(m[1], true, true);
+      if (!known.has(head)) declare(m[1], true, true, lineNo, at(m[1]));
     }
-    if ((m = forRe.exec(line))) declare(m[1], false);
+    if ((m = forRe.exec(line))) declare(m[1], false, true, lineNo, at(m[1]));
     if ((m = paramRe.exec(line))) {
       for (const part of m[1].split(",")) {
         const name = part.trim();
-        if (/^[A-Za-z_$][\w$]*$/.test(name)) declare(name, false);
+        if (/^[A-Za-z_$][\w$]*$/.test(name)) declare(name, false, true, lineNo, at(name), true);
       }
     }
 
@@ -309,32 +426,309 @@ function scanDocument(text, namespaceNames) {
       }
     }
   }
-  return { classes, globals, lists };
+  return { classes, globals, lists, functions };
 }
 
 /** Identifiers the document already uses: classes, methods, variables, lists. */
 function documentSymbols(text, data) {
   const out = new Map();
-  const add = (name, kind, detail) => {
+  const add = (name, kind, detail, extra) => {
     if (!name || out.has(name)) return;
-    out.set(name, { name, kind, detail });
+    out.set(name, Object.assign({ name, kind, detail }, extra || {}));
   };
-  const scan = scanDocument(text, namespaceNames(data));
-  for (const name of scan.classes.keys()) add(name, "class", "class in this file");
+  const scan = scanCached(text, namespaceNames(data));
+  for (const [name, info] of scan.classes) {
+    const ns = info.namespace ? ` (namespace ${info.namespace})` : "";
+    add(name, "class", "class in this file" + ns, { line: info.line, nameStart: info.nameStart });
+  }
   for (const [name, info] of scan.globals) {
-    add(name, "variable", info.list ? "list in this file" : "variable in this file");
+    const detail = (info.list ? "list in this file" : "variable in this file");
+    add(name, "variable", detail, { line: info.line, nameStart: info.nameStart });
     const leaf = name.split(".").pop();
-    if (leaf !== name) {
-      add(leaf, "variable", info.list ? "list in this file" : "variable in this file");
-    }
+    if (leaf !== name) add(leaf, "variable", detail, { line: info.line, nameStart: info.nameStart });
   }
   for (const [owner, info] of scan.classes) {
     for (const [leaf, member] of info.members) {
-      add(leaf, member.method ? "method" : "variable",
-        (member.method ? "method" : member.list ? "list" : "variable") + " of " + owner);
+      const kind = member.method ? "method" : "variable";
+      // A My Block shows its parameters: the detail line is what the outline and
+      // the breadcrumb print, and `slide(start, steps)` says more than "method".
+      const detail = member.method
+        ? `${signatureText(leaf, member.params)} — ${owner}`
+        : member.param
+          ? "parameter of a block in " + owner
+          : (member.list ? "list" : "variable") + " of " + owner;
+      add(leaf, kind, detail, { line: member.line, nameStart: member.nameStart });
     }
   }
   return out;
+}
+
+/** `slide(start, steps)`, or just `slide()` when it takes none. */
+function signatureText(name, params) {
+  return `${name}(${(params || []).join(", ")})`;
+}
+
+/**
+ * The signature a member's `detail` already spells out, so the argument hint
+ * works for `Pen.setPenSize(|` without a second table. Everything after a
+ * `→ value` marker is dropped; the rest *is* the signature.
+ */
+function signatureFromDetail(detail, fallback) {
+  const text = String(detail || "");
+  const cut = text.indexOf("→");
+  const head = (cut === -1 ? text : text.slice(0, cut)).trim();
+  return head.includes("(") ? head : fallback;
+}
+
+/**
+ * The parameters a namespace member's `detail` already spells out.
+ */
+function paramsFromDetail(detail) {
+  const m = /^[A-Za-z_$][\w$]*\(([^)]*)\)/.exec(detail || "");
+  if (!m) return null;
+  return m[1].split(",").map((part) => part.trim()).filter(Boolean)
+    // `setPenSize(size)` is fine; a pseudo-signature such as
+    // `setRotationStyle(0 | 1 | 2)` is a set of values, not parameters.
+    .filter((part) => /^[A-Za-z_$][\w$]*$/.test(part));
+}
+
+/**
+ * Resolve the thing being called at `callee`, in document order:
+ * this file's My Blocks and public functions first, then the runtime
+ * namespaces, then the builtins.
+ */
+function callableAt(scan, data, callee) {
+  const dot = callee.lastIndexOf(".");
+  if (dot > 0) {
+    const receiver = callee.slice(0, dot);
+    const leaf = callee.slice(dot + 1);
+    const own = scan.functions.get(receiver + "." + leaf);
+    if (own) {
+      return {
+        label: `${receiver}.${signatureText(leaf, own.params)}`,
+        params: own.params,
+        doc: own.doc,
+        detail: `My Block of ${own.owner}${own.isPublic ? " (public)" : ""}`,
+      };
+    }
+    const namespace = data.namespaces[receiver];
+    if (namespace) {
+      for (const [name, info] of namespace.members) {
+        if (name !== leaf) continue;
+        const params = paramsFromDetail(info.detail);
+        if (!params) return null;
+        return {
+          label: signatureFromDetail(info.detail, signatureText(leaf, params)),
+          params,
+          doc: info.doc,
+          detail: `${receiver} namespace — ${info.kind}`,
+        };
+      }
+      return null;
+    }
+    const member = (scan.classes.get(receiver) || { members: new Map() }).members.get(leaf);
+    if (member && member.method) {
+      return {
+        label: signatureText(leaf, member.params),
+        params: member.params,
+        doc: member.doc,
+        detail: `My Block of ${receiver}${member.isPublic ? " (public)" : ""}`,
+      };
+    }
+    for (const method of data.listMethods) {
+      if (method.label !== leaf) continue;
+      const params = paramsFromDetail(method.detail);
+      if (!params) return null;
+      return {
+        label: signatureFromDetail(method.detail, signatureText(leaf, params)),
+        params,
+        doc: method.doc,
+        detail: "list method",
+      };
+    }
+    return null;
+  }
+
+  const own = scan.functions.get(callee);
+  if (own) {
+    return {
+      label: signatureText(callee, own.params),
+      params: own.params,
+      doc: own.doc,
+      detail: own.owner ? `My Block of ${own.owner}${own.isPublic ? " (public)" : ""}` : "My Block",
+    };
+  }
+  for (const fn of data.builtins) {
+    if (fn.label !== callee) continue;
+    const params = fn.params || [];
+    return { label: signatureText(callee, params), params, doc: fn.doc, detail: "builtin" };
+  }
+  for (const hat of data.hats || []) {
+    const leaf = hat.label.includes(".") ? hat.label.split(".").pop() : hat.label;
+    if (leaf !== callee) continue;
+    return { label: hat.detail, params: paramsFromDetail(hat.detail) || [], doc: hat.doc, detail: "hat" };
+  }
+  return null;
+}
+
+/**
+ * The call whose argument list holds `offset`, found by walking the text and
+ * tracking quotes, comments and bracket depth. A `(` inside a string or a
+ * comment is not a call.
+ */
+function openCallAt(text, offset) {
+  const stack = [];
+  let quote = null;
+  let lineComment = false;
+  let blockComment = false;
+  for (let i = 0; i < offset; i++) {
+    const ch = text[i];
+    const next = text[i + 1];
+    if (lineComment) {
+      if (ch === "\n") lineComment = false;
+      continue;
+    }
+    if (blockComment) {
+      if (ch === "*" && next === "/") {
+        blockComment = false;
+        i++;
+      }
+      continue;
+    }
+    if (quote) {
+      if (ch === "\\") i++;
+      else if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === "/" && next === "/") {
+      lineComment = true;
+      i++;
+      continue;
+    }
+    if (ch === "/" && next === "*") {
+      blockComment = true;
+      i++;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      continue;
+    }
+    if (ch === "(") {
+      // Only the index: the callee is resolved once, for the paren that is
+      // still open. Running the callee regex for every paren in the file is
+      // what made this 30 ms on a project with ten thousand of them.
+      stack.push({ open: i });
+    } else if (ch === ")") {
+      stack.pop();
+    }
+  }
+  const inside = Boolean(quote || lineComment || blockComment);
+  const top = stack.length ? stack[stack.length - 1] : null;
+  if (!top) return inside ? { inLiteral: true } : null;
+  // A bounded window, not `text.slice(0, open)`: the callee is a name, and the
+  // rest of the file before it says nothing.
+  const window = text.slice(Math.max(0, top.open - 240), top.open);
+  const head = /([A-Za-z_$][\w$]*(?:\s*\.\s*[A-Za-z_$][\w$]*)*)\s*$/.exec(window);
+  return {
+    open: top.open,
+    callee: head ? head[1].replace(/\s+/g, "") : null,
+    inLiteral: inside,
+  };
+}
+
+/** How many top-level commas sit between `from` and `offset`. */
+function argumentIndex(text, from, offset) {
+  let depth = 0;
+  let quote = null;
+  let index = 0;
+  for (let i = from + 1; i < offset; i++) {
+    const ch = text[i];
+    if (quote) {
+      if (ch === "\\") i++;
+      else if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      continue;
+    }
+    if (ch === "(" || ch === "[") depth++;
+    else if (ch === ")" || ch === "]") depth--;
+    else if (ch === "," && depth === 0) index++;
+  }
+  return index;
+}
+
+/**
+ * The argument hint for the call the caret is inside.
+ *
+ * @returns {{label: string, parameters: Array<{label: string}>, activeParameter: number,
+ *            detail: string} | null}
+ */
+function provideSignatureHelp(text, offset, data) {
+  // Inside a string or a comment there is no argument list, whatever the
+  // parentheses in the text look like.
+  const call = openCallAt(text, offset);
+  if (!call || call.inLiteral || !call.callee) return null;
+  const scan = scanCached(text, namespaceNames(data));
+  const target = callableAt(scan, data, call.callee);
+  if (!target) return null;
+  const params = target.params || [];
+  const active = Math.min(argumentIndex(text, call.open, offset), Math.max(0, params.length - 1));
+  return {
+    label: target.label,
+    detail: target.detail,
+    doc: target.doc || "",
+    parameters: params.map((label) => ({ label })),
+    activeParameter: params.length ? active : 0,
+  };
+}
+
+/**
+ * Go to the declaration of the name under the caret: a class, a My Block, a
+ * variable or a list. Line-based, because the scan already knows every
+ * declaration and where it starts.
+ *
+ * @returns {{name: string, line: number, nameStart: number, detail: string} | null}
+ */
+function provideDefinition(text, offset, data) {
+  const word = wordAt(text, offset);
+  if (!word) return null;
+  const scan = scanCached(text, namespaceNames(data));
+  const before = text.slice(0, word.start);
+  const receiverMatch = /([A-Za-z_$][\w$]*)\s*\.\s*$/.exec(before);
+  const receiver = receiverMatch && !namespaceNames(data).has(receiverMatch[1])
+    ? receiverMatch[1]
+    : null;
+
+  const hit = (record, detail) => (record && record.nameStart
+    ? { name: word.value, line: record.line, nameStart: record.nameStart, detail }
+    : null);
+
+  if (receiver) {
+    const qualified = scan.functions.get(receiver + "." + word.value);
+    if (qualified) return hit(qualified, `My Block of ${qualified.owner}`);
+    const member = (scan.classes.get(receiver) || { members: new Map() }).members.get(word.value);
+    if (member) {
+      return hit(member, member.method ? `My Block of ${receiver}` : `state of ${receiver}`);
+    }
+  }
+  const fn = scan.functions.get(word.value);
+  if (fn) return hit(fn, fn.owner ? `My Block of ${fn.owner}` : "My Block");
+  const global = scan.globals.get(word.value);
+  if (global) return hit(global, global.list ? "list" : "variable");
+  // A member of the class the caret is in: `Members.Graph.dpoint_x` is also
+  // written bare inside its own class.
+  for (const [owner, info] of scan.classes) {
+    const member = info.members.get(word.value);
+    if (member) {
+      return hit(member, member.method ? `My Block of ${owner}` : `state of ${owner}`);
+    }
+  }
+  const cls = scan.classes.get(word.value);
+  if (cls) return hit(cls, "class");
+  return null;
 }
 
 /**
@@ -388,6 +782,16 @@ function provideCompletions(text, offset, data, options) {
           filterText: k.label,
         }));
     }
+    // `// hook: when [|` — the bracketed menu: the two things a `when >` hat can
+    // watch, and the gestures a micro:bit hat names. A key hat takes any key
+    // name, so there the list would only get in the way.
+    const bracket = /\/\/\s*hook:.*\[([^\]]*)$/.exec(ctx.line);
+    if (bracket) {
+      const typedMenu = bracket[1].trim().toLowerCase();
+      return (data.hookMenus || [])
+        .filter((w) => w.toLowerCase().startsWith(typedMenu))
+        .map((w) => item(w, KIND.constant, "hook menu", `\`// hook: when [${w}] …\``));
+    }
     const typed = (ctx.commentPrefix ? ctx.commentPrefix[1] : "").trim().toLowerCase();
     return data.annotations
       .filter((a) => a.label.toLowerCase().startsWith(typed))
@@ -397,26 +801,68 @@ function provideCompletions(text, offset, data, options) {
   // `metadata |` — every form a metadata line can take. The forms come first
   // because `slider`/`list`/`large` carry the whole shape, and the plain modes
   // are still offered for a line that already names a target.
-  const metadata = /^\s*metadata\s+(?:([\w]*)\s*)$/.exec(ctx.line);
+  // `metadata ` or `metadata Stage.t` — the first word is still being typed. A
+  // space *after* that word means the line moved on, which the monitor and
+  // layout branches below handle.
+  const metadata = /^\s*metadata\s*([\w.]*)$/.exec(ctx.line);
   if (metadata) {
-    const typed = metadata[1].toLowerCase();
+    const typed = metadata[1];
+    const lower = typed.toLowerCase();
     const seen = new Set();
     const out = [];
+    // The forms insert their whole shape: `metadata ` + `pos` writes
+    // `Stage.tick pos 10,20;` and leaves the tab stops where the values go.
+    // Inserting the bare word produced a line the parser rejects.
     for (const form of data.metadataForms || []) {
-      if (!form.label.startsWith(typed) || seen.has(form.label)) continue;
+      if (!form.label.startsWith(lower) || seen.has(form.label)) continue;
       seen.add(form.label);
       out.push(
         item(form.label, KIND_NAMES[form.kind] || KIND.snippet, form.detail, form.doc, {
           sortText: "0" + form.label,
+          insertText: form.snippet
+            ? { value: form.snippet, isSnippet: true }
+            : form.label,
+          filterText: form.label,
         })
       );
     }
     for (const mode of data.monitorModes || []) {
-      if (!mode.label.toLowerCase().startsWith(typed) || seen.has(mode.label)) continue;
+      if (!mode.label.toLowerCase().startsWith(lower) || seen.has(mode.label)) continue;
       seen.add(mode.label);
       out.push(item(mode.label, KIND.constant, mode.detail || "monitor mode", mode.doc, {
         sortText: "1" + mode.label,
       }));
+    }
+    // The first word may also be a *script* (`metadata Stage.tick pos 10,20;`)
+    // or the thing being watched (`metadata Stage.score at 0,0 10x10`), and
+    // neither is a word any table can list: they are what the file declares.
+    const scan = scanCached(text, namespaceNames(data));
+    for (const record of scan.functions.values()) {
+      const label = record.owner ? `${record.owner}.${record.qualified.split(".").pop()}` : record.qualified;
+      if (!label.toLowerCase().startsWith(lower) || seen.has(label)) continue;
+      seen.add(label);
+      out.push(item(label, KIND.method, `script — line ${record.line}`, record.doc || "", {
+        sortText: "2" + label,
+      }));
+    }
+    for (const [name, info] of scan.globals) {
+      if (!name.toLowerCase().startsWith(lower) || seen.has(name)) continue;
+      seen.add(name);
+      out.push(item(name, KIND.variable, info.list ? "list" : "variable", "", {
+        sortText: "3" + name,
+      }));
+    }
+    for (const [owner, info] of scan.classes) {
+      for (const [leaf, member] of info.members) {
+        if (member.method || member.param) continue;
+        for (const label of [`Stage.${leaf}`, leaf]) {
+          if (!label.toLowerCase().startsWith(lower) || seen.has(label)) continue;
+          seen.add(label);
+          out.push(item(label, KIND.variable, `${member.list ? "list" : "variable"} of ${owner}`, "", {
+            sortText: "3" + label,
+          }));
+        }
+      }
     }
     return out;
   }
@@ -429,7 +875,7 @@ function provideCompletions(text, offset, data, options) {
   ).exec(ctx.line);
   if (metaTarget) {
     const typed = metaTarget[1];
-    const scan = scanDocument(text, namespaceNames(data));
+    const scan = scanCached(text, namespaceNames(data));
     const targets = new Map();
     for (const [name, info] of scan.globals) {
       targets.set(name, info.list ? "list" : "variable");
@@ -462,7 +908,23 @@ function provideCompletions(text, offset, data, options) {
   if (metadataTail) {
     const typed = ((/[\w-]*$/.exec(ctx.line) || [""])[0]).toLowerCase();
     const rest = metadataTail[1].trim().slice(0, metadataTail[1].trim().length - typed.length);
-    const named = rest.split(/\s+/).filter(Boolean).length >= 2;
+    const tokens = rest.split(/\s+/).filter(Boolean);
+    // `metadata <script> pos x,y;` is the one shape whose first word is a method
+    // of this file, and after it only `pos` can follow: offering `range` there
+    // would build a line the parser rejects.
+    if (tokens.length === 1) {
+      const scan = scanCached(text, namespaceNames(data));
+      const isScript = [...scan.functions.values()].some((record) =>
+        (record.owner ? `${record.owner}.${record.qualified.split(".").pop()}` : record.qualified)
+          === tokens[0]
+      );
+      if (isScript) {
+        return (data.metadataWords || [])
+          .filter((w) => w.label === "pos" && w.label.startsWith(typed))
+          .map((w) => item(w.label, KIND_NAMES[w.kind] || KIND.keyword, w.detail, w.doc));
+      }
+    }
+    const named = tokens.length >= 2;
     return [...(data.metadataWords || []), ...(data.metadataFlags || [])]
       .filter((w) => !(named && w.label === "pos"))
       .filter((w) => w.label.startsWith(typed))
@@ -557,19 +1019,22 @@ function provideCompletions(text, offset, data, options) {
     } else {
       // The receiver is not a runtime namespace, so ask the document what it
       // is instead of assuming "list" and offering `add`/`get` for everything.
-      const scan = scanDocument(text, namespaceNames(data));
+      const scan = scanCached(text, namespaceNames(data));
       const asClass = scan.classes.get(receiver);
       const prefixed = [...scan.globals].filter(([name]) => name.startsWith(receiver + "."));
 
       if (asClass) {
         // `Lyrics.` — this file's class: its state (and, below, its methods).
         for (const [leaf, member] of asClass.members) {
+          if (member.param) continue;
           members.set(leaf, {
             kind: member.method ? "command" : "variable",
+            // The signature is the whole point of offering a member: it says
+            // what to pass, without a second hover.
             detail: member.method
-              ? "method of " + receiver
+              ? signatureText(leaf, member.params) + " — " + receiver
               : member.list ? "list of " + receiver : "variable of " + receiver,
-            doc: "",
+            doc: member.doc || "",
             label: leaf,
           });
         }
@@ -729,9 +1194,11 @@ function metadataCheatSheet(data) {
     "| layout | `pos` · `at` · `range` · `discrete` · `continuous` · `min` · `max` · `watchers` |",
     "",
     "Placeholders: `<script>` a method as written (`greenFlag`, "
-      + "`Events.keyPressed`); `<Target.name>` `Owner.name` (`Stage.Score`, "
-      + "`\"obj loader\".score`); `<W>x<H>` the monitor box (`100x24`); "
-      + "`slider(a,b)` whole-number bounds are steps.",
+      + "`Events.keyPressed`) — a script is always followed by `pos`; "
+      + "`<Target.name>` `Owner.name` (`Stage.Score`, `\"obj loader\".score`); "
+      + "`<W>x<H>` the monitor box (`100x24`); `slider(a,b)` whole-number bounds "
+      + "are steps. The mode may come first (`monitor Stage.x at …`) or after "
+      + "the target (`Stage.x at …`).",
     "",
     "Forms:",
     "",
@@ -867,7 +1334,118 @@ function provideHover(text, offset, data) {
     const head = `**${value}** — ${meta.detail}`;
     return range(start, end, meta.doc ? `${head}\n\n${meta.doc}` : head);
   }
+
+  // Finally the document's own declarations: a My Block, a class, a variable.
+  // These are the ones a reader most often needs — "where is this and what does
+  // it take" — and the only ones no table can answer.
+  const scan = scanCached(text, namespaceNames(data));
+  const own = describeDeclaration(scan, value, receiver ? receiver[1] : null, text);
+  if (own) return range(start, end, own);
   return null;
+}
+
+/**
+ * A markdown description of one of the document's own declarations.
+ *
+ * @param {object} scan the result of `scanDocument`
+ * @param {string} name the word under the caret
+ * @param {string|null} receiver a `Class.` prefix, when there is one
+ * @param {string} text the whole document, for the metadata target lookup
+ */
+function describeDeclaration(scan, name, receiver, text) {
+  const withDoc = (head, doc) => (doc ? `${head}\n\n${doc}` : head);
+  const where = (record) => (record.line ? ` — line ${record.line}` : "");
+
+  if (receiver) {
+    const qualified = scan.functions.get(receiver + "." + name);
+    if (qualified) {
+      return withDoc(
+        `**${receiver}.${signatureText(name, qualified.params)}** — My Block of `
+          + `${receiver}${qualified.isPublic ? " (also a broadcast)" : ""}${where(qualified)}`,
+        qualified.doc
+      );
+    }
+    const member = (scan.classes.get(receiver) || { members: new Map() }).members.get(name);
+    if (member) {
+      if (member.method) {
+        return withDoc(
+          `**${receiver}.${signatureText(name, member.params)}** — My Block of ${receiver}${where(member)}`,
+          member.doc
+        );
+      }
+      return `**${receiver}.${name}** — ${member.list ? "list" : "variable"} of ${receiver}${where(member)}`;
+    }
+    return metadataTargetAt(text, name, receiver);
+  }
+
+  const fn = scan.functions.get(name);
+  if (fn) {
+    const head = fn.owner
+      ? `**${signatureText(name, fn.params)}** — My Block of ${fn.owner}`
+        + `${fn.isPublic ? " (public: also a broadcast)" : ""}${where(fn)}`
+      : `**${signatureText(name, fn.params)}** — My Block${where(fn)}`;
+    return withDoc(head, fn.doc);
+  }
+
+  const global = scan.globals.get(name);
+  if (global) {
+    return `**${name}** — ${global.list ? "list" : "variable"}${where(global)}`;
+  }
+
+  for (const [owner, info] of scan.classes) {
+    const member = info.members.get(name);
+    if (member) {
+      if (member.method) {
+        return withDoc(
+          `**${signatureText(name, member.params)}** — My Block of ${owner}${where(member)}`,
+          member.doc
+        );
+      }
+      return `**${name}** — ${member.list ? "list" : "variable"} of ${owner}${where(member)}`;
+    }
+  }
+
+  const cls = scan.classes.get(name);
+  if (cls) {
+    const methods = [...cls.members].filter(([, m]) => m.method).map(([leaf]) => leaf);
+    const state = [...cls.members].filter(([, m]) => !m.method && !m.param).map(([leaf]) => leaf);
+    const parts = [`**class ${name}**${cls.namespace ? ` (namespace \`${cls.namespace}\`)` : ""}${where(cls)}`];
+    if (methods.length) parts.push(`${methods.length} method${methods.length === 1 ? "" : "s"}: `
+      + methods.slice(0, 12).map((m) => `\`${m}()\``).join(" · ")
+      + (methods.length > 12 ? " …" : ""));
+    if (state.length) parts.push(`${state.length} state name${state.length === 1 ? "" : "s"}: `
+      + state.slice(0, 12).map((s) => `\`${s}\``).join(" · ")
+      + (state.length > 12 ? " …" : ""));
+    return parts.join("\n\n");
+  }
+
+  // A monitor's target: `metadata list Stage.v67 at …` names state, not a call.
+  const target = metadataTargetAt(text, name, receiver);
+  if (target) return target;
+  return null;
+}
+
+/**
+ * What a monitor's target names. `Stage.v67` and a bare `s2` both appear on a
+ * `metadata` line, and neither is a call, so without this the one word that
+ * says *what the monitor watches* had no hover at all.
+ */
+function metadataTargetAt(text, name, receiver) {
+  // A target is a name. Without this, hovering the `0` of `range 0..2` found a
+  // "0" on the line and claimed it was monitored state.
+  if (!/^[A-Za-z_$][\w$]*$/.test(name)) return null;
+  const pattern = new RegExp("(?:^|[\\s.\"])" + name.replace(/\$/g, "\\$") + "(?:[\\s.,:]|$)");
+  let declared = false;
+  for (const raw of text.split("\n")) {
+    const line = raw.trim();
+    if (!/^metadata\b/.test(line)) continue;
+    if (!pattern.test(line)) continue;
+    declared = true;
+    break;
+  }
+  if (!declared) return null;
+  const scope = receiver === "Stage" || !receiver ? "stage state" : `${receiver} state`;
+  return `**${receiver ? receiver + "." : ""}${name}** — ${scope} watched by a \`metadata\` monitor.`;
 }
 
 function wordAt(text, offset) {
@@ -884,4 +1462,13 @@ function range(start, end, markdown) {
   return { start, end, contents: DOC(markdown) };
 }
 
-module.exports = { provideCompletions, provideHover, contextAt, documentSymbols, KIND, KIND_NAMES };
+module.exports = {
+  provideCompletions,
+  provideHover,
+  provideSignatureHelp,
+  provideDefinition,
+  contextAt,
+  documentSymbols,
+  KIND,
+  KIND_NAMES,
+};

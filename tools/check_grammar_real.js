@@ -76,6 +76,39 @@ const EXPECT = [
    'constant.language.metadata-flag.jsw'],
   ['metadata slider Stage.x at 0,0 0x0 shown range 0..10 discrete;', 'discrete',
    'keyword.other.metadata.jsw'],
+  // A bare owner: `metadata note s2 at …` names a sprite, and it used to keep
+  // the whole line's meta scope, i.e. read as plain text.
+  ['metadata note s2 at 837,443 200x200: "hi";', 's2', 'entity.name.type.class.jsw'],
+  ['metadata note Stage at 1,2 3x4: "hi";', 'Stage', 'entity.name.type.class.jsw'],
+  // The layout punctuation inside a metadata line.
+  ['metadata slider(0,2) Stage.x at 0,0 99x24 shown;', '(', 'punctuation.section.parens.jsw'],
+  ['metadata slider(0,2) Stage.x at 0,0 99x24 shown;', ',', 'punctuation.separator.jsw'],
+  ['metadata slider Stage.x at 0,0 shown range 0..2 discrete;', '..', 'keyword.operator.range.jsw'],
+  ['metadata note Stage at 1,2 3x4: "hi";', ':', 'punctuation.separator.jsw'],
+  ['metadata note Stage at 1,2 200x200: "hi";', 'x', 'punctuation.separator.dimension.jsw'],
+  // `metadata note "obj loader".tip at …` - the decompiler quotes a name with
+  // a space in it, and the member after the dot is still a member.
+  ['metadata note "obj loader".tip at 0,0 1x1: "x";', 'tip', 'variable.other.member.jsw'],
+  ['metadata note "obj loader".tip at 0,0 1x1: "x";', '.', 'punctuation.accessor.jsw'],
+  // `video=on` was the one line where `=` was not an assignment: the
+  // key=value rule matched it without capturing the equals.
+  ['stage: video=on;', '=', 'keyword.operator.assignment.jsw'],
+  ['Metadata: name="m", rotation=all;', '=', 'keyword.operator.assignment.jsw'],
+  // The parameters of a My Block.
+  ['    private void slide(start, steps) {', 'start', 'variable.parameter.jsw'],
+  ['    private void slide(start, steps) {', 'steps', 'variable.parameter.jsw'],
+  ['    private void slide(start, steps) {', 'slide', 'entity.name.function.jsw'],
+  // `loose` is not control flow.
+  ['        loose { Looks.show(); }', 'loose', 'keyword.other.loose.jsw'],
+  // A hook menu is a menu, not prose.
+  ['    public void f() { // hook: when [timer] > 2', 'timer', 'constant.language.hook-menu.jsw'],
+  ['    public void f() { // hook: when tilted [front]', 'front', 'constant.language.hook-menu.jsw'],
+  // The %-placeholders of a proccode label.
+  ['    private void f(a, b) { // proccode draw %s %s', '%s', 'variable.parameter.proccode.jsw'],
+  // `for i in 1..n` - the bound is not a property of `1.`
+  ['for i in 1..n {', 'n', 'variable.other.jsw'],
+  // The x of a monitor size is a separator, not a variable called x.
+  ['x = 352x212;', 'x', 'punctuation.separator.dimension.jsw'],
   // Typed values: only a value right after its own key, so `all` stays a plain
   // identifier everywhere else.
   ['Sprite: name="x", rotation=all;', 'all', 'constant.language.rotation-style.jsw'],
@@ -176,6 +209,10 @@ const REJECT = [
   ['if (a == b) { }', 'keyword.operator.assignment.jsw'],
   // ``in`` is real syntax now, so it must not be flagged as a reserved word.
   ['for i in 0..3 {', 'invalid.illegal.reserved.jsw'],
+  // A parameter is not the plain identifier it reads as elsewhere.
+  ['    private void slide(start, steps) {', 'variable.other.jsw'],
+  // A hook menu word outside `[ ]` is an ordinary name.
+  ['    x = timer;', 'constant.language.hook-menu.jsw'],
 ];
 
 (async () => {

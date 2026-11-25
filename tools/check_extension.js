@@ -14,7 +14,7 @@ const Module = require("module");
 const ROOT = path.resolve(__dirname, "..");
 const EXT = path.join(ROOT, "vscode-jsw");
 
-const registered = { completion: [], hover: [] };
+const registered = { completion: [], hover: [], signature: [], definition: [], symbols: [] };
 
 class Position {
   constructor(line, character) {
@@ -46,12 +46,58 @@ class Hover {
   }
 }
 
+class MarkdownString {
+  constructor(value) {
+    this.value = value;
+  }
+}
+class Location {
+  constructor(uri, range) {
+    this.uri = uri;
+    this.range = range;
+  }
+}
+class SignatureInformation {
+  constructor(label, documentation) {
+    this.label = label;
+    this.documentation = documentation;
+    this.parameters = [];
+  }
+}
+class ParameterInformation {
+  constructor(label) {
+    this.label = label;
+  }
+}
+class SignatureHelp {
+  constructor() {
+    this.signatures = [];
+    this.activeSignature = 0;
+    this.activeParameter = 0;
+  }
+}
+class SymbolInformation {
+  constructor(name, kind, containerName, location) {
+    this.name = name;
+    this.kind = kind;
+    this.containerName = containerName;
+    this.location = location;
+  }
+}
+
 const vscode = {
   Position,
   Range,
   CompletionItem,
   SnippetString,
   Hover,
+  MarkdownString,
+  Location,
+  SignatureInformation,
+  ParameterInformation,
+  SignatureHelp,
+  SymbolInformation,
+  SymbolKind: { Class: 4, Method: 5, Function: 11, Variable: 12 },
   languages: {
     registerCompletionItemProvider(selector, provider) {
       registered.completion.push(provider);
@@ -59,6 +105,18 @@ const vscode = {
     },
     registerHoverProvider(selector, provider) {
       registered.hover.push(provider);
+      return { dispose() {} };
+    },
+    registerSignatureHelpProvider(selector, provider, ...triggers) {
+      registered.signature.push({ provider, triggers });
+      return { dispose() {} };
+    },
+    registerDefinitionProvider(selector, provider) {
+      registered.definition.push(provider);
+      return { dispose() {} };
+    },
+    registerDocumentSymbolProvider(selector, provider) {
+      registered.symbols.push(provider);
       return { dispose() {} };
     },
   },
@@ -84,7 +142,13 @@ const context = { subscriptions: [] };
 extension.activate(context);
 check("registers a completion provider", registered.completion.length === 1);
 check("registers a hover provider", registered.hover.length === 1);
-check("disposables tracked", context.subscriptions.length === 2);
+check("registers a signature help provider", registered.signature.length === 1);
+check("the signature provider triggers on ( and ,",
+  registered.signature[0] && registered.signature[0].triggers.join("") === "(,", 
+  JSON.stringify(registered.signature[0] && registered.signature[0].triggers));
+check("registers a definition provider", registered.definition.length === 1);
+check("registers a document symbol provider", registered.symbols.length === 1);
+check("disposables tracked", context.subscriptions.length === 5, String(context.subscriptions.length));
 
 // A fake TextDocument over a real file.
 function documentFor(text) {
@@ -137,6 +201,49 @@ check(
 const hover = registered.hover[0].provideHover(document, new Position(3, 14));
 check("hover works", hover instanceof Hover, String(hover));
 check("hover range", hover && hover.range instanceof Range);
+
+// The function hints: a My Block declared in the same file.
+const typed = [
+  "class main {",
+  "    private void slide(start, steps) {",
+  "        Motion.move(steps);",
+  "    }",
+  "    public void greenFlag() {",
+  "        slide(1, 2);",
+  "    }",
+  "}",
+].join("\n");
+const typedDoc = documentFor(typed);
+typedDoc.uri = "file:///typed.jsw";
+const callAt = typed.indexOf("slide(1, ") + "slide(1, ".length;
+const help = registered.signature[0].provider.provideSignatureHelp(
+  typedDoc, typedDoc.positionAt(callAt)
+);
+check("signature help answers", help instanceof SignatureHelp, String(help));
+check("the hint is the declaration's signature",
+  help && help.signatures[0].label === "slide(start, steps)",
+  help && help.signatures[0].label);
+check("the second argument is active", help && help.activeParameter === 1,
+  String(help && help.activeParameter));
+check("the hint has one parameter per argument",
+  help && help.signatures[0].parameters.length === 2,
+  help && String(help.signatures[0].parameters.length));
+
+const definition = registered.definition[0].provideDefinition(
+  typedDoc, typedDoc.positionAt(typed.indexOf("slide(1") + 2)
+);
+check("definition resolves to a Location", definition instanceof Location, String(definition));
+check("definition points at the declaration",
+  definition && definition.range.start.line === 1,
+  definition && String(definition.range.start.line));
+
+const symbols = registered.symbols[0].provideDocumentSymbols(typedDoc);
+check("symbols come back as SymbolInformation",
+  Array.isArray(symbols) && symbols.every((s) => s instanceof SymbolInformation), String(symbols));
+check("the class is a symbol", symbols.some((s) => s.name === "main"));
+check("a block is a symbol with its signature",
+  symbols.some((s) => s.name === "slide" && s.containerName.includes("slide(start, steps)")),
+  symbols.map((s) => `${s.name}:${s.containerName}`).join(","));
 
 // A file that does not exist must not throw: the provider is called a lot.
 const bad = provider.provideCompletionItems(

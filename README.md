@@ -265,7 +265,12 @@ The syntax the decompiler emits is coloured as syntax, not as text:
 | `for i in 1..10` | `for`/`in` keywords, the counter as a loop variable, `..` as a range operator |
 | `stage: costume=0, volume=100;` | `stage` keyword, every property key as a keyword, the `=` and values separately |
 | `Empty: name="Empty", x=36;` | the sprite name as a type, the keys as keywords |
-| `metadata list Stage.Lyrics.zh at 5,5 hidden;` | `metadata` declaration, `list`/`large`/`slider` as monitor modes, `at`/`pos`/`hidden`/`shown` as metadata words, the target as a member |
+| `metadata list Stage.Lyrics.zh at 5,5 hidden;` | `metadata` declaration, `list`/`large`/`slider` as monitor modes, `at`/`pos`/`hidden`/`shown` as metadata words, the target as a member, the layout punctuation and `range 0..2` as punctuation and an operator |
+| `metadata note s2 at 0,0 100x24 hidden;` | a bare sprite name as a type, and the `x` of `100x24` as a size separator |
+| `private void slide(start, steps)` | the parameters are `variable.parameter.jsw`, not the plain identifier they read as inside the body |
+| `loose { … }` | `keyword.other.loose.jsw` — raw blocks are not control flow |
+| `// hook: when [timer] > 2` | `timer`/`loudness`/`front` … as hook menus inside the brackets |
+| `// proccode draw %s` | the `%s` placeholders as proccode parameters |
 | `// costume centerx=0 res=1` | `costume`/`sound` as annotation words, `centerx`/`res`/`rate`/`samples` as annotation parameters |
 | `public c_en = …` vs `private _i;` | both state names share one colour; a `_name` temp variable gets a related but dimmer one |
 | `playNote(60)` / `LogStatic("x")` / `_q5(1,2)` / `Pen.setPenSize(2)` | every call is a function: a custom block, an extension method, a compiler builtin (`join`, `log`, `block`) — and `_q5(...)` is a *call*, never a temp variable |
@@ -297,9 +302,11 @@ holes, so `f"{a} {block(\"x\")}"` keeps its inner strings.
 | `microbit.` | the micro:bit blocks, its menu constants (`buttonA`, `front`) and both hat snippets |
 | `whenClo` | a hat snippet: `public void whenCloned() { … }` |
 | `// proc` | annotations (`proccode`, `receiver at`, `monitor`, …) |
-| `metadata ` | the monitor modes (`list`, `large`, `slider`, `normal`, `default`) |
-| `metadata list Stage.x ` | `at`, `hidden`, `shown`, `range`, `pos`, … |
+| `metadata ` | the eight forms, each inserting its whole shape — `pos` writes `Stage.tick pos 10,20;` with tab stops, not the bare word the parser rejects — plus the monitor modes, this file's scripts and the state a monitor can watch |
+| `metadata list Stage.x ` | `at`, `hidden`, `shown`, `range`, … |
+| `metadata <script> ` | only `pos`, because that is the only form a script can carry |
 | `metadata list Stage.` | the state this project can monitor (`Stage.Graph.dpoint_x`, …) |
+| `// hook: when [` | the bracketed menu: `timer`, `loudness`, the micro:bit gestures |
 | `stage: ` / `Empty: ` | the target's properties, with the `=` already typed |
 | `// costume ` / `// sound ` | `centerx=`, `centery=`, `res=`, `rate=`, `samples=` |
 | `#enable_feature<` | the four feature switches |
@@ -309,6 +316,22 @@ Completion is served from `data/jsw.json`, a generated snapshot of the
 compiler's own tables, so a block that compiles is a block that autocompletes.
 Hover shows the same information. `editor.wordBasedSuggestions` is switched off
 for `.jsw` so only the real blocks appear.
+
+**Function hints** — the document is scanned for its own declarations, so the
+editor answers for *your* blocks, not only the built-in ones:
+
+| where | what you get |
+| --- | --- |
+| `slide(` / `slide(1, ` | the argument hint `slide(start, steps)` with the current parameter highlighted; works for a My Block, a `Class.method` call, a namespace block (`setPenSize(size)`), a builtin (`join(a, b)`) and a list method (`get(index)`) |
+| hovering a call or its declaration | `slide(start, steps)` — the class that owns it, the line, whether it is also a broadcast, and the `//` comment written above it |
+| hovering a class | its namespace, how many blocks and state names it has, and which |
+| hovering a monitor's target | `Stage.v67 — stage state watched by a metadata monitor` |
+| `Lyrics.` | that class's methods **with their parameter lists** in the detail line |
+| Ctrl-click / F12 on a name | go to its declaration: a class, a My Block, a variable, a list |
+| the outline / breadcrumb | classes, their blocks with signatures, and their state |
+
+Parameters are offered inside the class they belong to but never as
+`Class.param`: they only exist inside the block whose signature names them.
 
 **Snippets** — 20 templates for classes, hats, loops, switches and hooks.
 

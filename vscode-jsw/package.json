@@ -1,8 +1,8 @@
 {
   "name": "jaden-script",
   "displayName": "JadenScript",
-  "description": "Syntax highlighting, completion and default token colours for JadenScript (.jsw), the language that compiles to TurboWarp projects.",
-  "version": "0.4.0",
+  "description": "Syntax highlighting, completion, function hints and default token colours for JadenScript (.jsw), the language that compiles to TurboWarp projects.",
+  "version": "0.5.0",
   "publisher": "js2twrp",
   "license": "MIT",
   "engines": {
@@ -76,6 +76,13 @@
               }
             },
             {
+              "comment": "a parameter of a My Block: a name in a scope of its own",
+              "scope": "variable.parameter.jsw",
+              "settings": {
+                "foreground": "#B5CEA8"
+              }
+            },
+            {
               "comment": "temp (_name) variables: the same family, dimmer, so they read as temporary",
               "scope": "variable.other.temp.jsw",
               "settings": {
@@ -133,6 +140,16 @@
               "scope": "variable.parameter.annotation.jsw",
               "settings": {
                 "foreground": "#DCDCAA"
+              }
+            },
+            {
+              "comment": "the x of a monitor size (352x212), and the %s of a proccode label",
+              "scope": [
+                "punctuation.separator.dimension.jsw",
+                "variable.parameter.proccode.jsw"
+              ],
+              "settings": {
+                "foreground": "#B5CEA8"
               }
             },
             {
@@ -198,6 +215,13 @@
               }
             },
             {
+              "comment": "loose { … } - raw blocks the decompiler could not map",
+              "scope": "keyword.other.loose.jsw",
+              "settings": {
+                "foreground": "#569CD6"
+              }
+            },
+            {
               "scope": [
                 "keyword.control.jsw",
                 "keyword.declaration.class.jsw",
@@ -216,6 +240,13 @@
               "scope": "storage.modifier.jsw",
               "settings": {
                 "foreground": "#569CD6"
+              }
+            },
+            {
+              "comment": "the bracketed menu of a // hook: annotation - when [timer] > 2",
+              "scope": "constant.language.hook-menu.jsw",
+              "settings": {
+                "foreground": "#4FC1FF"
               }
             },
             {

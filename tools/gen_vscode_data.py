@@ -44,6 +44,7 @@ from jswc.keycodes import CONTROL_CODES, MORE_KEYS, SUPPORTED_NAMES  # noqa: E40
 from jswc.keywords import (  # noqa: E402
     BUILTIN_NAMESPACES,
     FEATURES,
+    HOOK_MENUS,
     KEYWORDS,
     LITERALS,
     MODIFIERS,
@@ -140,6 +141,43 @@ BUILTIN_DOCS = {
     "isCompiled": "True when the project was compiled.",
     "menu": "Escape hatch for a dropdown shadow.",
     "block": "Raw block escape hatch: `block(\"opcode\", …)`.",
+}
+
+#: The parameters of each builtin, in the order the compiler reads them. A
+#: signature is what the editor shows in the argument hint and on hover, so it
+#: has to match what ``jswc.codegen`` accepts -- ``join(a, b)`` takes two,
+#: ``lengthOf(x)`` one, ``menu(name, value)`` the escape hatch's pair.
+BUILTIN_PARAMS = {
+    "log": ["message"],
+    "warn": ["message"],
+    "error": ["message"],
+    "startTimer": ["name"],
+    "stopTimer": ["name"],
+    "breakpoint": [],
+    "join": ["a", "b"],
+    "string": ["value"],
+    "len": ["value"],
+    "length": ["value"],
+    "lengthOf": ["value"],
+    "sin": ["degrees"],
+    "cos": ["degrees"],
+    "tan": ["degrees"],
+    "asin": ["value"],
+    "acos": ["value"],
+    "atan": ["value"],
+    "sqrt": ["value"],
+    "abs": ["value"],
+    "floor": ["value"],
+    "ceil": ["value"],
+    "ln": ["value"],
+    "log10": ["value"],
+    "exp": ["value"],
+    "pow10": ["value"],
+    "float": ["value"],
+    "isTurboWarp": [],
+    "isCompiled": [],
+    "menu": ["name", "value"],
+    "block": ["opcode", "field", "value"],
 }
 
 LIST_METHOD_DOCS = {
@@ -393,6 +431,33 @@ ASSET_KEY_DOCS = [
 ]
 
 
+def _usage_snippet(usage: str) -> str:
+    """``metadata <script> pos <x>,<y>;`` -> a snippet body for the completion.
+
+    The leading ``metadata`` is dropped: VS Code replaces the word before the
+    caret, so inserting the rest of the shape after it rebuilds the whole line.
+    ``<a|b>`` becomes a choice, the way ``<shown|hidden>`` reads.
+    """
+    body = usage[len("metadata "):] if usage.startswith("metadata ") else usage
+    out: list[str] = []
+    index = 0
+    i = 0
+    while i < len(body):
+        if body[i] != "<":
+            out.append(body[i])
+            i += 1
+            continue
+        end = body.index(">", i)
+        placeholder = body[i + 1:end]
+        index += 1
+        if "|" in placeholder:
+            out.append("${%d|%s|}" % (index, placeholder.replace("|", ",")))
+        else:
+            out.append("${%d:%s}" % (index, placeholder))
+        i = end + 1
+    return "".join(out)
+
+
 def _param_names(params) -> list[str]:
     names = []
     for param in params or ():
@@ -631,7 +696,13 @@ def build() -> dict:
     return {
         "keywords": keywords,
         "builtins": [
-            {"label": name, "kind": "function", "detail": "builtin", "doc": doc}
+            {
+                "label": name,
+                "kind": "function",
+                "detail": _signature(name, BUILTIN_PARAMS.get(name, [])) + " → value",
+                "params": BUILTIN_PARAMS.get(name, []),
+                "doc": doc,
+            }
             for name, doc in sorted(BUILTIN_DOCS.items())
         ],
         "features": sorted(FEATURES),
@@ -674,8 +745,13 @@ def build() -> dict:
             {
                 "label": word,
                 "kind": "snippet",
-                "detail": "metadata · " + usage,
+                # `usage` already opens with the keyword; the detail is a label.
+                "detail": "metadata · " + usage[len("metadata "):],
                 "usage": usage,
+                # The whole shape, placeholders and all: `metadata ` + Enter then
+                # writes `Stage.tick pos 10,20;` with the tab stops in place,
+                # instead of the word `pos` on its own (which the parser rejects).
+                "snippet": _usage_snippet(usage),
                 "doc": doc,
             }
             for word, usage, doc in METADATA_FORM_DOCS
@@ -730,6 +806,7 @@ def build() -> dict:
             {"label": word, "kind": "keyword", "doc": doc}
             for word, doc in ASSET_KEY_DOCS
         ],
+        "hookMenus": sorted(HOOK_MENUS),
         "keyNames": _key_names(),
         "keysimKeys": _keysim_keys(),
         "keysimButtons": _keysim_buttons(),

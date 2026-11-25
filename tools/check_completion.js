@@ -181,6 +181,96 @@ const doc = [
 check("document symbol", completeAt(doc).includes("score"), "variables of this file");
 check("parameter symbol", completeAt(doc.replace("sco|", "del|")).includes("delta"), "parameters");
 
+// function hints: a call's declaration carries its signature
+const proj = [
+  "class model {",
+  "    private void slide(start, steps) {",
+  "        Motion.move(steps);",
+  "    }",
+  "    // Locks the project when a cheat is seen.",
+  "    public void lock() {",
+  "        Control.stopAll();",
+  "    }",
+  "    public void greenFlag() {",
+  "        slide(1, 2);",
+  "    }",
+  "}",
+].join("\n");
+
+/** Insert the marker into the sample project and ask for the hint there. */
+const inProject = (marked) => {
+  const text = proj.replace("        slide(1, 2);", marked.replace("|", ""));
+  return { text, offset: text.indexOf(marked.replace("|", "")) + marked.indexOf("|") };
+};
+const hintIn = (marked) => {
+  const { text, offset } = inProject(marked);
+  return engine.provideSignatureHelp(text, offset, data);
+};
+const slideHint = hintIn("        slide(1, |2);");
+check("signature help finds a My Block", slideHint && slideHint.label === "slide(start, steps)",
+  JSON.stringify(slideHint));
+check("signature help knows the second argument", slideHint && slideHint.activeParameter === 1,
+  JSON.stringify(slideHint));
+check("signature help names the owner", slideHint && slideHint.detail.includes("model"));
+const standaloneHint = (source) => {
+  const offset = source.includes("|") ? source.indexOf("|") : source.length;
+  const text = source.slice(0, offset) + source.slice(offset + 1);
+  return engine.provideSignatureHelp(text, offset, data);
+};
+const penHint = standaloneHint("        Pen.setPenSize(|");
+check("signature help for a namespace block", penHint && penHint.label === "setPenSize(size)",
+  JSON.stringify(penHint));
+check("a namespace block's hint has its parameter",
+  penHint && penHint.parameters.length === 1, JSON.stringify(penHint));
+const joinHint = standaloneHint('        Looks.say(join("a", |');
+check("signature help for a builtin", joinHint && joinHint.label === "join(a, b)" && joinHint.activeParameter === 1,
+  JSON.stringify(joinHint));
+const listHint = standaloneHint("        items.get(|");
+check("signature help for a list method", listHint && listHint.label === "get(index)",
+  JSON.stringify(listHint));
+check("no hint outside a call", standaloneHint("        x = 1|") === null);
+check("no hint for a literal paren", standaloneHint('        Looks.say("a (b|")') === null);
+
+// hover on the document's own declarations
+const declHover = (marker) => {
+  const offset = marker.startsWith("|") ? marker.indexOf("|") + 1 : 0;
+  const text = proj;
+  return engine.provideHover(text, offset, data);
+};
+const hoverSlide = engine.provideHover(proj, proj.indexOf("slide(1") + 2, data);
+check("hover on a My Block call", hoverSlide && hoverSlide.contents.value.includes("slide(start, steps)"),
+  JSON.stringify(hoverSlide));
+check("hover names the owning class", hoverSlide && hoverSlide.contents.value.includes("model"));
+const hoverLock = engine.provideHover(proj, proj.indexOf("void lock") + 5, data);
+check("hover on a declaration", hoverLock && hoverLock.contents.value.includes("lock()"));
+check("hover carries the doc comment", hoverLock && hoverLock.contents.value.includes("Locks the project"),
+  JSON.stringify(hoverLock));
+check("hover marks a public block as a broadcast",
+  hoverLock && hoverLock.contents.value.includes("broadcast"), JSON.stringify(hoverLock));
+const hoverClass = engine.provideHover(proj, proj.indexOf("class model") + 6, data);
+check("hover on a class", hoverClass && hoverClass.contents.value.includes("class model"),
+  JSON.stringify(hoverClass));
+check("class hover lists its blocks", hoverClass && hoverClass.contents.value.includes("slide()"),
+  JSON.stringify(hoverClass));
+
+// completion shows a member's signature
+const memberItems = engine.provideCompletions("class m {\n    private void slide(a, b) { }\n    public void f() { m. }\n}", 
+  "class m {\n    private void slide(a, b) { }\n    public void f() { m. }\n}".indexOf("m. }") + 2, data);
+const slideItem = memberItems.find((i) => i.label === "slide");
+check("member completion carries the signature",
+  slideItem && slideItem.detail.includes("slide(a, b)"), JSON.stringify(slideItem));
+check("parameter is not offered as a member", !memberItems.some((i) => i.label === "a"));
+
+// go to definition
+const defSlide = engine.provideDefinition(proj, proj.indexOf("slide(1") + 2, data);
+check("definition of a My Block", defSlide && defSlide.name === "slide" && defSlide.line === 2,
+  JSON.stringify(defSlide));
+const defClass = engine.provideDefinition(proj, proj.indexOf("class model") + 6, data);
+check("definition of a class", defClass && defClass.name === "model" && defClass.line === 1,
+  JSON.stringify(defClass));
+check("no definition for a builtin",
+  engine.provideDefinition("Looks.say(|1);".replace("|", ""), 11, data) === null);
+
 // hats come with their hook comment and body
 const hat = engine.provideCompletions("whenClo", 7, data).find((i) => i.label === "whenCloned");
 check("hat snippet", hat && hat.insertText && hat.insertText.value.includes("public void whenCloned() {"));
@@ -209,6 +299,53 @@ check("hover on a rotation value", hoverAt("Sprite: name=\"x\", rotation=a|ll;")
 check("hover on a flag value", hoverAt("Empty: show=|1;").includes("show=1"));
 check("hover on a dashed value", hoverAt("stage: videoState=on-|flipped;").includes("on-flipped"));
 check("no hover for a plain word", hoverAt("x = value|s;") === "", "prose is not metadata");
+
+// metadata: the forms insert the whole shape, and the first word may be a
+// script or the thing being watched
+const metaDoc = [
+  "class Main {",
+  "    private v67 = 0;",
+  "    public void greenFlag() { }",
+  "}",
+  "metadata ",
+].join("\n");
+const metaItems = engine.provideCompletions(metaDoc, metaDoc.length, data);
+const posItem = metaItems.find((i) => i.label === "pos");
+check("metadata form inserts its shape", posItem && posItem.insertText
+  && posItem.insertText.value.includes("pos ${2:x},${3:y};"),
+  JSON.stringify(posItem && posItem.insertText));
+check("metadata form keeps its label as the filter", posItem && posItem.filterText === "pos");
+check("metadata offers this file's scripts",
+  metaItems.some((i) => i.label === "Main.greenFlag"), metaItems.map((i) => i.label).join(","));
+check("metadata offers the state a monitor can watch",
+  metaItems.some((i) => i.label === "v67"), metaItems.map((i) => i.label).join(","));
+
+const afterScript = metaDoc + "Main.greenFlag ";
+check("metadata after a script offers pos",
+  engine.provideCompletions(afterScript, afterScript.length, data)
+    .map((i) => i.label).includes("pos"));
+check("metadata after a script drops the monitor words",
+  !engine.provideCompletions(afterScript, afterScript.length, data)
+    .map((i) => i.label).includes("range"));
+
+// hover a monitor's target: the one word that says what it watches
+const targetHover = "public v67 = 0;\nmetadata list Stage.v67 at 5,5 0x0 hidden;";
+const targetInfo = engine.provideHover(targetHover, targetHover.indexOf("Stage.v67") + 7, data);
+check("hover on a monitor target", targetInfo && targetInfo.contents.value.includes("Stage.v67"),
+  JSON.stringify(targetInfo));
+check("the target hover says it is state",
+  targetInfo && targetInfo.contents.value.includes("state"), JSON.stringify(targetInfo));
+
+// a number on a metadata line is not the state a monitor watches
+const numberHover = "metadata slider Stage.score at 0,0 shown range 0..2 discrete;";
+check("no hover on a number in a metadata line",
+  engine.provideHover(numberHover, numberHover.indexOf("0..2") + 1, data) === null);
+
+// hook menus: `// hook: when [timer] > 2` is a closed set
+const hookMenu = completeAt("    public void f() { // hook: when [ti");
+check("hook menu completion", hookMenu.includes("timer"), hookMenu.join(","));
+check("hook menu is not offered outside the brackets",
+  !completeAt("    public void g() { // hook: when ti").includes("timer"));
 
 // Real files: every `Namespace.member` the compiler accepts must be offered by
 // completion right after the dot, so the data cannot drift from the corpus.

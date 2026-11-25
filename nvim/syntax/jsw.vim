@@ -29,7 +29,9 @@ syn match jswNoTernary /?/
 
 " -- comments and strings ----------------------------------------
 syn match jswAnnotationWord /\%(\<temp\ variables\>\|\<receiver\ at\>\|\<main\ thread\>\|\<unsupported\>\|\<undefined\>\|\<proccode\>\|\<monitor\>\|\<comment\>\|\<grouped\>\|\<callee\>\|\<watch\>\|\<Sprite:\|\<warp\>\|\<Stage:\|\<hook:\|\<at\>\)/ contained
-syn region jswComment start="//" end="$" contains=jswAnnotationWord,jswTodo
+syn match jswHookMenu /\%(\[\zsscreen\ down\|tilt\ right\|free\ fall\|logo\ down\|screen\ up\|tilt\ left\|loudness\|logo\ up\|jumped\|shaken\|front\|moved\|right\|timer\|back\|down\|left\|3g\|6g\|8g\|up\|音量\ze\]\)/ contained
+syn match jswProccodeHole /%b\|%c\|%d\|%n\|%s/ contained
+syn region jswComment start="//" end="$" contains=jswAnnotationWord,jswTodo,jswHookMenu,jswProccodeHole
 syn region jswComment start="/\*" end="\*/" contains=jswAnnotationWord,jswTodo
 syn keyword jswTodo contained TODO FIXME XXX BUG
 
@@ -65,7 +67,8 @@ syn keyword jswNamespace AIChatBot Arduino Clone Comments Control Events Facemes
 syn keyword jswLiteral any false null true
 syn keyword jswConditional case default elif else if switch
 syn keyword jswRepeat break continue for in repeat while
-syn keyword jswStatement call loose return
+syn keyword jswStatement call return
+syn keyword jswLoose loose
 syn keyword jswDeclaration as import include stage
 syn keyword jswModifier cloud final private public static
 syn keyword jswType void
@@ -90,6 +93,8 @@ syn match jswExtensionMember /\%(\%(GoogleTeachableMachine\|SpeechRecognition\|O
 syn match jswExtensionMember /\%(\%(GoogleTeachableMachine\|SpeechRecognition\|ObjectDetection\|Pointerlock\|MoreEvents\|AIChatBot\|TurboWarp\|WebSocket\|Comments\|Facemesh\|Handpose\|microbit\|Arduino\|Posenet\|Runtime\|console\|keySim\|Timer\|JSON\|Temp\|Util\|Mem\|Ram\|gtm\)\.\)\@<=\%(groupEnd\|holdLeft\|i2cWrite\|isClosed\|isLocked\|isNumber\|isObject\|isString\|isTilted\|logTimer\|mapValue\|pressKey\|pwmWrite\|rgbBlink\|setTimer\|stopBeep\|Journal\|Timeron\|Warning\|display\|forever\|hexload\|holdKey\|i2cRead\|isArray\|isLabel\|isValid\|jsonGet\|jsonNew\|jsonSet\|labelAt\|letters\|newline\|onClose\|onError\|release\|setRole\|write16\|write32\|answer\|copyTo\|getXOf\|getYOf\|jsonIs\|labels\|length\|moveTo\)\>/
 syn match jswExtensionMember /\%(\%(GoogleTeachableMachine\|SpeechRecognition\|ObjectDetection\|Pointerlock\|MoreEvents\|AIChatBot\|TurboWarp\|WebSocket\|Comments\|Facemesh\|Handpose\|microbit\|Arduino\|Posenet\|Runtime\|console\|keySim\|Timer\|JSON\|Temp\|Util\|Mem\|Ram\|gtm\)\.\)\@<=\%(onOpen\|read16\|read32\|status\|tilted\|unload\|write8\|Error\|alloc\|angle\|clamp\|clear\|click\|debug\|error\|group\|parse\|press\|read8\|servo\|stats\|fill\|getX\|getY\|hold\|info\|load\|save\|size\|warn\|get\|log\|now\|pin\|set\|pi\)\>/
 syn match jswFunctionCall /\<[A-Za-z_$][A-Za-z0-9_$]*\ze\s*(/
+syn match jswParameter /\%(\<void\s\+[A-Za-z_$][A-Za-z0-9_$.]*\s*(\s*\)\@<=[A-Za-z_$][A-Za-z0-9_$]*/
+syn match jswParameter /\%(\<void\s\+[A-Za-z_$][A-Za-z0-9_$.]*\s*([^)]*,\s*\)\@<=[A-Za-z_$][A-Za-z0-9_$]*/
 syn region jswClassName matchgroup=jswDeclaration start=/\<class\s\+/ end=/[^A-Za-z0-9_$]/me=e-1 oneline
 
 " -- highlight groups ----------------------------------------------
@@ -104,6 +109,10 @@ hi def link jswBuiltin Function
 hi def link jswConditional Conditional
 hi def link jswRepeat Repeat
 hi def link jswStatement Statement
+hi def link jswLoose PreProc
+hi def link jswParameter Identifier
+hi def link jswHookMenu Constant
+hi def link jswProccodeHole SpecialChar
 hi def link jswDeclaration Keyword
 hi def link jswModifier StorageClass
 hi def link jswType Type

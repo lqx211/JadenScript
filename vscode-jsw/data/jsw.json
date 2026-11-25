@@ -341,181 +341,269 @@
   {
    "label": "abs",
    "kind": "function",
-   "detail": "builtin",
+   "detail": "abs(value) → value",
+   "params": [
+    "value"
+   ],
    "doc": "Absolute value (operator_mathop)."
   },
   {
    "label": "acos",
    "kind": "function",
-   "detail": "builtin",
+   "detail": "acos(value) → value",
+   "params": [
+    "value"
+   ],
    "doc": "Arccosine in degrees (operator_mathop)."
   },
   {
    "label": "asin",
    "kind": "function",
-   "detail": "builtin",
+   "detail": "asin(value) → value",
+   "params": [
+    "value"
+   ],
    "doc": "Arcsine in degrees (operator_mathop)."
   },
   {
    "label": "atan",
    "kind": "function",
-   "detail": "builtin",
+   "detail": "atan(value) → value",
+   "params": [
+    "value"
+   ],
    "doc": "Arctangent in degrees (operator_mathop)."
   },
   {
    "label": "block",
    "kind": "function",
-   "detail": "builtin",
+   "detail": "block(opcode, field, value) → value",
+   "params": [
+    "opcode",
+    "field",
+    "value"
+   ],
    "doc": "Raw block escape hatch: `block(\"opcode\", …)`."
   },
   {
    "label": "breakpoint",
    "kind": "function",
-   "detail": "builtin",
+   "detail": "breakpoint() → value",
+   "params": [],
    "doc": "Marks a point in the console log."
   },
   {
    "label": "ceil",
    "kind": "function",
-   "detail": "builtin",
+   "detail": "ceil(value) → value",
+   "params": [
+    "value"
+   ],
    "doc": "Round up (operator_mathop) — the block calls this `ceiling`."
   },
   {
    "label": "cos",
    "kind": "function",
-   "detail": "builtin",
+   "detail": "cos(degrees) → value",
+   "params": [
+    "degrees"
+   ],
    "doc": "Cosine of an angle in degrees (operator_mathop)."
   },
   {
    "label": "error",
    "kind": "function",
-   "detail": "builtin",
+   "detail": "error(message) → value",
+   "params": [
+    "message"
+   ],
    "doc": "Console error."
   },
   {
    "label": "exp",
    "kind": "function",
-   "detail": "builtin",
+   "detail": "exp(value) → value",
+   "params": [
+    "value"
+   ],
    "doc": "e raised to the power (operator_mathop)."
   },
   {
    "label": "float",
    "kind": "function",
-   "detail": "builtin",
+   "detail": "float(value) → value",
+   "params": [
+    "value"
+   ],
    "doc": "Force a numeric input slot."
   },
   {
    "label": "floor",
    "kind": "function",
-   "detail": "builtin",
+   "detail": "floor(value) → value",
+   "params": [
+    "value"
+   ],
    "doc": "Round down (operator_mathop)."
   },
   {
    "label": "isCompiled",
    "kind": "function",
-   "detail": "builtin",
+   "detail": "isCompiled() → value",
+   "params": [],
    "doc": "True when the project was compiled."
   },
   {
    "label": "isTurboWarp",
    "kind": "function",
-   "detail": "builtin",
+   "detail": "isTurboWarp() → value",
+   "params": [],
    "doc": "True when running in TurboWarp."
   },
   {
    "label": "join",
    "kind": "function",
-   "detail": "builtin",
+   "detail": "join(a, b) → value",
+   "params": [
+    "a",
+    "b"
+   ],
    "doc": "Join two values (operator_join)."
   },
   {
    "label": "len",
    "kind": "function",
-   "detail": "builtin",
+   "detail": "len(value) → value",
+   "params": [
+    "value"
+   ],
    "doc": "Length of a string (operator_length)."
   },
   {
    "label": "length",
    "kind": "function",
-   "detail": "builtin",
+   "detail": "length(value) → value",
+   "params": [
+    "value"
+   ],
    "doc": "Length of a string (operator_length)."
   },
   {
    "label": "lengthOf",
    "kind": "function",
-   "detail": "builtin",
+   "detail": "lengthOf(value) → value",
+   "params": [
+    "value"
+   ],
    "doc": "Length of a value once it is text (operator_length) — `length of []`."
   },
   {
    "label": "ln",
    "kind": "function",
-   "detail": "builtin",
+   "detail": "ln(value) → value",
+   "params": [
+    "value"
+   ],
    "doc": "Natural logarithm (operator_mathop)."
   },
   {
    "label": "log",
    "kind": "function",
-   "detail": "builtin",
+   "detail": "log(message) → value",
+   "params": [
+    "message"
+   ],
    "doc": "Append a line to the TurboWarp console journal."
   },
   {
    "label": "log10",
    "kind": "function",
-   "detail": "builtin",
+   "detail": "log10(value) → value",
+   "params": [
+    "value"
+   ],
    "doc": "Base-10 logarithm (operator_mathop); `log(x);` is the console statement."
   },
   {
    "label": "menu",
    "kind": "function",
-   "detail": "builtin",
+   "detail": "menu(name, value) → value",
+   "params": [
+    "name",
+    "value"
+   ],
    "doc": "Escape hatch for a dropdown shadow."
   },
   {
    "label": "pow10",
    "kind": "function",
-   "detail": "builtin",
+   "detail": "pow10(value) → value",
+   "params": [
+    "value"
+   ],
    "doc": "10 raised to the power (operator_mathop)."
   },
   {
    "label": "sin",
    "kind": "function",
-   "detail": "builtin",
+   "detail": "sin(degrees) → value",
+   "params": [
+    "degrees"
+   ],
    "doc": "Sine of an angle in degrees (operator_mathop)."
   },
   {
    "label": "sqrt",
    "kind": "function",
-   "detail": "builtin",
+   "detail": "sqrt(value) → value",
+   "params": [
+    "value"
+   ],
    "doc": "Square root (operator_mathop)."
   },
   {
    "label": "startTimer",
    "kind": "function",
-   "detail": "builtin",
+   "detail": "startTimer(name) → value",
+   "params": [
+    "name"
+   ],
    "doc": "Start a named console timer."
   },
   {
    "label": "stopTimer",
    "kind": "function",
-   "detail": "builtin",
+   "detail": "stopTimer(name) → value",
+   "params": [
+    "name"
+   ],
    "doc": "Stop a named console timer."
   },
   {
    "label": "string",
    "kind": "function",
-   "detail": "builtin",
+   "detail": "string(value) → value",
+   "params": [
+    "value"
+   ],
    "doc": "Join a value into a string."
   },
   {
    "label": "tan",
    "kind": "function",
-   "detail": "builtin",
+   "detail": "tan(degrees) → value",
+   "params": [
+    "degrees"
+   ],
    "doc": "Tangent of an angle in degrees (operator_mathop)."
   },
   {
    "label": "warn",
    "kind": "function",
-   "detail": "builtin",
+   "detail": "warn(message) → value",
+   "params": [
+    "message"
+   ],
    "doc": "Console warning."
   }
  ],
@@ -3582,57 +3670,65 @@
   {
    "label": "pos",
    "kind": "snippet",
-   "detail": "metadata · metadata <script> pos <x>,<y>;",
+   "detail": "metadata · <script> pos <x>,<y>;",
    "usage": "metadata <script> pos <x>,<y>;",
+   "snippet": "${1:script} pos ${2:x},${3:y};",
    "doc": "Where a script sits on the canvas: `metadata Stage.tick pos 10,20;`. `<script>` is the method as written, e.g. `greenFlag` or `Events.keyPressed`."
   },
   {
    "label": "monitor",
    "kind": "snippet",
-   "detail": "metadata · metadata monitor <Target.name> at <x>,<y> <W>x<H> <shown|hidden>;",
+   "detail": "metadata · monitor <Target.name> at <x>,<y> <W>x<H> <shown|hidden>;",
    "usage": "metadata monitor <Target.name> at <x>,<y> <W>x<H> <shown|hidden>;",
+   "snippet": "monitor ${1:Target.name} at ${2:x},${3:y} ${4:W}x${5:H} ${6|shown,hidden|};",
    "doc": "A read-out for one variable, in either order: the mode may come before or after the target. `// monitor …` is the comment spelling."
   },
   {
    "label": "watch",
    "kind": "snippet",
-   "detail": "metadata · metadata watch <Target.name> at <x>,<y> <W>x<H> <shown|hidden>;",
+   "detail": "metadata · watch <Target.name> at <x>,<y> <W>x<H> <shown|hidden>;",
    "usage": "metadata watch <Target.name> at <x>,<y> <W>x<H> <shown|hidden>;",
+   "snippet": "watch ${1:Target.name} at ${2:x},${3:y} ${4:W}x${5:H} ${6|shown,hidden|};",
    "doc": "Alias of `monitor`."
   },
   {
    "label": "slider",
    "kind": "snippet",
-   "detail": "metadata · metadata slider(<min>,<max>) <Target.name> at <x>,<y> <W>x<H> shown;",
+   "detail": "metadata · slider(<min>,<max>) <Target.name> at <x>,<y> <W>x<H> shown;",
    "usage": "metadata slider(<min>,<max>) <Target.name> at <x>,<y> <W>x<H> shown;",
+   "snippet": "slider(${1:min},${2:max}) ${3:Target.name} at ${4:x},${5:y} ${6:W}x${7:H} shown;",
    "doc": "A slider. Whole-number bounds are steps, so `slider(0,2)` is a three-state switch; the decompiler writes it `range 0..2 discrete`."
   },
   {
    "label": "list",
    "kind": "snippet",
-   "detail": "metadata · metadata list <Target.list> at <x>,<y> <W>x<H> <shown|hidden>;",
+   "detail": "metadata · list <Target.list> at <x>,<y> <W>x<H> <shown|hidden>;",
    "usage": "metadata list <Target.list> at <x>,<y> <W>x<H> <shown|hidden>;",
+   "snippet": "list ${1:Target.list} at ${2:x},${3:y} ${4:W}x${5:H} ${6|shown,hidden|};",
    "doc": "The list's contents in a monitor box."
   },
   {
    "label": "large",
    "kind": "snippet",
-   "detail": "metadata · metadata large <Target.name> at <x>,<y> <W>x<H> <shown|hidden>;",
+   "detail": "metadata · large <Target.name> at <x>,<y> <W>x<H> <shown|hidden>;",
    "usage": "metadata large <Target.name> at <x>,<y> <W>x<H> <shown|hidden>;",
+   "snippet": "large ${1:Target.name} at ${2:x},${3:y} ${4:W}x${5:H} ${6|shown,hidden|};",
    "doc": "The big number, for one value someone is watching."
   },
   {
    "label": "comment",
    "kind": "snippet",
-   "detail": "metadata · metadata comment <owner> at <x>,<y> <W>x<H>: \"text\";",
+   "detail": "metadata · comment <owner> at <x>,<y> <W>x<H>: \"text\";",
    "usage": "metadata comment <owner> at <x>,<y> <W>x<H>: \"text\";",
+   "snippet": "comment ${1:owner} at ${2:x},${3:y} ${4:W}x${5:H}: \"text\";",
    "doc": "A workspace comment: the `// comment` spelling with a position."
   },
   {
    "label": "note",
    "kind": "snippet",
-   "detail": "metadata · metadata note <owner> at <x>,<y> <W>x<H>: \"text\";",
+   "detail": "metadata · note <owner> at <x>,<y> <W>x<H>: \"text\";",
    "usage": "metadata note <owner> at <x>,<y> <W>x<H>: \"text\";",
+   "snippet": "note ${1:owner} at ${2:x},${3:y} ${4:W}x${5:H}: \"text\";",
    "doc": "Alias of `comment`."
   }
  ],
@@ -3961,6 +4057,30 @@
    "kind": "keyword",
    "doc": "Number of sample frames."
   }
+ ],
+ "hookMenus": [
+  "3g",
+  "6g",
+  "8g",
+  "back",
+  "down",
+  "free fall",
+  "front",
+  "jumped",
+  "left",
+  "logo down",
+  "logo up",
+  "loudness",
+  "moved",
+  "right",
+  "screen down",
+  "screen up",
+  "shaken",
+  "tilt left",
+  "tilt right",
+  "timer",
+  "up",
+  "音量"
  ],
  "keyNames": [
   {

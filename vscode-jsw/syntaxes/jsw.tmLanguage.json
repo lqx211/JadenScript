@@ -136,36 +136,45 @@
             },
             {
               "comment": "rotation=all|leftright|none",
-              "match": "\\b(rotation)\\s*=\\s*(\\b(?:leftright|none|all)\\b)",
+              "match": "\\b(rotation)\\s*(=)\\s*(\\b(?:leftright|none|all)\\b)",
               "captures": {
                 "1": {
                   "name": "keyword.other.target-key.jsw"
                 },
                 "2": {
+                  "name": "keyword.operator.assignment.jsw"
+                },
+                "3": {
                   "name": "constant.language.rotation-style.jsw"
                 }
               }
             },
             {
               "comment": "video=on|off|on-flipped",
-              "match": "\\b(video(?:State)?)\\s*=\\s*(\\b(?:on-flipped|off|on)\\b)",
+              "match": "\\b(video(?:State)?)\\s*(=)\\s*(\\b(?:on-flipped|off|on)\\b)",
               "captures": {
                 "1": {
                   "name": "keyword.other.target-key.jsw"
                 },
                 "2": {
+                  "name": "keyword.operator.assignment.jsw"
+                },
+                "3": {
                   "name": "constant.language.video-state.jsw"
                 }
               }
             },
             {
               "comment": "show=0|1, draggable=0|1",
-              "match": "\\b(show|draggable)\\s*=\\s*(\\b(?:false|true|0|1)\\b)",
+              "match": "\\b(show|draggable)\\s*(=)\\s*(\\b(?:false|true|0|1)\\b)",
               "captures": {
                 "1": {
                   "name": "keyword.other.target-key.jsw"
                 },
                 "2": {
+                  "name": "keyword.operator.assignment.jsw"
+                },
+                "3": {
                   "name": "constant.language.metadata-flag.jsw"
                 }
               }
@@ -177,6 +186,14 @@
             {
               "name": "constant.numeric.jsw",
               "match": "-?\\b\\d+(?:\\.\\d+)?\\b"
+            },
+            {
+              "name": "keyword.operator.assignment.jsw",
+              "match": "="
+            },
+            {
+              "name": "punctuation.separator.jsw",
+              "match": "[,:]"
             }
           ]
         },
@@ -205,6 +222,16 @@
               "comment": "// costume … / // sound …",
               "name": "keyword.other.annotation.jsw",
               "match": "\\b(?:costume|sound)\\b"
+            },
+            {
+              "comment": "the bracketed menu of a hook annotation",
+              "name": "constant.language.hook-menu.jsw",
+              "match": "(?<=\\[)(?:screen down|tilt right|free fall|logo down|screen up|tilt left|loudness|logo up|jumped|shaken|front|moved|right|timer|back|down|left|3g|6g|8g|up|音量)(?=\\])"
+            },
+            {
+              "comment": "the %-placeholders of a proccode",
+              "name": "variable.parameter.proccode.jsw",
+              "match": "\\%b|\\%c|\\%d|\\%n|\\%s"
             },
             {
               "comment": "centerx= centery= res= rate= samples=",
@@ -385,7 +412,7 @@
         },
         {
           "name": "keyword.control.jsw",
-          "match": "\\b(?:continue|default|repeat|return|switch|break|loose|while|call|case|elif|else|for|if)\\b"
+          "match": "\\b(?:continue|default|repeat|return|switch|break|while|call|case|elif|else|for|if)\\b"
         },
         {
           "name": "keyword.operator.word.jsw",
@@ -397,7 +424,7 @@
         },
         {
           "name": "keyword.declaration.jsw",
-          "match": "\\b(?:metadata|class|stage)\\b"
+          "match": "\\b(?:metadata|class|loose|stage)\\b"
         },
         {
           "comment": "Reserved for future versions; flagged so users avoid them.",
@@ -512,16 +539,41 @@
           }
         },
         {
-          "comment": "void Namespace.name(...) / void name(...)",
-          "match": "\\b(void)\\s+([A-Za-z_$][\\w$]*(?:\\.[A-Za-z_$][\\w$]*)*)",
-          "captures": {
+          "comment": "void Namespace.name(a, b) — the declaration, and the parameters inside the parens.",
+          "name": "meta.function-declaration.jsw",
+          "begin": "\\b(void)\\s+([A-Za-z_$][\\w$]*(?:\\.[A-Za-z_$][\\w$]*)*)\\s*(\\()",
+          "beginCaptures": {
             "1": {
               "name": "storage.type.jsw"
             },
             "2": {
               "name": "entity.name.function.jsw"
+            },
+            "3": {
+              "name": "punctuation.section.parens.jsw"
             }
-          }
+          },
+          "end": "\\)",
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.section.parens.jsw"
+            }
+          },
+          "patterns": [
+            {
+              "name": "variable.parameter.jsw",
+              "match": "[A-Za-z_$][\\w$]*"
+            },
+            {
+              "name": "punctuation.separator.jsw",
+              "match": ","
+            }
+          ]
+        },
+        {
+          "comment": "loose { … } - raw blocks the decompiler could not map. Not control flow: nothing is tested.",
+          "name": "keyword.other.loose.jsw",
+          "match": "\\b(loose)\\b"
         }
       ]
     },
@@ -572,6 +624,26 @@
               "match": "\\b[A-Za-z_$][\\w$]*(?:\\.[A-Za-z_$][\\w$]*)+"
             },
             {
+              "comment": "a quoted target name: \"obj loader\".tip",
+              "match": "(\"[^\"]*\")(\\.)([A-Za-z_$][\\w$]*)",
+              "captures": {
+                "1": {
+                  "name": "string.quoted.double.jsw"
+                },
+                "2": {
+                  "name": "punctuation.accessor.jsw"
+                },
+                "3": {
+                  "name": "variable.other.member.jsw"
+                }
+              }
+            },
+            {
+              "comment": "A bare sprite or class name: the thing the monitor watches.",
+              "name": "entity.name.type.class.jsw",
+              "match": "(?<=\\s)[A-Za-z_$][\\w$]*(?=\\s|$)"
+            },
+            {
               "name": "string.quoted.double.jsw",
               "begin": "\"",
               "end": "\"",
@@ -595,8 +667,28 @@
               "match": "(?<=[x×])\\d+(?:\\.\\d+)?\\b"
             },
             {
+              "name": "punctuation.separator.dimension.jsw",
+              "match": "(?<=\\d)[x×](?=\\d)"
+            },
+            {
               "name": "constant.numeric.jsw",
               "match": "\\b\\d+(?:\\.\\d+)?\\b"
+            },
+            {
+              "name": "keyword.operator.range.jsw",
+              "match": "\\.\\."
+            },
+            {
+              "name": "keyword.operator.assignment.jsw",
+              "match": "="
+            },
+            {
+              "name": "punctuation.section.parens.jsw",
+              "match": "[()]"
+            },
+            {
+              "name": "punctuation.separator.jsw",
+              "match": "[,:]"
             }
           ]
         }
@@ -631,36 +723,45 @@
           "patterns": [
             {
               "comment": "rotation=all|leftright|none",
-              "match": "\\b(rotation)\\s*=\\s*(\\b(?:leftright|none|all)\\b)",
+              "match": "\\b(rotation)\\s*(=)\\s*(\\b(?:leftright|none|all)\\b)",
               "captures": {
                 "1": {
                   "name": "keyword.other.target-key.jsw"
                 },
                 "2": {
+                  "name": "keyword.operator.assignment.jsw"
+                },
+                "3": {
                   "name": "constant.language.rotation-style.jsw"
                 }
               }
             },
             {
               "comment": "video=on|off|on-flipped",
-              "match": "\\b(video(?:State)?)\\s*=\\s*(\\b(?:on-flipped|off|on)\\b)",
+              "match": "\\b(video(?:State)?)\\s*(=)\\s*(\\b(?:on-flipped|off|on)\\b)",
               "captures": {
                 "1": {
                   "name": "keyword.other.target-key.jsw"
                 },
                 "2": {
+                  "name": "keyword.operator.assignment.jsw"
+                },
+                "3": {
                   "name": "constant.language.video-state.jsw"
                 }
               }
             },
             {
               "comment": "show=0|1, draggable=0|1",
-              "match": "\\b(show|draggable)\\s*=\\s*(\\b(?:false|true|0|1)\\b)",
+              "match": "\\b(show|draggable)\\s*(=)\\s*(\\b(?:false|true|0|1)\\b)",
               "captures": {
                 "1": {
                   "name": "keyword.other.target-key.jsw"
                 },
                 "2": {
+                  "name": "keyword.operator.assignment.jsw"
+                },
+                "3": {
                   "name": "constant.language.metadata-flag.jsw"
                 }
               }
@@ -739,6 +840,10 @@
           "match": "(?<=[x×])\\d+(?:\\.\\d+)?\\b"
         },
         {
+          "name": "punctuation.separator.dimension.jsw",
+          "match": "(?<=\\d)[x×](?=\\d)"
+        },
+        {
           "name": "constant.numeric.jsw",
           "match": "\\b\\d+(?:\\.\\d+)?(?:[eE][+-]?\\d+)?\\b"
         },
@@ -794,13 +899,13 @@
           "match": "(?<=\\.)(?:back|buttonA|buttonB|front|jumped|left|moved|pin0|pin1|pin2|right|shaken)\\b"
         },
         {
-          "comment": "Method or property after a dot.",
+          "comment": "Method or property after a single dot.",
           "name": "entity.name.function.call.jsw",
-          "match": "(?<=\\.)[A-Za-z_$][\\w$]*(?=\\s*\\()"
+          "match": "(?<!\\.\\.)(?<=\\.)[A-Za-z_$][\\w$]*(?=\\s*\\()"
         },
         {
           "name": "variable.other.property.jsw",
-          "match": "(?<=\\.)[A-Za-z_$][\\w$]*"
+          "match": "(?<!\\.\\.)(?<=\\.)[A-Za-z_$][\\w$]*"
         }
       ]
     },

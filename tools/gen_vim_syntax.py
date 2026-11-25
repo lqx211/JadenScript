@@ -24,6 +24,7 @@ from jswc.extensions import highlight_members, highlight_namespaces  # noqa: E40
 from jswc.keywords import (  # noqa: E402
     BUILTIN_NAMESPACES,
     FLAG_VALUES,
+    HOOK_MENUS,
     KEYWORDS,
     LITERALS,
     METADATA_ANNOTATIONS,
@@ -31,6 +32,7 @@ from jswc.keywords import (  # noqa: E402
     METADATA_WORDS,
     MODIFIERS,
     MONITOR_MODES,
+    PROCCODE_PLACEHOLDERS,
     RESERVED,
     ROTATION_VALUES,
     TYPES,
@@ -45,7 +47,11 @@ CONDITIONAL = {"if", "elif", "else", "switch", "case", "default"}
 #: ``in`` closes a ``for`` header, so it reads as control flow; the compiler
 #: keeps it in RESERVED only so a variable cannot take the name.
 REPEAT = {"for", "while", "repeat", "break", "continue", "in"}
-STATEMENT = {"return", "call", "loose"}
+#: ``loose`` wraps raw blocks the decompiler could not map: it is not control
+#: flow, so it gets a group of its own (TextMate calls it
+#: ``keyword.other.loose.jsw`` for the same reason).
+STATEMENT = {"return", "call"}
+LOOSE = {"loose"}
 DECLARATION = {"stage", "import", "include", "as"}
 
 OPERATORS = (
@@ -184,7 +190,13 @@ def syntax_file() -> str:
         "",
         '" -- comments and strings ----------------------------------------',
         r"syn match jswAnnotationWord /" + _annotation_pattern(ANNOTATION_WORDS) + r"/ contained",
-        r'syn region jswComment start="//" end="$" contains=jswAnnotationWord,jswTodo',
+        # ``// hook: when [timer] > 10`` - the bracketed menu, and the ``%s``
+        # placeholders of a ``// proccode`` label.
+        r"syn match jswHookMenu /\%(\[\zs" + _alternation(HOOK_MENUS) + r"\ze\]\)/ contained",
+        r"syn match jswProccodeHole /" + _alternation(PROCCODE_PLACEHOLDERS)
+        + r"/ contained",
+        r'syn region jswComment start="//" end="$" contains=jswAnnotationWord,jswTodo,'
+        r'jswHookMenu,jswProccodeHole',
         r'syn region jswComment start="/\*" end="\*/" contains=jswAnnotationWord,jswTodo',
         r"syn keyword jswTodo contained TODO FIXME XXX BUG",
         "",
@@ -226,6 +238,7 @@ def syntax_file() -> str:
         "syn keyword jswConditional " + _words(CONDITIONAL),
         "syn keyword jswRepeat " + _words(REPEAT),
         "syn keyword jswStatement " + _words(STATEMENT),
+        "syn keyword jswLoose " + _words(LOOSE),
         "syn keyword jswDeclaration " + _words(DECLARATION),
         "syn keyword jswModifier " + _words(MODIFIERS),
         "syn keyword jswType " + _words(TYPES),
@@ -242,6 +255,16 @@ def syntax_file() -> str:
         r"syn match jswMember /\.\zs[A-Za-z_$][A-Za-z0-9_$]*/",
         *[_extension_member_rule(chunk) for chunk in _alternation_chunks(EXTENSION_MEMBERS)],
         r"syn match jswFunctionCall /\<[A-Za-z_$][A-Za-z0-9_$]*\ze\s*(/",
+        # ``void take(a, b)`` - the names between the parentheses are
+        # parameters, not the variables they read as everywhere else.
+        # A lookbehind rather than a region: Vim never let a region begin at a
+        # ``\zs(`` (the start was zero-width and the end matched at once) and a
+        # region beginning at the name lost to jswFunctionCall, which has to be
+        # defined first so the name keeps its call colour.
+        r"syn match jswParameter /\%(\<void\s\+[A-Za-z_$][A-Za-z0-9_$.]*\s*(\s*\)\@<=[A-Za-z_$][A-Za-z0-9_$]*/",
+        r"syn match jswParameter /\%(\<void\s\+[A-Za-z_$][A-Za-z0-9_$.]*\s*([^)]*,\s*\)\@<=[A-Za-z_$][A-Za-z0-9_$]*/",
+        # ``void take(a, b)`` - the names between the parentheses are
+        # parameters, not the variables they read as everywhere else.
         r"syn region jswClassName matchgroup=jswDeclaration start=/\<class\s\+/ end=/[^A-Za-z0-9_$]/me=e-1 oneline",
         "",
         '" -- highlight groups ----------------------------------------------',
@@ -256,6 +279,10 @@ def syntax_file() -> str:
         "hi def link jswConditional Conditional",
         "hi def link jswRepeat Repeat",
         "hi def link jswStatement Statement",
+        "hi def link jswLoose PreProc",
+        "hi def link jswParameter Identifier",
+        "hi def link jswHookMenu Constant",
+        "hi def link jswProccodeHole SpecialChar",
         "hi def link jswDeclaration Keyword",
         "hi def link jswModifier StorageClass",
         "hi def link jswType Type",

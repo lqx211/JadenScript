@@ -136,6 +136,17 @@ def scan(text: str, patterns: list | None = None) -> list[tuple[str, list[str]]]
                     end = re.compile(rule["end"]).search(text, m.end())
                     stop = end.start() if end else n
                     scopes = [rule["name"]] if rule.get("name") else []
+                    # ``beginCaptures`` name the parts of the opening match
+                    # (``void take(`` -> the function name). Real TextMate
+                    # splits the opening into one token per capture; this
+                    # stand-in cannot, so it attaches them to the whole
+                    # opening token, which is enough for `scanned_scopes`.
+                    for group, cap in (rule.get("beginCaptures") or {}).items():
+                        try:
+                            if m.group(int(group)):
+                                scopes.append(cap["name"])
+                        except (IndexError, TypeError, ValueError):
+                            continue
                     out.append((text[i:m.end()], scopes))
                     out.extend(scan(text[m.end():stop], rule.get("patterns") or []))
                     if end:
@@ -382,7 +393,9 @@ class ConstructTests(unittest.TestCase):
         ("void run() {", "void", "storage.type.jsw"),
         ("if (a and b) {", "if", "keyword.control.jsw"),
         ("if (a and b) {", "and", "keyword.operator.word.jsw"),
-        ("loose { // at 1,2", "loose", "keyword.control.jsw"),
+        # `loose` wraps raw blocks; it is not control flow, so it has its own
+        # scope (and its own vim group).
+        ("loose { // at 1,2", "loose", "keyword.other.loose.jsw"),
         ("x = true;", "true", "constant.language.jsw"),
         ("x = 0x1F;", "0x1F", "constant.numeric.hex.jsw"),
         ("x = 0b1011;", "0b1011", "constant.numeric.binary.jsw"),

@@ -24,6 +24,12 @@ function toRange(document, start, end) {
   return new vscode.Range(document.positionAt(start), document.positionAt(end));
 }
 
+function toLocation(document, nameStart, name) {
+  const start = document.positionAt(nameStart);
+  const end = document.positionAt(nameStart + name.length);
+  return new vscode.Location(document.uri, new vscode.Range(start, end));
+}
+
 function toCompletionItem(document, plain) {
   const completion = new vscode.CompletionItem(plain.label, plain.kind);
   completion.detail = plain.detail;
@@ -85,6 +91,98 @@ function activate(context) {
           } catch (err) {
             console.error("[jaden-script] hover failed:", err);
             return undefined;
+          }
+        },
+      }
+    )
+  );
+
+  // The argument hint for a call. `(` is the character that opens one and `,`
+  // the one that moves to the next parameter, so both retrigger it.
+  context.subscriptions.push(
+    vscode.languages.registerSignatureHelpProvider(
+      { language: "jsw" },
+      {
+        provideSignatureHelp(document, position) {
+          try {
+            const help = engine.provideSignatureHelp(
+              document.getText(),
+              document.offsetAt(position),
+              data
+            );
+            if (!help) return undefined;
+            const signature = new vscode.SignatureInformation(
+              help.label,
+              help.doc ? new vscode.MarkdownString(help.doc) : undefined
+            );
+            signature.parameters = help.parameters.map(
+              (param) => new vscode.ParameterInformation(param.label)
+            );
+            const result = new vscode.SignatureHelp();
+            result.signatures = [signature];
+            result.activeSignature = 0;
+            result.activeParameter = help.activeParameter;
+            return result;
+          } catch (err) {
+            console.error("[jaden-script] signature help failed:", err);
+            return undefined;
+          }
+        },
+      },
+      "(",
+      ","
+    )
+  );
+
+  // Go to definition: a class, a My Block, a variable, a list.
+  context.subscriptions.push(
+    vscode.languages.registerDefinitionProvider(
+      { language: "jsw" },
+      {
+        provideDefinition(document, position) {
+          try {
+            const hit = engine.provideDefinition(
+              document.getText(),
+              document.offsetAt(position),
+              data
+            );
+            if (!hit) return undefined;
+            return toLocation(document, hit.nameStart, hit.name);
+          } catch (err) {
+            console.error("[jaden-script] definition failed:", err);
+            return undefined;
+          }
+        },
+      }
+    )
+  );
+
+  // The outline: classes, their blocks and their state.
+  context.subscriptions.push(
+    vscode.languages.registerDocumentSymbolProvider(
+      { language: "jsw" },
+      {
+        provideDocumentSymbols(document) {
+          try {
+            const symbols = engine.documentSymbols(document.getText(), data);
+            const k = vscode.SymbolKind;
+            const kindOf = {
+              class: k.Class,
+              method: k.Method,
+              function: k.Function,
+              variable: k.Variable,
+            };
+            return [...symbols.values()]
+              .filter((symbol) => symbol.nameStart)
+              .map((symbol) => new vscode.SymbolInformation(
+                symbol.name,
+                kindOf[symbol.kind] || k.Variable,
+                symbol.detail,
+                toLocation(document, symbol.nameStart, symbol.name)
+              ));
+          } catch (err) {
+            console.error("[jaden-script] symbols failed:", err);
+            return [];
           }
         },
       }

@@ -45,6 +45,9 @@ let s:lines = [
       \ '        x = (a ? b : c);',
       \ 'metadata monitor Stage.score at 9,9 100x24 minimized;',
       \ 'stage: rotation=all, video=on-flipped, tempo=120;',
+      \ '    private void slide(start, steps) {',
+      \ '        loose { Looks.show(); } // hook: when [timer] > 2',
+      \ '        // proccode draw %s at 1,2',
       \ ]
 
 " (line, snippet, expected group)
@@ -108,6 +111,11 @@ let s:expect = [
       \ [29, 'all', 'jswTargetValue'],
       \ [29, 'on-flipped', 'jswTargetValue'],
       \ [29, 'tempo', 'jswTargetKey'],
+      \ [30, 'start,', 'jswParameter'],
+      \ [30, 'steps)', 'jswParameter'],
+      \ [31, 'loose', 'jswLoose'],
+      \ [31, 'timer]', 'jswHookMenu'],
+      \ [32, '%s', 'jswProccodeHole'],
       \ ]
 
 call setline(1, s:lines)
