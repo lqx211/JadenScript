@@ -2020,6 +2020,17 @@ def protect_project(
             codegen.class_qualified[(cls_name, fn.qualified)] = fn
             codegen.funcs_by_qualified.setdefault(fn.qualified, (cls_name, fn))
 
+        # The runtime is generated code, and its nodes carry positions inside
+        # the runtime source, not inside the user's file. A lint about it
+        # (`Control.broadcast(<queued name>)` is a computed broadcast, which the
+        # obfuscator follows into `__vm_queue_broadcast` on its own) would point
+        # at a line the user never wrote, so it is dropped here.
+        runtime_diagnostics = len(codegen.diagnostics)
+        #: the runtime queues broadcast names by design, and the obfuscator
+        #: follows that queue (`_rename_vm_broadcasts`), so its computed send is
+        #: not a hazard the user has to hear about.
+        runtime_computed = codegen._computed_broadcast
+
         from .codegen import Scope
 
         codegen.target = target
@@ -2035,6 +2046,8 @@ def protect_project(
         ) + 400
         for fn in runtime_cls.funcs:
             codegen._emit_func(target, runtime_cls, fn)
+        del codegen.diagnostics[runtime_diagnostics:]
+        codegen._computed_broadcast = runtime_computed
 
         for program in group:
             if program.is_procedure and program.fn is not None:

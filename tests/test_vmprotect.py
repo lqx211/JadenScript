@@ -683,6 +683,37 @@ class DiagnosticAnchorTests(unittest.TestCase):
         self.assertTrue(info[0].startswith("1:1: I0004"), info)
 
 
+class GeneratedRuntimeDiagnosticTests(unittest.TestCase):
+    """The interpreter's own code is not the user's code.
+
+    The ``list`` runtime flushes its broadcast queue with
+    ``Control.broadcast(__vm_stack.get(...))`` — a computed name by design, and
+    one the obfuscator follows into ``__vm_queue_broadcast``. It used to be
+    linted as if the user had written it, at a position inside the generated
+    source (``helloworld.jsw:18:42`` is ``public void greenFlag(){``).
+    """
+
+    def test_the_runtime_does_not_warn_about_its_own_broadcast(self):
+        codegen, _ = compile_source(
+            'class a { public void greenFlag() { Looks.say("hi"); } }',
+            features={"commentMetadata", "vmProtect", "doObfuscation"},
+        )
+        noise = [d for d in codegen.diagnostics if "W0004" in d or "W0023" in d]
+        self.assertFalse(noise, noise)
+
+    def test_a_computed_broadcast_in_the_users_own_code_still_warns(self):
+        source = (
+            'public m = "x";\n'
+            "class a { public void greenFlag() { m = m; Control.broadcast(m); } }\n"
+        )
+        codegen, _ = compile_source(
+            source, features={"commentMetadata", "vmProtect", "doObfuscation"}
+        )
+        notes = [d for d in codegen.diagnostics if "W0023" in d]
+        self.assertTrue(notes, codegen.diagnostics)
+        self.assertTrue(notes[0].startswith("2:"), notes[0])
+
+
 @unittest.skipUnless(shutil.which("node"), "node is not installed")
 class ExecutionTests(unittest.TestCase):
     """Compare the protected project with the ordinary build in scratch-vm."""
