@@ -1,25 +1,25 @@
 #enable_feature<commentMetadata>;
 #enable_feature<namespacedNames>;
 
-include "cr.jsw"
+include "cr.jsw";
 
 class model {
     private very_handsome_miss_caleb_wong_model_url = "https://teachablemachine.withgoogle.com/models/rUfcLK4_k";
     private requiredSamples = 20; // How many samples to collect for averaging (20 x 20ms = 0.4s window)
     private requiredConfidence = 0.9; // Least confidence to confirm that the gesture is sure
-    public ignored = false;
-    public ignore_time = 0;
-    public log = [];
-    public cu = 0;
-    public cl = 0;
-    public cr = 0;
-    public ck = 0;
-    public lu = [];
-    public ll = [];
-    public lr = [];
-    public lk = [];
-    public trig = 0;
-    public active = 1;
+    private ignored = false;
+    private ignore_time = 0;
+    private log = [];
+    private cu = 0;
+    private cl = 0;
+    private cr = 0;
+    private ck = 0;
+    private lu = [];
+    private ll = [];
+    private lr = [];
+    private lk = [];
+    private trig = 0;
+    private active = 1;
     public void greenFlag() {
         vinit();
         Runtime.setTurboMode(true);
@@ -65,11 +65,11 @@ class model {
             _can = !ignored || Sensing.timer() > ignore_time+0.8; // 800ms cooldown
             if (_can && trig!=0 && trig!=4){
                 if (trig==1){
-                    object.mu();
+                    controller.mu();
                 } elif (trig==2){
-                    object.ml();
+                    controller.ml();
                 } elif (trig==3){
-                    object.mr();
+                    controller.mr();
                 }
                 ignored = true; // latch only when we acted, so it repeats after the cooldown
                 ignore_time = Sensing.timer();
@@ -125,7 +125,7 @@ class model {
     }
 }
 
-class object { // cr controller
+class controller { // cr controller
     public void ml(){
         keySim.press("left arrow");
     }
@@ -135,10 +135,9 @@ class object { // cr controller
     public void mu(){
         keySim.press("up arrow");
     }
-
 }
 /*
-class object {
+class controller {
     public void ml(){
         Motion.x -= 10;
     }
@@ -154,6 +153,6 @@ class object {
     }
     // To call a function inside current class, ml()
     // Call a function outside the class, model.main(), but only public functions of course
-    // I know some decompiled projects may have function names like object.ml, so, ml = object.ml, great... right? idk
+    // I know some decompiled projects may have function names like controller.ml, so, ml = controller.ml, great... right? idk
 }
 */
