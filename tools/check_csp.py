@@ -20,6 +20,7 @@ list hard-coded here.
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import sys
 import urllib.error
@@ -63,6 +64,60 @@ def fetch(url: str) -> tuple[dict[str, str], bytes]:
         headers = {k.lower(): v for k, v in response.headers.items()}
         body = response.read()
     return headers, body
+
+
+#: The build's own record of the files it wrote (``jswc.html._assets_js``).
+#: Nothing else in a packaged page names them: the project is embedded
+#: compressed, so neither its extension paths nor its share links are readable.
+ASSETS_REF = re.compile(rb"JSWC_ASSETS\s*=\s*(\[[^\]]*\])")
+
+
+def page_assets(page_url: str, body: bytes) -> list[str]:
+    """The files a self-hosted build expects next to its page."""
+    from urllib.parse import urljoin
+
+    found = ASSETS_REF.search(body)
+    if not found:
+        return []
+    try:
+        paths = json.loads(found.group(1))
+    except ValueError:
+        return []
+    return sorted(urljoin(page_url, path) for path in paths)
+
+
+def status_of(url: str) -> int:
+    request = urllib.request.Request(url, headers={"User-Agent": "jswc-check-csp"})
+    try:
+        with urllib.request.urlopen(request, timeout=20) as response:
+            return response.status
+    except urllib.error.HTTPError as error:
+        return error.code
+    except (urllib.error.URLError, OSError):
+        return 0
+
+
+def report_assets(page_url: str, body: bytes) -> int:
+    """Print every file of a self-hosted page that the host does not serve."""
+    urls = page_assets(page_url, body)
+    if not urls:
+        print("assets    ?       page lists no files (built before JSWC_ASSETS)")
+        return 0
+    print("assets")
+    refused = 0
+    for url in urls:
+        status = status_of(url)
+        if status == 200:
+            continue
+        refused += 1
+        reason = ("this host refuses the extension, whatever the file -- a "
+                  "static allow-list does that" if status == 403
+                  else "not uploaded, or uploaded to a different path")
+        print(f"          HTTP {status}  {url}\n          "
+              f"          {reason}")
+    if not refused:
+        print("          ok      every file the page loads is served")
+    return refused
 
 
 def directives(policy: str) -> dict[str, list[str]]:
@@ -115,7 +170,7 @@ def effective(rules: dict[str, list[str]], name: str) -> list[str] | None:
     return rules.get("default-src")
 
 
-def check(url: str) -> int:
+def check(url: str, csp_only: bool = False) -> int:
     try:
         headers, body = fetch(url)
     except (urllib.error.URLError, OSError, ValueError) as error:
@@ -185,6 +240,8 @@ def check(url: str) -> int:
     else:
         print(f"permissions  ok      {PERMISSIONS.split(': ')[1]}")
 
+    unserved = 0 if csp_only else report_assets(url, body)
+
     if failures:
         print(f"\n{failures} source(s) missing. Add them to the policy that is "
               f"already being sent:\n")
@@ -192,6 +249,12 @@ def check(url: str) -> int:
         print("\nBehind Cloudflare the header may come from Rules -> Transform "
               "Rules -> Modify response header\nrather than the origin; the same "
               "value goes there, on one line.")
+        return 1
+    if unserved:
+        print(f"\n{unserved} file(s) the page loads are not served by this host.\n"
+              f"A 404 means re-upload the folder the build wrote next to the page,\n"
+              f"keeping its structure; a 403 means the host has to serve that "
+              f"extension.\nThe policy is not the problem.")
         return 1
     print("\nevery source the page needs is allowed")
     return 0
@@ -202,8 +265,11 @@ def main(argv: list[str] | None = None) -> int:
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     parser.add_argument("url", help="the deployed page, or any URL on the same host")
+    parser.add_argument("--csp-only", action="store_true",
+                        help="check the header alone, without fetching every file "
+                             "the page loads")
     args = parser.parse_args(argv)
-    return check(args.url)
+    return check(args.url, csp_only=args.csp_only)
 
 
 if __name__ == "__main__":

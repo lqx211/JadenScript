@@ -214,20 +214,92 @@ class SelfHostedTests(unittest.TestCase):
             {"paths": ["group1-shard1of2.bin", "group1-shard2of2.bin"]}
         ]}).encode()
         try:
-            files = html._posenet_files(metadata)
+            manifest, document = html._posenet_model(metadata)
         finally:
             html._fetch = original
         self.assertEqual(
-            files[0],
+            manifest,
             "savedmodel/posenet/mobilenet/float/075/model-stride16.json",
         )
-        self.assertIn(
-            "savedmodel/posenet/mobilenet/float/075/group1-shard2of2.bin", files
+        self.assertEqual(
+            document["weightsManifest"][0]["paths"],
+            ["group1-shard1of2.bin", "group1-shard2of2.bin"],
         )
 
+    def test_a_posenet_manifest_that_cannot_be_read_is_still_copied(self):
+        metadata = {
+            "modelSettings": {"posenet": {"multiplier": 0.75, "outputStride": 16}}
+        }
+        original = html._fetch
+        html._fetch = lambda url, **kw: (_ for _ in ()).throw(OSError("offline"))
+        try:
+            manifest, document = html._posenet_model(metadata)
+        finally:
+            html._fetch = original
+        self.assertTrue(manifest.endswith("model-stride16.json"))
+        self.assertIsNone(document)
+
     def test_an_image_model_needs_no_posenet_files(self):
-        self.assertEqual(html._posenet_files({"modelSettings": {}}), [])
-        self.assertEqual(html._posenet_files({}), [])
+        self.assertEqual(html._posenet_model({"modelSettings": {}}), ("", None))
+        self.assertEqual(html._posenet_model({}), ("", None))
+
+    def test_the_page_lists_the_files_the_build_wrote(self):
+        # `tools/check_csp.py` verifies a deployment against this list; without
+        # it a host that refuses `.bin` cannot be told apart from a bad policy.
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            written = [directory / "serve_files" / "ext" / "gtm.js",
+                       directory / "serve_files" / "model" / "m" / "w.bin.json"]
+            for path in written:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b"x")
+            js = html._assets_js(written, directory)
+        self.assertIn(
+            'window.JSWC_ASSETS = ["serve_files/ext/gtm.js", '
+            '"serve_files/model/m/w.bin.json"];',
+            js,
+        )
+
+    def test_a_rebuild_drops_the_files_the_previous_one_wrote(self):
+        # The folder is build output: a stale shard from an older naming, or a
+        # model the project no longer names, must not travel with the upload.
+        with tempfile.TemporaryDirectory() as tmp:
+            assets = Path(tmp) / "serve_files"
+            for owned in ("ext", "lib", "model"):
+                (assets / owned / "deep").mkdir(parents=True, exist_ok=True)
+                (assets / owned / "deep" / "old.bin").write_bytes(b"stale")
+            (assets / "mine.txt").write_text("not the build's", "utf-8")
+            html._clear_assets(assets)
+            self.assertFalse((assets / "ext").exists())
+            self.assertFalse((assets / "lib").exists())
+            self.assertFalse((assets / "model").exists())
+            self.assertTrue((assets / "mine.txt").is_file())
+
+    def test_a_mirrored_model_names_its_shards_where_a_host_will_serve_them(self):
+        # A static host may answer 403 to `.bin` even when the file is there --
+        # `.json` is the extension the manifest itself needs, so the shards are
+        # written under it and the manifest is rewritten to name the copies.
+        pages = {
+            "metadata.json": b'{"modelSettings": {}}',
+            "model.json": json.dumps({
+                "weightsManifest": [{"paths": ["model.weights.bin"], "weights": []}]
+            }).encode(),
+            "model.weights.bin": b"\x00\x01",
+        }
+        original = html._fetch
+        html._fetch = lambda url, **kw: pages[url.rsplit("/", 1)[-1]]
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                directory = Path(tmp) / "model" / "abc"
+                html._mirror_model("abc", directory)
+                self.assertTrue((directory / "model.weights.bin.json").is_file())
+                self.assertFalse((directory / "model.weights.bin").exists())
+                manifest = json.loads((directory / "model.json").read_text("utf-8"))
+        finally:
+            html._fetch = original
+        self.assertEqual(
+            manifest["weightsManifest"][0]["paths"], ["model.weights.bin.json"]
+        )
 
     def test_the_libraries_keep_their_cdn_path(self):
         # gtm builds `<base>@tensorflow/tfjs@1.3.1/dist/tf.min.js`, so the copy

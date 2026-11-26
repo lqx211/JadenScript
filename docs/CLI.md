@@ -273,10 +273,10 @@ everything from:
 | `serve_files/lib/@tensorflow/tfjs@…/dist/tf.min.js` | TensorFlow.js, at the path `gtm` builds from its base |
 | `serve_files/lib/@teachablemachine/pose@…/…` | the pose runtime, when the model needs it |
 | `serve_files/lib/tfjs-models/savedmodel/posenet/…` | posenet's pretrained weights, which the pose runtime fetches by absolute URL |
-| `serve_files/model/<id>/` | the model the project names: `metadata.json`, `model.json` and every weight shard |
+| `serve_files/model/<id>/` | the model the project names: `metadata.json`, `model.json` and every weight shard, written as `<name>.json` (see below) |
 
 Every URL in the page is then same-origin, so a host whose policy is
-`script-src 'self'; connect-src 'self'` runs it unchanged. Three things make
+`script-src 'self'; connect-src 'self'` runs it unchanged. Four things make
 that work:
 
 * the extensions are named relative to the page and resolved at load time
@@ -287,10 +287,19 @@ that work:
   folder while the *source* still says the Teachable Machine share link;
 * posenet's weights are fetched by the pose runtime with a hard-coded Google
   URL, so `fetch` is wrapped for the `https://storage.googleapis.com/tfjs-models/`
-  prefix only (`window.GTM_MIRROR_MAP`).
+  prefix only (`window.GTM_MIRROR_MAP`);
+* every weight shard is written as `<original name>.json`, and the manifest is
+  rewritten to name the copy. A host that serves static files by an extension
+  allow-list — cPanel-style setups do — answers **403** to `.bin` (`.dat`,
+  `.pb`, `.gz` and `.txt` too) even when the upload succeeded, and all the page
+  reports is a failed fetch. `model.json` has to be served as JSON for the model
+  to load at all, so `.json` is the one extension the mirror can count on. On a
+  host without such a list the names are simply longer; nothing else changes.
 
-Upload the page **and** its folder together. The `.sb3` is unchanged — it still
-names the original URLs, so it keeps working in the editor.
+Upload the page **and** its folder together, and re-upload the folder after a
+rebuild: the build clears `ext/`, `lib/` and `model/` before writing, so a model
+or shard name it no longer uses is not left behind to be uploaded. The `.sb3` is
+unchanged — it still names the original URLs, so it keeps working in the editor.
 
 The mirror is what a build can see: models named by a literal share link. A URL
 computed at run time cannot be copied, and the page will fail to load that model
@@ -338,6 +347,19 @@ connect-src
 ```
 
 It exits non-zero while anything is missing, so it can gate a deploy.
+
+It also fetches every file the build wrote — the page carries the list in
+`window.JSWC_ASSETS`, since the project itself is embedded compressed — and
+reports the ones the host does not serve. That is a second failure that looks
+identical from the console, and the policy is not the cause:
+
+```console
+assets
+          HTTP 403  https://host/temp/serve_files/model/<id>/model.weights.bin
+                    this host refuses the extension, whatever the file — a static allow-list does that
+```
+
+`--csp-only` skips that pass and checks the header alone.
 
 To check the header *before* touching a server, `tools/serve.py` can send it:
 

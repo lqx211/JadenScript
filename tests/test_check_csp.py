@@ -15,7 +15,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "tools"))
 
-from check_csp import allowed, directives, effective  # noqa: E402
+from check_csp import allowed, directives, effective, page_assets  # noqa: E402
 
 
 class DirectiveTests(unittest.TestCase):
@@ -102,6 +102,24 @@ class SourceTests(unittest.TestCase):
             allowed(effective(rules, "connect-src") or [],
                     "https://storage.googleapis.com")
         )
+
+
+class AssetTests(unittest.TestCase):
+    def test_the_files_the_build_wrote_are_read_off_the_page(self):
+        body = b'<script>window.JSWC_ASSETS = ["a_files/ext/gtm.js", '
+        body += b'"a_files/model/m/model.weights.bin.json"];</script>'
+        self.assertEqual(
+            page_assets("https://host/temp/serve.html", body),
+            [
+                "https://host/temp/a_files/ext/gtm.js",
+                "https://host/temp/a_files/model/m/model.weights.bin.json",
+            ],
+        )
+
+    def test_a_page_without_the_record_lists_nothing(self):
+        # Built before the record existed: nothing can be said about the
+        # folder, and guessing would be worse than staying quiet.
+        self.assertEqual(page_assets("https://host/x.html", b"<html></html>"), [])
 
 
 if __name__ == "__main__":

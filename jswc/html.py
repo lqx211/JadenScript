@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -111,31 +112,62 @@ CDN = "https://cdn.jsdelivr.net/npm/"
 #: page rewrites at run time (``window.GTM_MIRROR_MAP``). Only a pose model needs
 #: these: the pose runtime loads posenet's own weights from Google.
 MIRROR_PREFIXES = {"https://storage.googleapis.com/tfjs-models/": "lib/tfjs-models/"}
+POSENET = "https://storage.googleapis.com/tfjs-models/"
+
+#: Appended to every weight shard a mirrored build writes. A host may serve
+#: static files by an extension allow-list, answering 403 to `.bin` -- and
+#: `.dat`, `.pb`, `.gz`, `.txt` -- even when the file is uploaded, which the
+#: page reports as nothing more than a failed fetch. The manifest has to be
+#: served as `.json` for the model to load at all, so that is the one extension
+#: a mirror can rely on. The original name is kept in front of it.
+SHARD_SUFFIX = ".json"
 
 
-def _posenet_files(metadata: dict) -> list[str]:
-    """The posenet base model a pose project's runtime pulls, as CDN paths.
+def _served_shard(name: str) -> str:
+    """``model.weights.bin`` -> ``model.weights.bin.json``."""
+    return Path(name).name + SHARD_SUFFIX
+
+
+def _mirror_shards(document: dict, base: str, directory: Path) -> list[Path]:
+    """Copy every shard ``document`` names, and point the manifest at the copies.
+
+    ``document`` is edited in place; the caller writes it out next to the
+    shards. ``base`` is the URL the manifest was read from, since its ``paths``
+    are relative to its own directory.
+    """
+    written: list[Path] = []
+    for group in document.get("weightsManifest") or []:
+        names = []
+        for path in group.get("paths") or []:
+            name = _served_shard(path)
+            target = directory / name
+            target.write_bytes(_fetch(base + Path(path).name))
+            names.append(name)
+            written.append(target)
+        group["paths"] = names
+    return written
+
+
+def _posenet_model(metadata: dict) -> tuple[str, dict | None]:
+    """The posenet manifest a pose project's runtime pulls, and its document.
 
     Derived from the model's own ``modelSettings.posenet``: the runtime builds
     ``mobilenet/float/<multiplier as 3 digits>/model-stride<stride>.json`` from
-    it, so the mirror has to answer at exactly that path.
+    it, so the mirror has to answer at exactly that path. The document is
+    ``None`` when it could not be read, so the caller copies the file as it is.
     """
     settings = (metadata.get("modelSettings") or {}).get("posenet") or {}
     multiplier = settings.get("multiplier")
     stride = settings.get("outputStride")
     if multiplier is None or stride is None:
-        return []
+        return "", None
     folder = f"savedmodel/posenet/mobilenet/float/{round(float(multiplier) * 100):03d}"
     manifest = f"{folder}/model-stride{int(stride)}.json"
-    files = [manifest]
     try:
-        document = json.loads(_fetch("https://storage.googleapis.com/tfjs-models/" + manifest))
+        document = json.loads(_fetch(POSENET + manifest))
     except (urllib.error.URLError, OSError, ValueError):
-        return files
-    for group in document.get("weightsManifest") or []:
-        for relative in group.get("paths") or []:
-            files.append(f"{folder}/{Path(relative).name}")
-    return files
+        return manifest, None
+    return manifest, document
 
 
 #: A Teachable Machine share link anywhere in the project: the model a mirrored
@@ -182,6 +214,8 @@ def _mirror_model(model_id: str, directory: Path) -> list[Path]:
 
     ``model.json`` names its weight files relative to itself, so they are read
     out of the manifest instead of being guessed: a sharded export has several.
+    The manifest is then written back naming the copies (:data:`SHARD_SUFFIX`),
+    so the mirror still loads on a host that refuses the original extension.
     """
     directory.mkdir(parents=True, exist_ok=True)
     written: list[Path] = []
@@ -191,12 +225,11 @@ def _mirror_model(model_id: str, directory: Path) -> list[Path]:
         path.write_bytes(_fetch(base + name))
         written.append(path)
     manifest = json.loads((directory / "model.json").read_text("utf-8"))
-    for group in manifest.get("weightsManifest") or []:
-        for relative in group.get("paths") or []:
-            name = Path(relative).name
-            path = directory / name
-            path.write_bytes(_fetch(base + name))
-            written.append(path)
+    if manifest.get("weightsManifest"):
+        written += _mirror_shards(manifest, base, directory)
+        (directory / "model.json").write_text(
+            json.dumps(manifest, separators=(",", ":")), "utf-8"
+        )
     return written
 
 
@@ -222,6 +255,33 @@ def _absolutise_extension_urls(page: str) -> str:
     return page.replace(EXTENSION_LOAD_CALL, EXTENSION_LOAD_ABSOLUTE)
 
 
+def _clear_assets(assets: Path) -> None:
+    """Drop what the previous build wrote there, so none of it gets uploaded.
+
+    The folder is build output, and its contents are derived: a renamed shard
+    (:data:`SHARD_SUFFIX`) or a model the project no longer names would
+    otherwise sit next to the page forever -- and the old ``.bin`` names are
+    exactly what a host with an extension allow-list refuses.
+    """
+    for owned in ("ext", "lib", "model"):
+        shutil.rmtree(assets / owned, ignore_errors=True)
+
+
+def _assets_js(written: list[Path], directory: Path) -> str:
+    """``window.JSWC_ASSETS``: what the build wrote, as page-relative paths.
+
+    Nothing in the page says which files the folder is supposed to contain, and
+    a host can refuse one it *has* -- a static-extension allow-list answers 403
+    to `.bin` however the upload went. Listing them lets a deployment be checked
+    against the build instead of against a guess; ``tools/check_csp.py`` reads
+    this.
+    """
+    paths = sorted(
+        str(path.relative_to(directory)).replace(os.sep, "/") for path in written
+    )
+    return f"window.JSWC_ASSETS = {json.dumps(paths)};"
+
+
 def self_hosted(sb3: bytes, output: str | Path, *, extension_urls=None,
                 title: str | None = None, timeout: int = PACKAGE_TIMEOUT) -> dict:
     """Write the page plus its own copy of everything it loads.
@@ -235,7 +295,9 @@ def self_hosted(sb3: bytes, output: str | Path, *, extension_urls=None,
     assets = output.parent / (output.stem + "_files")
     assets.mkdir(parents=True, exist_ok=True)
     prefix = assets.name
+    _clear_assets(assets)
 
+    written: list[Path] = []
     mapping: dict[str, str] = {}
     for extension_id, url in (extension_urls or {}).items():
         if not url or url.startswith("data:"):
@@ -243,23 +305,35 @@ def self_hosted(sb3: bytes, output: str | Path, *, extension_urls=None,
         target = assets / "ext" / f"{extension_id}.js"
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(_fetch(url))
+        written.append(target)
         mapping[extension_id] = f"{prefix}/ext/{extension_id}.js"
 
     for relative in VENDORED_LIBRARIES:
         target = assets / "lib" / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(_fetch(CDN + relative))
+        written.append(target)
 
     project_text = zipfile.ZipFile(io.BytesIO(sb3)).read("project.json").decode("utf-8")
     models = list(dict.fromkeys(_SHARE_LINK.findall(project_text)))
     for model_id in models:
         directory = assets / "model" / model_id
-        _mirror_model(model_id, directory)
+        written += _mirror_model(model_id, directory)
         metadata = json.loads((directory / "metadata.json").read_text("utf-8"))
-        for relative in _posenet_files(metadata):
-            target = assets / "lib" / "tfjs-models" / relative
+        manifest, document = _posenet_model(metadata)
+        if manifest:
+            target = assets / "lib" / "tfjs-models" / manifest
             target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(_fetch("https://storage.googleapis.com/tfjs-models/" + relative))
+            if document is None:
+                target.write_bytes(_fetch(POSENET + manifest))
+            else:
+                written += _mirror_shards(
+                    document, POSENET + str(Path(manifest).parent) + "/", target.parent
+                )
+                target.write_text(
+                    json.dumps(document, separators=(",", ":")), "utf-8"
+                )
+            written.append(target)
 
     mirrors = {
         remote: prefix + "/" + local for remote, local in MIRROR_PREFIXES.items()
@@ -268,6 +342,7 @@ def self_hosted(sb3: bytes, output: str | Path, *, extension_urls=None,
         f"window.GTM_LIB_BASE = {json.dumps(prefix + '/lib/')};"
         f"window.GTM_MODEL_MIRROR = {json.dumps(prefix + '/model/')};"
         f"window.GTM_MIRROR_MAP = {json.dumps(mirrors)};"
+        f"{_assets_js(written, output.parent)}"
     )
     patched = _rewrite_extension_urls(sb3, mapping) if mapping else sb3
     pack(
