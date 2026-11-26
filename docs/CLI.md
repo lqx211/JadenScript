@@ -104,8 +104,10 @@ uses the same built-in blocks and extensions the source did, but it is meant for
 TurboWarp-sized projects, where the slowdown can be tuned.
 
 The default `h0` backend uses the hand-written state-machine shape from
-`examples/h0.jsw`: `__vm_switch` contains one numbered `case` per instruction,
-and `__vm_run` keeps calling it. `--vm-style list` instead stores the
+`examples/h0.jsw`: one numbered case per instruction, dispatched by
+`__vm_run`. The dispatch bisects on the label rather than emitting one long
+if/elif chain (JSW's `switch`), so a project with thousands of instructions
+keeps a logarithmic block depth and a logarithmic cost per step. `--vm-style list` instead stores the
 instruction stream in Stage lists and dispatches it through a shared
 `__vm_step` if/elif chain. Both styles use the same bytecode lowering,
 native-call handling, frame allocator and warp rules; only the dispatch
@@ -134,9 +136,11 @@ conditional still falls back to native blocks with `W0031`.
 Custom-block parameters are part of the protected frame, and procedure calls
 from either the interpreter or an ordinary native script go through the
 generated stub. Nested calls allocate VM frames and return them to the free
-list when the callee halts, so recursion works. The frame arena starts at 320
-slots and grows by one frame when nested calls or concurrent clones need more,
-so live frames are never overwritten. `--warp` only speeds up the native stubs the
+list when the callee halts, so recursion works. The arena starts with up to 320
+frames but at most ~12,288 slots, so a project with very deep expressions starts
+smaller rather than carrying an enormous list; it grows by one frame whenever
+nested calls or concurrent clones need more, so live frames are never
+overwritten. `--warp` only speeds up the native stubs the
 interpreter calls: `__vm_run` itself stays a non-warp loop so it always yields.
 For the same reason, `// warp` custom blocks and every procedure they call stay
 native. A virtualised caller can still call them -- warp mode belongs to the

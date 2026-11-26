@@ -1009,9 +1009,8 @@ still decides when the script starts; its body becomes
 `__vm_start(program, frame)`. A custom block keeps its definition and signature,
 but its body becomes a call to `__vm_proc_start(program, temps, argc, ...)`.
 The interpreter lives in the same sprite because Scratch custom blocks are
-per-target. The default `h0` backend emits the shape of `examples/h0.jsw`:
-`__vm_switch` has one numbered `case` per instruction, and `__vm_run` calls
-that switch in a loop. `--vm-style list` keeps the immutable instruction
+per-target. The default `h0` backend emits the shape of `examples/h0.jsw`: one numbered
+case per instruction, and `__vm_run` dispatches in a loop. `--vm-style list` keeps the immutable instruction
 stream and its arguments in Stage lists (`__vm_ops`, `__vm_args`), with
 constants in `__vm_k`, then dispatches each instruction through `__vm_step`.
 The h0 style trades a larger project (one Scratch case block group per
@@ -1025,6 +1024,15 @@ reproduces a build exactly. `--vm-crypt 0..3` selects the hardening level:
 guard to every VM entry, and 3 adds unreachable decoy cases. The h0 backend
 puts each unique instruction body in its own random-named helper method by
 default; `--no-vm-split` keeps the bodies inside `__vm_switch`.
+
+JSW's `switch` is an if/elif chain, so one `case` per instruction would nest
+thousands of blocks deep -- TurboWarp's JS compiler gives up on a stack that
+deep, and the interpreter would walk the chain on every step. The dispatch is
+a **bisection on the label** instead: `if (pc < middle) { … } else { … }`,
+repeated down to a leaf that compares one label. Depth and per-step work are
+then logarithmic, and because the labels are random the sorted order says
+nothing about the source order. The `list` backend bisects its opcode ids the
+same way.
 
 Generic community-extension commands and reporters are lowered through the
 same native-call vocabulary as the core blocks. Their fixed menu values are
@@ -1125,14 +1133,27 @@ programs are the service hats that were protected in M1, and the machine still
 boots. Leaving the warp chain native is what keeps that boot from turning into
 a frozen tab.
 
-`wait until` is left native: it takes a **reporter**, and passing one evaluated
-boolean would freeze the script on the first false. `--vm-budget` is the speed
-knob: 1 is the deliberate crawl, 10 is usable for a small project, and a CPU
-that has to keep its frame rate needs a much higher number. The frame arena
-starts with 320 slots and grows by one frame when nested custom-block calls or
-simultaneous clones need more; a running frame is never overwritten. The free
-list reuses frames as calls return, so a long-running project does not pay for
-the arena's high-water mark on every call.
+`--vm-budget` is the speed knob: 1 is the deliberate crawl, 10 is usable for a
+small project, and a CPU that has to keep its frame rate needs a much higher
+number.
+
+A frame is `8` state slots, then the parameters, then the temporaries, then the
+operand stack, and one `stride` is that whole width. The temporaries are
+**reusable**: a native call's arguments live in slots indexed by the operand
+depth the call starts at, so a procedure with a thousand list reads uses a
+handful of slots, not a thousand — the operands those arguments came from were
+never more than a few values deep. Only a loop counter needs a slot that stays
+live across a body, and those nest, so they get their own region after the
+reusable one. A program wider than 65,536 slots is refused (`W0031`) rather
+than shipped.
+
+The arena is a slot budget, not a frame count: `__vm_stack` starts with up to
+320 frames of `stride`, but never more than about 12,288 slots, so a wide frame
+starts with fewer frames instead of putting a hundred thousand empty strings in
+the project. It grows by one frame when nested custom-block calls or
+simultaneous clones need more, and a running frame is never overwritten. The
+free list reuses frames as calls return, so a long-running project does not pay
+for the arena's high-water mark on every call.
 
 The point is the slowdown: `__vm_run` is a `while (1)` loop, and Scratch yields
 at the end of every iteration. The interpreter is always non-warp, even in a

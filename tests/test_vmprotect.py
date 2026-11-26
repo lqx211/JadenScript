@@ -12,8 +12,50 @@ from pathlib import Path
 from jswc.ir import Project
 from jswc.sb3 import write_sb3
 from jswc.validator import validate
+from jswc.vmprotect import _HATS
 
 from tests.helpers import ROOT, blocks_of, compile_source
+
+
+def _substack_depth(blocks: dict) -> int:
+    """How deeply the C-blocks nest (the deepest ``SUBSTACK`` chain)."""
+    depth: dict[str, int] = {}
+    for start in blocks:
+        stack = [(start, False)]
+        while stack:
+            bid, done = stack.pop()
+            if done:
+                best = 0
+                for name, value in (blocks[bid].get("inputs") or {}).items():
+                    if not name.startswith("SUBSTACK"):
+                        continue
+                    if (
+                        isinstance(value, list)
+                        and len(value) > 1
+                        and isinstance(value[1], str)
+                        and value[1] in blocks
+                    ):
+                        best = max(best, 1 + depth.get(value[1], 0))
+                depth[bid] = best
+                continue
+            if bid in depth:
+                continue
+            stack.append((bid, True))
+            block = blocks[bid]
+            children = [
+                value[1]
+                for name, value in (block.get("inputs") or {}).items()
+                if name.startswith("SUBSTACK")
+                and isinstance(value, list)
+                and len(value) > 1
+                and isinstance(value[1], str)
+                and value[1] in blocks
+                and value[1] not in depth
+            ]
+            if block.get("next") in blocks and block["next"] not in depth:
+                children.append(block["next"])
+            stack.extend((child, False) for child in children)
+    return max(depth.values(), default=0)
 
 
 def _stage_lists(project: Project) -> dict[str, list]:
@@ -79,18 +121,65 @@ class ProtectedBuildTests(unittest.TestCase):
         self.assertNotIn("data_setvariableto", blocks_of(project, "a"))
 
     def test_custom_block_bodies_are_virtualised(self):
+        """One VM program per custom block and per hat, counted from the source.
+
+        The fixture is a hand-edited sample, so the counts are derived instead
+        of pinned: adding a custom block to it used to break this test without
+        anything being wrong with ``vmProtect``.
+        """
         source = (ROOT / "examples" / "helloworld.jsw").read_text(encoding="utf-8")
         codegen, project = compile_source(
             source,
             features={"commentMetadata", "vmProtect"},
         )
-        calls = _proccodes(blocks_of(project, "core"))
-        # One program per hat: the green flag plus the two broadcasts a public
-        # function is (`doPrint`, `helloWorld`), and one per custom block.
-        self.assertEqual(calls.count("__vm_start %s %s"), 3)
-        self.assertEqual(calls.count("__vm_proc_start %s %s %s %s"), 4)
+        blocks = blocks_of(project, "core")
+        calls = _proccodes(blocks)
+        stubs = [name for name in calls if name.startswith("__vm_proc_start")]
+        starts = [name for name in calls if name.startswith("__vm_start")]
+
+        def proccode(definition: dict) -> str:
+            prototype = blocks.get((definition.get("inputs") or {})
+                                   .get("custom_block", [None, None])[1])
+            return str(((prototype or {}).get("mutation") or {}).get("proccode", ""))
+
+        authored = [
+            block for block in blocks.values()
+            if block.get("opcode") == "procedures_definition"
+            and not proccode(block).startswith("__vm")
+        ]
+        # The arena reset is a green-flag script of its own and does not start
+        # the VM; it is the one whose chain touches ``__vm_active``.
+        def is_reset(hat: dict) -> bool:
+            seen: set[str] = set()
+            pending: list[str | None] = [hat.get("next")]
+            while pending:
+                bid = pending.pop()
+                if bid is None or bid in seen or bid not in blocks:
+                    continue
+                seen.add(bid)
+                block = blocks[bid]
+                if "__vm_active" in json.dumps(block.get("fields") or {}):
+                    return True
+                pending.append(block.get("next"))
+                for value in (block.get("inputs") or {}).values():
+                    if isinstance(value, list) and len(value) > 1:
+                        if isinstance(value[1], str):
+                            pending.append(value[1])
+                        elif isinstance(value[1], list):
+                            pending.extend(
+                                item for item in value[1] if isinstance(item, str)
+                            )
+            return False
+
+        hats = [
+            block for block in blocks.values()
+            if block.get("topLevel") and block["opcode"] in _HATS
+            and not is_reset(block)
+        ]
+        self.assertEqual(len(stubs), len(authored), sorted(proccode(b) for b in authored))
+        self.assertEqual(len(starts), len(hats), calls)
         self.assertIn(
-            "I0004 vmProtect virtualised 7 program(s)",
+            f"I0004 vmProtect virtualised {len(authored) + len(hats)} program(s)",
             "\n".join(codegen.diagnostics),
         )
 
@@ -149,6 +238,82 @@ class ProtectedBuildTests(unittest.TestCase):
             and (block.get("fields", {}).get("LIST") or [""])[0] == "__vm_stack"
         ]
         self.assertTrue(grew, "the frame allocator never grows __vm_stack")
+
+    def test_many_calls_do_not_widen_the_frame(self):
+        """Scratch slots are reused by operand depth, not per call site.
+
+        A decompiled state machine calls ``v.get(...)`` a thousand times.  Each
+        call used to reserve its own slot, so the frame (the stride) grew with
+        the *length* of the procedure and the whole build hit the stride limit.
+        Only the maximum operand depth matters.
+        """
+        body = "".join(f'    v.set({index}, {index});\n' for index in range(1, 401))
+        source = (
+            "public x = 0;\n"
+            "public v = [];\n"
+            "class a { public void greenFlag() {\n"
+            f"{body}"
+            "    x = v.length();\n"
+            "} }\n"
+        )
+        codegen, _ = compile_source(
+            source,
+            features={"commentMetadata", "vmProtect"},
+        )
+        self.assertIn("I0004 vmProtect virtualised 1 program(s)",
+                      "\n".join(codegen.diagnostics))
+        self.assertFalse(
+            any("W0031" in line for line in codegen.diagnostics),
+            codegen.diagnostics,
+        )
+
+    def test_dispatch_depth_is_logarithmic(self):
+        """The VRuntime dispatch must not nest one block per instruction.
+
+        ``switch`` in JSW is a linear if/elif chain, so a project with a few
+        thousand instructions used to nest that deep -- TurboWarp's JS compiler
+        gives up on it, and every VM step walked the chain.  The dispatch
+        bisects on the label instead.
+        """
+        body = "".join(f"    x += {index};\n" for index in range(1, 601))
+        source = (
+            "public x = 0;\n"
+            "class a { public void greenFlag() {\n"
+            f"{body}"
+            "} }\n"
+        )
+        for style in ("h0", "list"):
+            with self.subTest(style=style):
+                _, project = compile_source(
+                    source,
+                    features={"commentMetadata", "vmProtect"},
+                    vm_style=style,
+                )
+                target = next(t for t in project.targets if not t.is_stage)
+                blocks = {bid: block.to_json() for bid, block in target.blocks.items()}
+                depth = _substack_depth(blocks)
+                self.assertLessEqual(depth, 24, f"{style} dispatch nests {depth} deep")
+
+    def test_a_very_wide_frame_starts_a_small_arena(self):
+        """A deep expression must not preallocate 320 of those giant frames.
+
+        The arena is a slot budget: a wide frame means fewer starting frames and
+        the allocator grows the list on demand.
+        """
+        deep = " + ".join(["1"] * 300)
+        source = (
+            "public x = 0;\n"
+            f"class a {{ public void greenFlag() {{ x = {deep}; }} }}\n"
+        )
+        codegen, project = compile_source(
+            source,
+            features={"commentMetadata", "vmProtect"},
+        )
+        self.assertIn("I0004 vmProtect virtualised 1 program(s)",
+                      "\n".join(codegen.diagnostics))
+        stack = _stage_lists(project)["__vm_stack"]
+        self.assertLessEqual(len(stack), 12_288)
+        self.assertGreater(len(stack), 0)
 
     def test_only_the_warp_call_chain_stays_native(self):
         """Warp mode is scoped to the callee, so its *callers* stay protected.

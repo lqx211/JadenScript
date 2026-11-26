@@ -64,10 +64,21 @@ from .opcodes import COMMANDS, FIELD, PROPERTIES, REPORTERS
 from .ir import Block, Lit, Project, Ref, Target
 from .keywords import ALL_KEYWORDS
 
-#: The initial frame arena. It starts at one native Scratch thread's worth of
-#: frames, but the generated allocator appends more when a project needs them;
-#: a thread that never starts still costs nothing beyond these initial slots.
+#: The most frames the arena ever preallocates: one native Scratch thread's
+#: worth.  The allocator appends more slots when a project needs them, so this
+#: is a starting size, not a limit.
 MAX_THREADS = 320
+
+#: How many slots the preallocated arena may spend before it starts trading
+#: frames for size.  A deep expression widens every frame, and 320 of those
+#: would put hundreds of thousands of empty strings into the project; the
+#: generated allocator grows the list on demand, so starting smaller costs
+#: nothing but a few extra `add`s on the first calls.
+ARENA_SLOT_BUDGET = 12_288
+
+#: Never start with fewer frames than this, however wide they are: a hat plus
+#: the procedure it calls must not grow the arena on its first instruction.
+MIN_FRAMES = 8
 
 #: Slots at the front of every thread block:
 #:   0 pc, 1 opcode, 2 argument, 3 a, 4 b, 5 sp, 6 broadcast, 7 broadcast flag
@@ -75,6 +86,16 @@ STATE_SLOTS = 8
 
 #: The smallest useful block; a deep expression raises it.
 MIN_STRIDE = 32
+
+#: A ceiling high enough for a hand-written thousand-term expression and low
+#: enough that a runaway cannot ask for a project nobody can open.
+MAX_STRIDE = 65_536
+
+
+def initial_arena(stride: int) -> int:
+    """How many slots ``__vm_stack`` starts with for a frame of ``stride``."""
+    frames = max(MIN_FRAMES, min(MAX_THREADS, ARENA_SLOT_BUDGET // stride))
+    return frames * stride
 
 _IDENT = re.compile(r"^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*$")
 
@@ -295,7 +316,10 @@ class _Compiler:
         self.extensions = _EXTENSION_BY_OPCODE if extensions is None else extensions
         self.param_count = len(self.params)
         self.code: list[_Instr] = []
-        self.temps = 0
+        #: High-water mark of the reusable slot region (see ``scratch``).
+        self.scratch_max = 0
+        #: How many loop counters are alive, so nested loops do not share one.
+        self.loops = 0
         self.depth = 0
         self.max_depth = 0
         self.used: set[int] = set()
@@ -323,10 +347,39 @@ class _Compiler:
             self.consts.append(value)
             return len(self.consts)
 
-    def new_temp(self) -> int:
-        slot = self.param_count + self.temps
-        self.temps += 1
-        return slot
+    def scratch(self, count: int) -> list[int]:
+        """``count`` reusable slots for one native call's arguments.
+
+        The slots are indexed by the operand-stack depth the call starts at, so
+        a second call made at the same depth reuses them: the values they hold
+        are dead the moment the call returns.  Reserving a fresh slot per call
+        instead made a long procedure with a thousand list reads ask for a
+        thousand slots of frame -- a stride no project needs, because the
+        operand stack those arguments came from was never more than a few
+        values deep.
+        """
+        base = self.depth
+        self.scratch_max = max(self.scratch_max, base + count)
+        return [self.param_count + base + index for index in range(count)]
+
+    def new_loop_temp(self) -> int:
+        """A slot that stays live across a loop body.
+
+        Loop counters nest, so these cannot be reused by depth.  The index is a
+        placeholder (``-1 - index``) that :meth:`finish` moves past the reusable
+        region once the whole program is known.
+        """
+        index = self.loops
+        self.loops += 1
+        return -1 - index
+
+    def finish(self) -> None:
+        """Resolve loop-temp placeholders and freeze the frame's temp count."""
+        offset = self.param_count + self.scratch_max
+        for instr in self.code:
+            if instr.arg < 0:
+                instr.arg = offset + (-instr.arg - 1)
+        self.temps = self.scratch_max + self.loops
 
     # -- inputs --------------------------------------------------------
     def input(self, block: dict, name: str) -> None:
@@ -452,7 +505,7 @@ class _Compiler:
             return False
         self.input(block, slot_name)
         self.pop()
-        slot = self.new_temp()
+        slot = self.scratch(1)[0]
         self.emit(self.cases.tmp_store_at(slot))
         self.emit(
             self.cases.native_property(
@@ -608,8 +661,8 @@ class _Compiler:
         name = self.literal_input(raw)
         if name is None:
             return False
-        count = self.new_temp()
-        index = self.new_temp()
+        count = self.new_loop_temp()
+        index = self.new_loop_temp()
         self.input(block, "NUM")
         self.pop()
         self.emit(self.cases.tmp_store, count)
@@ -687,18 +740,15 @@ class _Compiler:
         if name is None or method is None:
             return False
         params = O.LIST_COMMANDS[method][1]
-        parts: list[str] = []
-        slots: list[int] = []
+        if any(param not in (block.get("inputs") or {}) for param in params):
+            return False
+        slots = self.scratch(len(params))
         for param in params:
-            if param not in (block.get("inputs") or {}):
-                return False
             self.input(block, param)
             self.pop()
-            slot = self.new_temp()
-            slots.append(slot)
-            parts.append(f"__vm_stack.get(__vm_base + 8 + {slot})")
         for slot in reversed(slots):
             self.emit(self.cases.tmp_store_at(slot))
+        parts = [f"__vm_stack.get(__vm_base + 8 + {slot})" for slot in slots]
         self.emit(
             self.cases.native_procedure(f"{name}.{method}", ", ".join(parts))
         )
@@ -711,18 +761,15 @@ class _Compiler:
         if name is None or method is None:
             return False
         params = _LIST_REPORTER_ARGS.get(method, ())
-        parts: list[str] = []
-        slots: list[int] = []
+        if any(param not in (block.get("inputs") or {}) for param in params):
+            return False
+        slots = self.scratch(len(params))
         for param in params:
-            if param not in (block.get("inputs") or {}):
-                return False
             self.input(block, param)
             self.pop()
-            slot = self.new_temp()
-            slots.append(slot)
-            parts.append(f"__vm_stack.get(__vm_base + 8 + {slot})")
         for slot in reversed(slots):
             self.emit(self.cases.tmp_store_at(slot))
+        parts = [f"__vm_stack.get(__vm_base + 8 + {slot})" for slot in slots]
         self.push()
         self.emit(
             self.cases.native_reporter(f"{name}.{method}", ", ".join(parts), False)
@@ -760,7 +807,9 @@ class _Compiler:
         """Lower extension inputs to temporary slots, in declaration order."""
         inputs = block.get("inputs") or {}
         parts: list[str] = []
-        slots: list[int] = []
+        provided = [arg for arg in args if not arg[2]]
+        slots = self.scratch(len(provided))
+        taken = 0
         for name, _kind, menu in args:
             if menu:
                 value = self.literal_input(inputs.get(name))
@@ -774,9 +823,8 @@ class _Compiler:
                 self.push()
                 self.emit(self.cases.push_k, self.constant(""))
             self.pop()
-            slot = self.new_temp()
-            slots.append(slot)
-            parts.append(f"__vm_stack.get(__vm_base + 8 + {slot})")
+            parts.append(f"__vm_stack.get(__vm_base + 8 + {slots[taken]})")
+            taken += 1
         for slot in reversed(slots):
             self.emit(self.cases.tmp_store_at(slot))
         return parts, slots
@@ -826,7 +874,9 @@ class _Compiler:
 
     def _arguments(self, block: dict, spec) -> tuple[list[str], list[int]]:
         parts: list[str] = []
-        slots: list[int] = []
+        inputs = [param for param in spec.params if param.prim != FIELD]
+        slots = self.scratch(len(inputs))
+        taken = 0
         for param in spec.params:
             if param.prim == FIELD:
                 # A field is not an input: the compiler resolves it to a
@@ -836,9 +886,8 @@ class _Compiler:
                 continue
             self.input(block, param.name)
             self.pop()
-            slot = self.new_temp()
-            slots.append(slot)
-            parts.append(f"__vm_stack.get(__vm_base + 8 + {slot})")
+            parts.append(f"__vm_stack.get(__vm_base + 8 + {slots[taken]})")
+            taken += 1
         for slot in reversed(slots):
             self.emit(self.cases.tmp_store_at(slot))
         return parts, slots
@@ -881,11 +930,10 @@ class _Compiler:
         inputs = block.get("inputs") or {}
         if any(argument not in inputs for argument in argument_ids):
             raise Unsupported("procedures_call")
-        slots = []
+        slots = self.scratch(len(argument_ids))
         for argument in argument_ids:
             self.value(inputs[argument])
             self.pop()
-            slots.append(self.new_temp())
         # The values are on the operand stack in source order; store them in
         # reverse so the first parameter ends up in the first slot.
         for slot in reversed(slots):
@@ -915,7 +963,7 @@ class _Compiler:
         self.patch(end, len(self.code) + 1)
 
     def repeat(self, block: dict) -> None:
-        slot = self.new_temp()
+        slot = self.new_loop_temp()
         self.input(block, "TIMES")
         self.pop()
         self.emit(self.cases.tmp_store, slot)
@@ -1208,6 +1256,40 @@ class _Cases:
         )
 
 
+def _body_lines(source: str) -> list[str]:
+    """One case's statements, dedented so they can be re-indented in place."""
+    return [line.strip() for line in source.splitlines() if line.strip()]
+
+
+def _bisect_chain(
+    key: str, entries: list[tuple[int, list[str]]], indent: str = "        "
+) -> list[str]:
+    """Nested ``if``/``else`` that finds ``key`` among sorted ``entries``.
+
+    Scratch has no jump table: its ``switch`` is a linear if/elif chain, so a
+    generated dispatch held one comparison per instruction.  A project with a
+    few thousand instructions then had the deepest block stack in the file
+    (TurboWarp's JS compiler gives up on it) and paid a walk of that chain for
+    *every* VM step.  Bisecting on the label makes the depth, and the work per
+    step, logarithmic.
+    """
+    if not entries:                       # pragma: no cover - callers check
+        return []
+    if len(entries) == 1:
+        value, body = entries[0]
+        lines = [f"{indent}if ({key} == {value}) {{"]
+        lines.extend(f"{indent}    {line}" for line in body)
+        lines.append(f"{indent}}}")
+        return lines
+    middle = len(entries) // 2
+    lines = [f"{indent}if ({key} < {entries[middle][0]}) {{"]
+    lines.extend(_bisect_chain(key, entries[:middle], indent + "    "))
+    lines.append(f"{indent}}} else {{")
+    lines.extend(_bisect_chain(key, entries[middle:], indent + "    "))
+    lines.append(f"{indent}}}")
+    return lines
+
+
 def _runtime_source(
     cases: _Cases,
     used: set[int],
@@ -1271,18 +1353,22 @@ def _runtime_source(
         "        __vm_stack.set(__vm_base + 1, __vm_ops.get(__vm_stack.get(__vm_base + 0)));",
         "        __vm_stack.set(__vm_base + 2, __vm_args.get(__vm_stack.get(__vm_base + 0)));",
         "        __vm_stack.set(__vm_base + 0, __vm_stack.get(__vm_base + 0) + 1);",
+        # The pc a matched opcode falls through to, and the default an unknown
+        # opcode leaves behind: the program stops instead of running on.
+        "        __vm_stack.set(__vm_base + 3, __vm_stack.get(__vm_base + 0));",
+        "        __vm_stack.set(__vm_base + 0, 0);",
     ]
-    first = True
-    for ident in sorted(used):
-        case = cases.by_id[ident]
-        keyword = "if" if first else "elif"
-        first = False
-        lines.append(f"        {keyword} (__vm_stack.get(__vm_base + 1) == {ident}) {{")
-        lines.append(case.source)
-        lines.append("        }")
-    lines.append(
-        "        else { __vm_stack.set(__vm_base + 0, 0); return; }"
-    )
+    entries = [
+        (
+            ident,
+            [
+                "        __vm_stack.set(__vm_base + 0, __vm_stack.get(__vm_base + 3));"
+            ]
+            + _body_lines(cases.by_id[ident].source),
+        )
+        for ident in sorted(used)
+    ]
+    lines.extend(_bisect_chain("__vm_stack.get(__vm_base + 1)", entries))
     lines.append("    }")
     lines.append("    private void __vm_run(__vm_base) {")
     lines.append("        while (1) {")
@@ -1458,24 +1544,32 @@ def _runtime_source_switch(
             lines.append(f"    private void {helper_names[ident]}(__vm_base) {{")
             lines.append(cases.by_id[ident].source)
             lines.append("    }")
+    # ``switch`` in JSW is an if/elif chain, so the dispatch is a bisection on
+    # the label instead: a project with thousands of instructions would
+    # otherwise nest that deep (TurboWarp's JS compiler gives up) and walk the
+    # chain on every step.  The labels are random, so sorting them says nothing
+    # about the source order.
     lines.extend([
         "    private void __vm_switch(__vm_base) {",
-        "        switch (__vm_stack.get(__vm_base + 0)) {",
+        "        __vm_stack.set(__vm_base + 3, __vm_stack.get(__vm_base + 0));",
+        # A label that is not in the table leaves the program stopped, which is
+        # also what the last instruction of a program does.
+        "        __vm_stack.set(__vm_base + 0, 0);",
     ])
+    table: list[tuple[int, list[str]]] = []
     for pc, arg, next_pc, ident, source in instructions:
-        lines.append(f"        case {pc} {{")
-        lines.append(f"            __vm_stack.set(__vm_base + 2, {arg});")
-        lines.append(
-            f"            __vm_stack.set(__vm_base + 0, {next_pc});"
-        )
+        body = [
+            f"__vm_stack.set(__vm_base + 2, {arg});",
+            f"__vm_stack.set(__vm_base + 0, {next_pc});",
+        ]
         if split:
-            lines.append(f"            {helper_names[ident]}(__vm_base);")
+            body.append(f"{helper_names[ident]}(__vm_base);")
         else:
-            lines.append(source)
-        lines.append("        }")
+            body.extend(_body_lines(source))
+        table.append((pc, body))
+    table.sort(key=lambda item: item[0])
+    lines.extend(_bisect_chain("__vm_stack.get(__vm_base + 3)", table))
     lines.extend([
-        "        case _ { __vm_stack.set(__vm_base + 0, 0); }",
-        "        }",
         "    }",
         "    private void __vm_run(__vm_base) {",
         "        while (1) {",
@@ -1815,6 +1909,7 @@ def protect_project(
                 skipped[target.name] = (count + 1, first)
                 return
             compiler.emit(cases.halt)
+            compiler.finish()
             programs.append(
                 _Program(
                     target=target,
@@ -1870,11 +1965,12 @@ def protect_project(
         return
     left = sum(count for count, _ in skipped.values())
     stride = max(MIN_STRIDE, max(program.stride for program in programs))
-    if stride > 512:
+    if stride > MAX_STRIDE:
         note(
             "W0031",
             "vmProtect left every program native: the deepest "
-            f"expression needs {stride} slots, more than the 512-slot limit",
+            f"expression needs {stride} slots, more than the {MAX_STRIDE}-slot "
+            "limit",
         )
         return
     note(
@@ -1882,7 +1978,7 @@ def protect_project(
         f"vmProtect virtualised {len(programs)} program(s)"
         + (f"; {left} left native" if left else ""),
     )
-    arena_max = MAX_THREADS * stride
+    arena_max = initial_arena(stride)
 
     # One global instruction stream; every program gets a start index.  h0
     # assigns a random label per instruction instead, so the case order and

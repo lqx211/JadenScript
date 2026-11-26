@@ -1,28 +1,55 @@
 stage {}
+
 class core {
     private strings = [];
-    private s0 = 'H';
-    private s1 = 'e';
-    private s2 = 'l';
-    private s3 = 'o';
-    private s4 = ' ';
-    private s5 = 'w';
-    private s6 = 'r';
-    private s7 = 'd';
-    private s8 = '!';
-    private f = '';
+    private strl = ['D','M','x','d','e','C','g','H','%','&','B','l','R','z','o','T','q','r','^','Q','w','v','w','x','!','z',' '];
+    private s0 = 0;
+    private s1 = 0;
+    private s2 = 0;
+    private s3 = 0;
+    private s4 = 0;
+    private s5 = 0;
+    private s6 = 0;
+    private s7 = 0;
+    private s8 = 0;
+    private v0 = 0;
+    private f = 0;
     private lv = 0;
     public void greenFlag(){
+        v0 = 1;
+        strings.clear();
+        f = '';
         helloWorld();
+        _strclr();
     }
     private void _print(n){
         Looks.say(n);
     }
+    private void _strclr(){
+        s0 = 0;
+        s1 = 0;
+        s2 = 0;
+        s3 = 0;
+        s4 = 0;
+        s5 = 0;
+        s6 = 0;
+        s7 = 0;
+        s8 = 0;
+    }
     private void _strinit(x){
+        s0 = strl.get(8);
+        s1 = strl.get(5);
+        s2 = strl.get(12);
+        s3 = strl.get(15);
+        s4 = strl.get(27);
+        s5 = strl.get(23);
+        s6 = strl.get(18);
+        s7 = strl.get(4);
+        s8 = strl.get(25);
         strings.push(s0);
         strings.push(s1);
         lv = x;
-        while(lv>0){
+        while(lv>v0-1){
             strings.push(s2)
             lv--
         }
@@ -36,14 +63,15 @@ class core {
         strings.push(s8);
     }
     public void doPrint(){
-        while(strings.length()>0){
-            f = join(f,strings.get(1))
-            strings.remove(1);
+        while(0<strings.length()){
+            f = join(f,strings.get(v0))
+            strings.remove(v0);
         }
         _print(f);
+        f = '';
     }
     public void helloWorld(){
-        _strinit(2);
+        _strinit(v0+1);
         doPrint();
     }
 }
