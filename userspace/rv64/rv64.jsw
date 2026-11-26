@@ -213,7 +213,6 @@ public X.diskCache = [];
 // TurboWarp stores its project settings in a stage comment that ends with the
 // `_twconfig_` marker, so the size travels with the .sb3 instead of in a URL.
 metadata note Stage at 50,50 350x170: "{\"width\":640,\"height\":480,\"warpTimer\":false} // _twconfig_";
-
 import "assets/lists/X.image.jsa";
 
 include "input.jsw"

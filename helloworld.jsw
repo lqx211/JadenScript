@@ -565,37 +565,30 @@ class s1 {
         p27(v192, v110, v51, "", "", "");
     }
 
-    metadata p4 pos 48,816;
     private void p4() {
         p27(v181, v86, v51, "", "", "");
     }
 
-    metadata p1 pos 48,1008;
     private void p1(jnZy6v, IGCtzM) { // proccode p1 %b %s
         p27(v127, v86, v177, jnZy6v, IGCtzM, "");
     }
 
-    metadata p8 pos 48,1200;
     private void p8(WqmVT2, AHkdMm, bL6Fu4) { // proccode p8 %b %s %s
         p27(v74, v51, v110, WqmVT2, AHkdMm, bL6Fu4);
     }
 
-    metadata p30 pos 48,1392;
     private void p30(SPVYO7, eN9F0X) {
         p17(v138, v158, v126, SPVYO7, eN9F0X);
     }
 
-    metadata p2 pos 48,1584;
     private void p2(ChaVaJ, rcb8XE) {
         p17(v153, v172, v126, ChaVaJ, rcb8XE);
     }
 
-    metadata p12 pos 48,1776;
     private void p12(MmQ1fx, eleeQK) {
         p17(v109, v167, v126, MmQ1fx, eleeQK);
     }
 
-    metadata p9 pos 48,1968;
     private void p9(KhH2ku) {
         if (v53.get(KhH2ku + v190) == v86) {
             v53.set(KhH2ku + v190, v51);
@@ -603,7 +596,6 @@ class s1 {
         }
     }
 
-    metadata p10 pos 48,2336;
     private void p10(EjgoUg) {
         while (1) {
             p13(EjgoUg);
@@ -614,7 +606,6 @@ class s1 {
         }
     }
 
-    metadata p27 pos 48,2800;
     private void p27(lxbjlF, oKeZcu, BHipAh, Ol1jnR, nbUeNZ, G8685p) {
         if (v133.length() > v51) {
             v186 = v133.get(v133.length());
