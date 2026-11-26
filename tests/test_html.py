@@ -39,6 +39,38 @@ class main {
 
 
 class AvailabilityTests(unittest.TestCase):
+    def test_turbo_is_part_of_the_command(self):
+        # Turbo mode is the packager's default because a machine wants to finish;
+        # a game timed by the frame plays faster than it does in the editor, so
+        # `--no-html-turbo` has to reach the packager.
+        import subprocess
+
+        seen = {}
+
+        class Result:
+            returncode = 0
+            stdout = b'{"ok": true, "type": "text/html"}'
+            stderr = b""
+
+        def run(command, **kwargs):
+            seen["command"] = command
+            return Result()
+
+        original_run, original_available = subprocess.run, html.available
+        html.available = lambda: (True, "")
+        subprocess.run = run
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                html.pack(b"x", Path(tmp) / "p.html", turbo=False)
+                plain = seen["command"]
+                html.pack(b"x", Path(tmp) / "p.html")
+                default = seen["command"]
+        finally:
+            subprocess.run = original_run
+            html.available = original_available
+        self.assertIn("--no-turbo", plain)
+        self.assertNotIn("--no-turbo", default)
+
     def test_a_missing_node_is_named(self):
         original = shutil.which
         shutil.which = lambda name, *a, **k: None

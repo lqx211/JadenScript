@@ -225,9 +225,13 @@ archive is built in memory for the packager).
 | --- | --- |
 | `--html` | also write `<output>.html` next to the `.sb3` |
 | `--html-title TEXT` | `document.title` / window title (default: derived from the file name) |
+| `--no-html-turbo` | start the page with turbo mode off (default: on) |
 
 Autoplay and turbo mode are on in the packaged page, since it is meant to be
-handed to someone and double-clicked. For a title screen or a different
+handed to someone and double-clicked. Turbo runs the VM flat out, so a project
+whose *animation* is timed by the frame — a game, rather than a machine that
+just has to finish — plays faster than it does in the editor; `--no-html-turbo`
+starts such a page with turbo off, and the project can still turn it on itself. For a title screen or a different
 appearance, use <https://packager.turbowarp.org/> with the same `.sb3`.
 
 #### Hosting the packaged file: a page-wide Content-Security-Policy breaks it

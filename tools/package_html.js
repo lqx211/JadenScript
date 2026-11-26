@@ -18,7 +18,7 @@
 
    Usage:
      node tools/package_html.js --out build/x.html [--title "My Project"] \\
-       [--no-bake] [--custom-js "window.X = 1"] < x.sb3
+       [--no-bake] [--no-turbo] [--custom-js "window.X = 1"] < x.sb3
 */
 
 'use strict';
@@ -26,7 +26,7 @@
 const fs = require('fs');
 
 function parseArgs(argv) {
-  const args = { out: null, title: null, bake: true, customJs: null };
+  const args = { out: null, title: null, bake: true, customJs: null, turbo: true };
   for (let i = 0; i < argv.length; i += 1) {
     const flag = argv[i];
     if (flag === '--out') args.out = argv[(i += 1)];
@@ -36,6 +36,10 @@ function parseArgs(argv) {
     // inlined as `data:` scripts: a host whose script-src has no `data:` can
     // still load them, as long as they are same-origin files.
     else if (flag === '--no-bake') args.bake = false;
+    // Turbo mode runs the VM flat out, which is right for a machine that is
+    // meant to finish, and wrong for a game whose animation is timed by the
+    // frame: it plays at whatever speed the CPU allows.
+    else if (flag === '--no-turbo') args.turbo = false;
     else if (flag === '--help' || flag === '-h') args.help = true;
   }
   return args;
@@ -78,7 +82,7 @@ const projectData = fs.readFileSync(0);
   // Only the defaults that matter for a deliverable: no "click to start" gate,
   // and the same options the packager website uses for an HTML target.
   packager.options.target = 'html';
-  packager.options.turbo = true;
+  packager.options.turbo = args.turbo;
   packager.options.autoplay = true;
   packager.options.bakeExtensions = args.bake;
   if (args.title) packager.options.app.windowTitle = args.title;

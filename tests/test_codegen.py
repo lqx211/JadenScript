@@ -219,6 +219,40 @@ class CodegenTests(unittest.TestCase):
         reporter = blocks[proto["inputs"][argument_id][1]]
         self.assertEqual(reporter["opcode"], "argument_reporter_boolean")
 
+    def test_a_boolean_parameter_reads_back_as_a_boolean(self):
+        # Reading it as `argument_reporter_string_number` made `if (flag)`
+        # compile into `not (flag == 0)`; a parameter that was passed `false`
+        # reports as the text "false", which is never equal to 0, so the branch
+        # ran every time. Crossy Road's level generator put a tree in every cell
+        # of the field that way.
+        _, project = compile_source(
+            "class a { private void f(flag, text) { // proccode work %b %s\n"
+            " if (flag) { Control.wait(0); } Looks.say(text); } }"
+        )
+        blocks = blocks_of(project, "a")
+        reporters = [b for b in blocks.values()
+                     if b["opcode"].startswith("argument_reporter")]
+        kinds = {b["fields"]["VALUE"][0]: b["opcode"] for b in reporters}
+        self.assertEqual(kinds, {
+            "flag": "argument_reporter_boolean",
+            "text": "argument_reporter_string_number",
+        })
+        # The condition is the reporter itself, not a comparison built around it.
+        condition = next(b for b in blocks.values() if b["opcode"] == "control_if")
+        inner = blocks[condition["inputs"]["CONDITION"][1]]
+        self.assertEqual(inner["opcode"], "argument_reporter_boolean")
+
+    def test_a_parameter_without_a_boolean_placeholder_stays_a_value(self):
+        _, project = compile_source(
+            "class a { private void f(x) { // proccode work %s\n"
+            " if (x) { Control.wait(0); } } }"
+        )
+        blocks = blocks_of(project, "a")
+        self.assertIn("argument_reporter_string_number",
+                      [b["opcode"] for b in blocks.values()])
+        self.assertNotIn("argument_reporter_boolean",
+                         [b["opcode"] for b in blocks.values()])
+
     def test_private_function_is_not_broadcast(self):
         _, project = compile_source("class a { private void tick(){ x=1; } }")
         self.assertNotIn("event_whenbroadcastreceived", opcodes(project, "a"))

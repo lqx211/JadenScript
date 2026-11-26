@@ -283,7 +283,8 @@ def _assets_js(written: list[Path], directory: Path) -> str:
 
 
 def self_hosted(sb3: bytes, output: str | Path, *, extension_urls=None,
-                title: str | None = None, timeout: int = PACKAGE_TIMEOUT) -> dict:
+                title: str | None = None, timeout: int = PACKAGE_TIMEOUT,
+                turbo: bool = True) -> dict:
     """Write the page plus its own copy of everything it loads.
 
     ``extension_urls`` is ``{extension id: url}``; each is fetched and written
@@ -352,6 +353,7 @@ def self_hosted(sb3: bytes, output: str | Path, *, extension_urls=None,
         title=title,
         timeout=timeout,
         bake=False,
+        turbo=turbo,
         custom_js=globals_js,
     )
     if mapping:
@@ -361,13 +363,14 @@ def self_hosted(sb3: bytes, output: str | Path, *, extension_urls=None,
 
 
 def pack(sb3: bytes, output: str | Path, *, extension_urls=(), title: str | None = None,
-         timeout: int = PACKAGE_TIMEOUT, bake: bool = True,
+         timeout: int = PACKAGE_TIMEOUT, bake: bool = True, turbo: bool = True,
          custom_js: str | None = None) -> Path:
     """Write ``sb3`` to ``output`` as one standalone HTML file.
 
     ``bake=False`` keeps the project's extension URLs instead of inlining them
-    as ``data:`` scripts -- the self-hosted mode in :func:`self_hosted` -- and
-    ``custom_js`` is injected into the page before the project starts.
+    as ``data:`` scripts -- the self-hosted mode in :func:`self_hosted` --
+    ``turbo=False`` starts the page with turbo mode off, and ``custom_js`` is
+    injected into the page before the project starts.
     """
     usable, reason = available()
     if not usable:
@@ -383,6 +386,8 @@ def pack(sb3: bytes, output: str | Path, *, extension_urls=(), title: str | None
         command += ["--title", title]
     if not bake:
         command += ["--no-bake"]
+    if not turbo:
+        command += ["--no-turbo"]
     if custom_js:
         command += ["--custom-js", custom_js]
     try:

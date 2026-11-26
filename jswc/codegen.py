@@ -253,6 +253,8 @@ def _inside_arguments(fn):
 @dataclass
 class Scope:
     params: set[str] = field(default_factory=set)
+    #: Parameters the custom block declares as ``%b`` (see ``_boolean_params``).
+    booleans: set[str] = field(default_factory=set)
 
 
 def iter_nodes(node):
@@ -1593,6 +1595,25 @@ class Codegen:
             ]
         return self._arg_id_cache[key]
 
+    def _boolean_params(self, fn: A.FuncDecl) -> set[str]:
+        """The parameters the custom block declares as ``%b``.
+
+        JadenScript has one untyped parameter, so the ``// proccode``
+        annotation is the only place a boolean arrives, and it has to be used:
+        reading a boolean parameter as a string reporter made ``if (flag)``
+        compile into ``not (flag == 0)``, where a passed ``false`` reports as
+        the text "false" -- never equal to 0 -- so the branch was taken every
+        time. That is how Crossy Road's level generator came back with a tree in
+        every cell of the field instead of a few.
+        """
+        match = _PROCCODE_RE.search(fn.annotation or "")
+        if match is None:
+            return set()
+        kinds = re.findall(r"%[sbn]", match.group(1))
+        if len(kinds) != len(fn.params):
+            return set()      # the count mismatch is E0056, reported by _proccode
+        return {name for name, kind in zip(fn.params, kinds) if kind == "%b"}
+
     def _proccode(self, fn: A.FuncDecl) -> str:
         """Custom-block label.
 
@@ -1634,7 +1655,7 @@ class Codegen:
         # made every call between two Stage functions "unknown function"
         # (E0036) -- and every bare variable a lookup in that other sprite.
         self.class_name = "Stage" if target is self.project.stage else cls.name
-        self.scope = Scope(params=set(fn.params))
+        self.scope = Scope(params=set(fn.params), booleans=self._boolean_params(fn))
         annotation = fn.annotation or ""
         placed = _AT_RE.search(annotation)
         self._next_position = (
@@ -3114,7 +3135,10 @@ class Codegen:
         name = ".".join(parts)
         if len(parts) == 1:
             if name in self.scope.params:
-                block = self._new("argument_reporter_string_number")
+                block = self._new(
+                    "argument_reporter_boolean" if name in self.scope.booleans
+                    else "argument_reporter_string_number"
+                )
                 block.set_field("VALUE", name)
                 return Ref(block)
             definition = self._class_definition(name)
