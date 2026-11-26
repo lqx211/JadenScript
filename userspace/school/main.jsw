@@ -64,7 +64,10 @@ class model {
         }
         camOn = gtm.cameraActive();
         gtmWhy = gtm.lastError();
-        if (gtmState == "ready" && gtm.cameraActive()) {
+        // Still opening is not the same as broken: the permission prompt can sit
+        // there for longer than the deadline, and the loop picks the camera up
+        // the moment it delivers frames. Only an error turns the gestures off.
+        if (gtmState == "ready" && (camOn == "true" || gtmWhy == "")) {
             console.log("Model ready!");
         } else {
             // The reason is in lastError(): a refused camera is the common one.
