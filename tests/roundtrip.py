@@ -54,16 +54,14 @@ def canonical_target(target: dict) -> dict:
                 fields[name] = field_value[0] if isinstance(field_value, list) else field_value
         mutation = block.get("mutation") or {}
         kept_mutation = {
-            key: mutation[key]
+            key: _mutation_value(key, mutation[key])
             for key in ("proccode", "argumentnames", "warp")
             if key in mutation
         }
         inputs = {}
         if block["opcode"] != "procedures_prototype":
-            # A prototype's input keys are generated argument ids; the mutation
-            # already describes them by name.
             for name, raw in (block.get("inputs") or {}).items():
-                inputs[name] = value(raw)
+                inputs[_argument_key(block, name)] = value(raw)
         if block["opcode"].startswith("lmsTempVars2_") and "VAR" in inputs:
             # Thread variable names get an underscore prefix in JadenScript so
             # the compiler knows they are temps; the storage name is arbitrary.
@@ -179,6 +177,40 @@ def _scalar(payload) -> list:
     if primitive in (12, 13):
         return ["lit", primitive, value]
     return ["lit", "scalar", "" if value is None else str(value)]
+
+
+def _argument_key(block: dict, name: str) -> str:
+    """A ``procedures_call`` input name, by position instead of by id.
+
+    The keys are the argument ids from the mutation, and both sides generate
+    fresh ones, so comparing them as text reported every rebuilt project with a
+    parameterised call as different -- which hid the differences that were real.
+    """
+    if block.get("opcode") != "procedures_call":
+        return name
+    ids = (block.get("mutation") or {}).get("argumentids")
+    try:
+        ids = json.loads(ids) if isinstance(ids, str) else (ids or [])
+    except ValueError:
+        return name
+    if name in ids:
+        return f"arg{ids.index(name)}"
+    return name
+
+
+def _mutation_value(key: str, value):
+    """A mutation field, with its JSON text compared as the list it means.
+
+    ``argumentnames`` is stored as a JSON *string*, so `["a","b"]` and
+    `["a", "b"]` are the same project but different text: comparing the text
+    reported every rebuilt project as different.
+    """
+    if key not in ("argumentnames", "argumentids", "argumentdefaults"):
+        return value
+    try:
+        return json.loads(value) if isinstance(value, str) else value
+    except ValueError:
+        return value
 
 
 def _plain(value):

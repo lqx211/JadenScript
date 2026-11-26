@@ -46,6 +46,9 @@ const cases = [
   // builtins and namespaces
   ["jo", "join"],
   ["Motion.mov", "move"],
+  ["Motion.point", "pointTowards"],
+  ["Looks.goBack", "goBackwardLayers"],
+  ["Sensing.setDrag", "setDragMode"],
   ["Pen.setPe", "setPenSize"],
   ["Looks.switch", "switchCostume"],
   ["Operators.rou", "round"],

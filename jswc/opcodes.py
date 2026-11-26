@@ -134,6 +134,14 @@ ROTATION_STYLE_VALUES: dict[str, str] = {
     "all around": "all around",
 }
 
+#: ``set drag mode`` stores the phrase the palette shows, so the source takes
+#: the same two words and the field gets them verbatim.
+DRAG_MODE_VALUES: dict[str, str] = {
+    "draggable": "draggable",
+    "not draggable": "not draggable",
+    "not-draggable": "not draggable",
+}
+
 
 COMMANDS: dict[str, Command] = {
     # -- pen ---------------------------------------------------------------
@@ -225,6 +233,10 @@ COMMANDS: dict[str, Command] = {
     "Music.stopAllSounds": Command("sound_stopallsounds"),
     "Sound.setVolume": Command("sound_setvolumeto", (Param("VOLUME", MATH_NUM),)),
     "Sound.changeVolume": Command("sound_changevolumeby", (Param("VOLUME", MATH_NUM),)),
+    "Sound.changeEffect": Command(
+        "sound_changeeffectby", (Param("EFFECT", FIELD), Param("CHANGE", MATH_NUM))
+    ),
+    "Sound.clearEffects": Command("sound_cleareffects"),
     # -- control -----------------------------------------------------------
     "Control.wait": Command("control_wait", (Param("DURATION", POSITIVE_NUM),)),
     "Control.waitUntil": Command("control_wait_until", (Param("CONDITION", BOOLEAN),)),
@@ -237,10 +249,17 @@ COMMANDS: dict[str, Command] = {
     # -- sensing -----------------------------------------------------------
     "Sensing.ask": Command("sensing_askandwait", (Param("QUESTION", TEXT),)),
     "Sensing.resetTimer": Command("sensing_resettimer"),
+    # ``set drag mode [draggable|not draggable]``: the word is the field value,
+    # so the source spells the two states rather than taking an expression.
+    "Sensing.setDragMode": Command(
+        "sensing_setdragmode",
+        (Param("DRAG_MODE", FIELD, values=DRAG_MODE_VALUES),),
+    ),
     # -- looks -------------------------------------------------------------
     "Looks.show": Command("looks_show"),
     "Looks.hide": Command("looks_hide"),
     "Looks.nextCostume": Command("looks_nextcostume"),
+    "Looks.nextBackdrop": Command("looks_nextbackdrop"),
     "Looks.setSize": Command("looks_setsizeto", (Param("SIZE", MATH_NUM),)),
     "Looks.changeSize": Command("looks_changesizeby", (Param("CHANGE", MATH_NUM),)),
     "Looks.say": Command("looks_say", (Param("MESSAGE", TEXT),)),
@@ -248,6 +267,9 @@ COMMANDS: dict[str, Command] = {
         "looks_sayforsecs", (Param("MESSAGE", TEXT), Param("SECS", MATH_NUM))
     ),
     "Looks.think": Command("looks_think", (Param("MESSAGE", TEXT),)),
+    "Looks.thinkForSecs": Command(
+        "looks_thinkforsecs", (Param("MESSAGE", TEXT), Param("SECS", MATH_NUM))
+    ),
     # -- motion ------------------------------------------------------------
     "Motion.move": Command("motion_movesteps", (Param("STEPS", MATH_NUM),)),
     "Motion.turnRight": Command("motion_turnright", (Param("DEGREES", MATH_NUM),)),
@@ -260,6 +282,12 @@ COMMANDS: dict[str, Command] = {
         "motion_setrotationstyle", (Param("STYLE", FIELD, values=ROTATION_STYLE_VALUES),)
     ),
     "Motion.bounceIfOnEdge": Command("motion_ifonedgebounce"),
+    # The dropdown accepts a sprite name as well as ``_mouse_``/``_random_``,
+    # so it is a shadow input rather than a field.
+    "Motion.pointTowards": Command(
+        "motion_pointtowards",
+        (Param("TOWARDS", MENU, "motion_pointtowards_menu", "TOWARDS"),),
+    ),
     "Looks.switchCostume": Command(
         "looks_switchcostumeto", (Param("COSTUME", MENU, "looks_costume", "COSTUME"),)
     ),
@@ -282,6 +310,18 @@ COMMANDS: dict[str, Command] = {
     "Looks.clearGraphicEffects": Command("looks_cleargraphiceffects"),
     "Looks.goToFront": Command("looks_gotofrontback", fields=(("FRONT_BACK", "front"),)),
     "Looks.goToBack": Command("looks_gotofrontback", fields=(("FRONT_BACK", "back"),)),
+    # ``go [forward|backward] (n) layers`` -- one block, two directions, so the
+    # direction is a written field like ``go to front`` rather than an input.
+    "Looks.goForwardLayers": Command(
+        "looks_goforwardbackwardlayers",
+        (Param("NUM", MATH_NUM),),
+        fields=(("FORWARD_BACKWARD", "forward"),),
+    ),
+    "Looks.goBackwardLayers": Command(
+        "looks_goforwardbackwardlayers",
+        (Param("NUM", MATH_NUM),),
+        fields=(("FORWARD_BACKWARD", "backward"),),
+    ),
     "Sound.setEffect": Command(
         "sound_seteffectto",
         (Param("EFFECT", FIELD), Param("VALUE", MATH_NUM)),

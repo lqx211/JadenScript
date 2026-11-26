@@ -7,6 +7,8 @@ import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .tokens import JswError
+
 
 @dataclass
 class LoadedProject:
@@ -40,6 +42,37 @@ class LoadedProject:
         return [t for t in self.targets if not t.get("isStage")]
 
 
+class Sb3Error(JswError):
+    """The file is not a project this program can read, and why."""
+
+
+def _project_json_member(names: list[str]) -> str:
+    """The ``project.json`` entry inside an archive, wherever it sits.
+
+    A project zipped from a folder -- ``origin/project.json`` -- is a real thing
+    to be handed, and ``ZipFile.read("project.json")`` answered it with a bare
+    ``KeyError``. The entry is found by name, and its folder is the root the
+    asset paths are relative to, so the archive still loads.
+    """
+    if "project.json" in names:
+        return "project.json"
+    nested = [name for name in names if name.endswith("/project.json")]
+    if not nested:
+        raise Sb3Error(
+            "the archive has no project.json — this is not a Scratch project "
+            f"(it holds {len(names)} file(s): {', '.join(sorted(names)[:3])}"
+            f"{', …' if len(names) > 3 else ''})",
+            code="E0089",
+        )
+    if len(nested) > 1:
+        raise Sb3Error(
+            f"the archive holds {len(nested)} projects ({', '.join(sorted(nested)[:3])}); "
+            "unzip it and pass the one you want",
+            code="E0089",
+        )
+    return nested[0]
+
+
 def load_sb3(path: str | Path) -> LoadedProject:
     path = Path(path)
     if path.is_file() and path.suffix.lower() == ".json":
@@ -51,11 +84,18 @@ def load_sb3(path: str | Path) -> LoadedProject:
                   and item.name != "project.json"}
         return LoadedProject(data=data, assets=assets, name=path.name)
 
-    with zipfile.ZipFile(path) as archive:
-        data = json.loads(archive.read("project.json"))
+    try:
+        archive = zipfile.ZipFile(path)
+    except (zipfile.BadZipFile, OSError) as error:
+        raise Sb3Error(f"{path.name} is not a .sb3 archive ({error})", code="E0089") from None
+    with archive:
+        names = [name for name in archive.namelist() if not name.endswith("/")]
+        member = _project_json_member(names)
+        root = member[: -len("project.json")]
+        data = json.loads(archive.read(member))
         assets = {
-            name: archive.read(name)
-            for name in archive.namelist()
-            if name != "project.json" and not name.endswith("/")
+            name[len(root):]: archive.read(name)
+            for name in names
+            if name != member
         }
     return LoadedProject(data=data, assets=assets, name=path.stem)

@@ -2191,6 +2191,37 @@ comes back as `Motion.setRotationStyle(2)`. The words stay accepted
 fixed field rather than an input, a variable there is `E0088` — branch on the
 value and write each literal in its own branch instead.
 
+### Blocks whose value lives in a field
+
+A few core blocks store their choice in a field rather than an input, so the
+source spells both variants and the compiler writes the field:
+
+```jsw
+Looks.goToFront();                        // go to front
+Looks.goToBack();                         // go to back
+Looks.goForwardLayers(2);                 // go [forward] (2) layers
+Looks.goBackwardLayers(3);                // go [backward] (3) layers
+Sensing.setDragMode("draggable");         // set drag mode [draggable]
+Sensing.setDragMode("not draggable");
+```
+
+The decompiler reads the stored field, so a project that went *backward* three
+layers comes back as `Looks.goBackwardLayers(3)` and not as the first name in
+the table.
+
+### Blocks added for decompiled projects
+
+These exist because real projects use them and the decompiler used to drop them
+with `W0008` — a `// unsupported block` comment where the behaviour used to be:
+
+```jsw
+Motion.pointTowards("_mouse_");        // also "Sprite2", "_random_"
+Looks.nextBackdrop();
+Looks.thinkForSecs("hmm", 2);
+Sound.changeEffect("pitch", 10);
+Sound.clearEffects();
+```
+
 There is no `c ? a : b`. `?` is not a JadenScript operator: write the ternary
 the postfix way (`x = (1) if (c) else (2);`, above). A `?` in an expression is
 `E0087` with that hint, and the grammar flags it as illegal rather than

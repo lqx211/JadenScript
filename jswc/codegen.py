@@ -1856,12 +1856,15 @@ class Codegen:
             "tagName": "mutation",
             "children": [],
             "proccode": label,
-            "argumentids": json.dumps(arg_ids),
-            "argumentnames": json.dumps(list(fn.params)),
+            # Compact separators: this is the text Scratch itself writes, and
+            # a `json.dumps` default (`", "`) makes every rebuilt project differ
+            # from the original in a way no reader can see.
+            "argumentids": json.dumps(arg_ids, separators=(",", ":")),
+            "argumentnames": json.dumps(list(fn.params), separators=(",", ":")),
             # A boolean parameter's default is the word ``false``; a text one
             # is empty. scratch-blocks checks the slot against the placeholder.
             "argumentdefaults": json.dumps(
-                ["false" if kind == "%b" else "" for kind in kinds]
+                ["false" if kind == "%b" else "" for kind in kinds], separators=(",", ":")
             ),
             "warp": self._warp_flag(fn),
         }
@@ -3361,7 +3364,7 @@ class Codegen:
         operand = expr.operand
         if expr.op in ("!", "not"):
             block = self._new("operator_not")
-            block.set_input("OPERAND", self._as_bool(self._eval(operand)))
+            block.set_input("OPERAND", self._not_operand(self._eval(operand)))
             return Ref(block)
         if expr.op == "-":
             if isinstance(operand, A.NumberLit):
@@ -4019,7 +4022,7 @@ class Codegen:
             "tagName": "mutation",
             "children": [],
             "proccode": self._proccode(fn),
-            "argumentids": json.dumps(arg_ids),
+            "argumentids": json.dumps(arg_ids, separators=(",", ":")),
             "warp": self._warp_flag(fn),
         }
         for arg_id, arg in zip(arg_ids, args):
@@ -4389,6 +4392,22 @@ class Codegen:
         block.set_input("INDEX", Lit(O.MATH_NUM, str(known[1])))
         pool.lookups.append((block, text))
         return Ref(block)
+
+    def _not_operand(self, value: object) -> object:
+        """The operand of a ``not`` block.
+
+        ``_as_bool`` exists because a *Boolean slot* wants a boolean-shaped
+        block: it wraps a variable in ``not (<x = 0>)``, the VM's own truthiness
+        test. Wrapping a ``not``'s operand with it made ``!(x)`` compile to
+        ``not (not (x = 0))`` -- not what the source said, and a project that
+        already stored ``not (<x>)`` came back one layer deeper. ``"false"`` is
+        truthy text and equal to no number, so that extra layer could read the
+        other way. A bare reporter stays bare: the VM casts it in the slot, and
+        so did the project this source came from.
+        """
+        if isinstance(value, Ref) and value.block.opcode not in BOOLEAN_REPORTERS:
+            return value
+        return self._as_bool(value)
 
     def _as_bool(self, value: object, negate: bool = False) -> object:
         if isinstance(value, Lit):

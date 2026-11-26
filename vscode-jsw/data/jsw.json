@@ -1214,6 +1214,22 @@
      }
     ],
     [
+     "goBackwardLayers",
+     {
+      "kind": "command",
+      "detail": "goBackwardLayers(num)",
+      "doc": "looks_goforwardbackwardlayers"
+     }
+    ],
+    [
+     "goForwardLayers",
+     {
+      "kind": "command",
+      "detail": "goForwardLayers(num)",
+      "doc": "looks_goforwardbackwardlayers"
+     }
+    ],
+    [
      "goToBack",
      {
       "kind": "command",
@@ -1235,6 +1251,14 @@
       "kind": "command",
       "detail": "hide()",
       "doc": "looks_hide"
+     }
+    ],
+    [
+     "nextBackdrop",
+     {
+      "kind": "command",
+      "detail": "nextBackdrop()",
+      "doc": "looks_nextbackdrop"
      }
     ],
     [
@@ -1323,6 +1347,14 @@
       "kind": "command",
       "detail": "think(message)",
       "doc": "looks_think"
+     }
+    ],
+    [
+     "thinkForSecs",
+     {
+      "kind": "command",
+      "detail": "thinkForSecs(message, secs)",
+      "doc": "looks_thinkforsecs"
      }
     ]
    ]
@@ -1535,6 +1567,14 @@
       "kind": "command",
       "detail": "move(steps)",
       "doc": "motion_movesteps"
+     }
+    ],
+    [
+     "pointTowards",
+     {
+      "kind": "command",
+      "detail": "pointTowards(towards)",
+      "doc": "motion_pointtowards"
      }
     ],
     [
@@ -2254,6 +2294,14 @@
      }
     ],
     [
+     "setDragMode",
+     {
+      "kind": "command",
+      "detail": "setDragMode(drag_mode)",
+      "doc": "sensing_setdragmode"
+     }
+    ],
+    [
      "timer",
      {
       "kind": "reporter",
@@ -2290,11 +2338,27 @@
   "Sound": {
    "members": [
     [
+     "changeEffect",
+     {
+      "kind": "command",
+      "detail": "changeEffect(effect, change)",
+      "doc": "sound_changeeffectby"
+     }
+    ],
+    [
      "changeVolume",
      {
       "kind": "command",
       "detail": "changeVolume(volume)",
       "doc": "sound_changevolumeby"
+     }
+    ],
+    [
+     "clearEffects",
+     {
+      "kind": "command",
+      "detail": "clearEffects()",
+      "doc": "sound_cleareffects"
      }
     ],
     [

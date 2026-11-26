@@ -1650,6 +1650,34 @@ class MotionStyleTests(unittest.TestCase):
         gen.compile()
         self.assertTrue(any("E0088" in d for d in gen.diagnostics))
 
+    def test_a_variable_named_like_a_number_survives(self):
+        # ``Infinity``/``NaN`` read as numbers, so the declaration the
+        # decompiler wrote for a project variable of that name could not be
+        # parsed back: ``public Infinity = 0;`` was E0026 on a recompile.
+        for name in ("Infinity", "NaN"):
+            with self.subTest(name=name):
+                data = json.loads(json.dumps({
+                    "targets": [
+                        {"isStage": True, "name": "Stage", "variables": {"v1": [name, 0]},
+                         "lists": {}, "blocks": {}, "costumes": [], "sounds": [],
+                         "broadcasts": {}, "comments": {}, "currentCostume": 0,
+                         "volume": 100, "layerOrder": 0, "tempo": 60,
+                         "videoTransparency": 50, "videoState": "off", "textToSpeechLanguage": None},
+                        {"isStage": False, "name": "a", "variables": {}, "lists": {},
+                         "blocks": {}, "costumes": [], "sounds": [], "broadcasts": {},
+                         "comments": {}, "currentCostume": 0, "volume": 100,
+                         "layerOrder": 1, "visible": True, "x": 0, "y": 0, "size": 100,
+                         "direction": 90, "draggable": False, "rotationStyle": "all around"},
+                    ],
+                    "extensions": [], "meta": {"semver": "3.0.0", "vm": "0", "agent": ""},
+                    "monitors": [],
+                }))
+                text, gen = decompile(data)
+                self.assertNotIn(f"public {name} =", text)
+                again = compile_source(text)[1]
+                names = [v[0] for t in again["targets"] for v in t["variables"].values()]
+                self.assertIn(f"{name}_", names)
+
     def test_bounce_survives_a_round_trip(self):
         source = "class a { public void f() { Motion.bounceIfOnEdge(); } }"
         _, data = compile_source(source)
@@ -1659,6 +1687,42 @@ class MotionStyleTests(unittest.TestCase):
         self.assertIn("Motion.bounceIfOnEdge()", text)
         _, again = compile_source(text)
         self.assertIn("motion_ifonedgebounce", opcodes(again, "a"))
+
+    def test_the_core_blocks_that_had_no_spelling_round_trip(self):
+        # Each of these was dropped with W0008 and came back as a bare
+        # ``// unsupported block`` comment, which took the behaviour with it.
+        cases = [
+            ("Motion.pointTowards(\"_mouse_\")", "motion_pointtowards"),
+            ("Motion.pointTowards(\"Sprite2\")", "motion_pointtowards"),
+            ("Looks.nextBackdrop()", "looks_nextbackdrop"),
+            ("Looks.thinkForSecs(\"hmm\", 2)", "looks_thinkforsecs"),
+            ("Looks.goForwardLayers(2)", "looks_goforwardbackwardlayers"),
+            ("Looks.goBackwardLayers(3)", "looks_goforwardbackwardlayers"),
+            ("Sound.changeEffect(\"pitch\", 10)", "sound_changeeffectby"),
+            ("Sound.clearEffects()", "sound_cleareffects"),
+            ("Sensing.setDragMode(\"draggable\")", "sensing_setdragmode"),
+        ]
+        for call, opcode in cases:
+            with self.subTest(call=call):
+                source = f"class a {{ public void f() {{ {call}; }} }}"
+                _, data = compile_source(source)
+                self.assertIn(opcode, opcodes(data, "a"))
+                text, _ = decompile(data)
+                self.assertNotIn("unsupported block", text)
+                self.assertIn(call, text)
+                _, again = compile_source(text)
+                self.assertIn(opcode, opcodes(again, "a"))
+
+    def test_backward_layers_keeps_its_direction(self):
+        # One opcode, two spellings, so the reverse lookup has to read the
+        # stored field instead of taking the first name in the table.
+        source = "class a { public void f() { Looks.goBackwardLayers(3); } }"
+        _, data = compile_source(source)
+        block = next(b for b in data["targets"][1]["blocks"].values()
+                     if isinstance(b, dict) and b["opcode"] == "looks_goforwardbackwardlayers")
+        self.assertEqual(block["fields"]["FORWARD_BACKWARD"][0], "backward")
+        text, _ = decompile(data)
+        self.assertIn("Looks.goBackwardLayers(3)", text)
 
     def test_x_and_y_are_readable_and_writable(self):
         source = (

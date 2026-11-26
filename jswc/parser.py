@@ -20,7 +20,7 @@ from __future__ import annotations
 import re
 
 from . import ast_nodes as A
-from .keywords import ASSIGN_OPS, FEATURE_RENAMES, RESERVED
+from .keywords import ASSIGN_OPS, FEATURE_RENAMES, NUMBER_WORDS, RESERVED
 from .lexer import LexResult, tokenize
 from .tokens import Kind, ParseError, Token
 
@@ -1032,7 +1032,7 @@ class Parser:
             return A.Name(line=tok.line, col=tok.col, parts=(tok.value,))
         if tok.kind is Kind.IDENT:
             self.advance()
-            if tok.value in ("Infinity", "NaN"):
+            if tok.value in NUMBER_WORDS:
                 return A.NumberLit(line=tok.line, col=tok.col, raw="Infinity" if tok.value == "Infinity" else "NaN")
             return A.Name(line=tok.line, col=tok.col, parts=(tok.value,))
         if tok.kind is Kind.PUNCT and tok.value == "(":

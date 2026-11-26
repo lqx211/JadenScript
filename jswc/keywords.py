@@ -319,3 +319,8 @@ FEATURE_RENAMES: dict[str, str] = {"hideObjectNames": "doObfuscation"}
 
 # Assignment forms, used by the parser and the highlighter alike.
 ASSIGN_OPS: frozenset[str] = frozenset({"=", "+=", "-=", "*=", "/=", "%="})
+
+#: Words that read as numbers rather than names. A project is free to call a
+#: variable ``Infinity`` -- the parser does not, so the decompiler has to rename
+#: it, and this is where both sides agree on the list.
+NUMBER_WORDS: frozenset[str] = frozenset({"Infinity", "NaN"})

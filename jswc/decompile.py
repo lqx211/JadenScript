@@ -21,7 +21,7 @@ from .keysim_blocks import KEYSIM_KEY_LABELS
 _KEYSIM_LABEL_OF: dict[str, str] = {v: k for k, v in KEYSIM_KEY_LABELS.items()}
 from . import extensions as extension_tables
 from .extensions import reverse as reverse_extension
-from .keywords import ALL_KEYWORDS
+from .keywords import ALL_KEYWORDS, NUMBER_WORDS
 from .sb3 import DEFAULT_SVG
 from .sb3_read import LoadedProject
 
@@ -52,6 +52,19 @@ for _name, _spec in O.COMMANDS.items():
 _REPORTER_BY_OPCODE = {}
 for _name, _spec in O.REPORTERS.items():
     _REPORTER_BY_OPCODE.setdefault(_spec.opcode, (_name, _spec))
+#: A block whose two spellings differ only in a stored field: ``go to front`` /
+#: ``go to back``, ``go forward/backward (n) layers``. The value written by the
+#: compiler is the key, so the reverse lookup needs no id of its own.
+_FIELD_VARIANTS: dict[str, tuple[str, dict[str, str]]] = {
+    "looks_gotofrontback": (
+        "FRONT_BACK",
+        {"front": "Looks.goToFront", "back": "Looks.goToBack"},
+    ),
+    "looks_goforwardbackwardlayers": (
+        "FORWARD_BACKWARD",
+        {"forward": "Looks.goForwardLayers", "backward": "Looks.goBackwardLayers"},
+    ),
+}
 _PROPERTY_GET = {p.get: name for name, p in O.PROPERTIES.items()}
 _PROPERTY_SET = {p.set: (name, "=", p.set_input) for name, p in O.PROPERTIES.items()}
 _PROPERTY_CHANGE = {p.change: (name, "+=", p.change_slot) for name, p in O.PROPERTIES.items()}
@@ -1213,8 +1226,12 @@ class Decompiler:
             lines += self._substack(blocks, block, "SUBSTACK")
             return lines + [f"{pad}}}"]
         if opcode == "control_repeat_until":
-            condition = self._negated(blocks, block, "CONDITION")
-            lines = [f"{pad}while ({condition}) {{"]
+            # ``while (!cond)`` is the shape the compiler turns back into
+            # `repeat until`. Negating a condition that is *already* a `not`
+            # instead produced ``while (x)`` -- and `while` is a TurboWarp
+            # block, so the rebuilt project stopped loading on scratch.mit.edu.
+            condition = self._value(blocks, block, "CONDITION")
+            lines = [f"{pad}while (!{_wrap_not(condition)}) {{"]
             lines += self._substack(blocks, block, "SUBSTACK")
             return lines + [f"{pad}}}"]
         if opcode == "control_for_each":
@@ -1304,10 +1321,14 @@ class Decompiler:
             name, operator, slot = property_inverse
             return [f"{pad}{name} {operator} {self._value(blocks, block, slot)};"]
 
-        if opcode == "looks_gotofrontback":
-            layer = ((block.get("fields") or {}).get("FRONT_BACK") or ["front"])[0]
-            name = "Looks.goToFront" if layer == "front" else "Looks.goToBack"
-            return [f"{pad}{name}();"]
+        variant = _FIELD_VARIANTS.get(opcode)
+        if variant is not None:
+            field, names = variant
+            stored = ((block.get("fields") or {}).get(field) or [""])[0]
+            name = names.get(stored)
+            if name is not None:
+                arguments = self._call_arguments(blocks, block, O.COMMANDS[name])
+                return [f"{pad}{name}({arguments});"]
 
         command = _COMMAND_BY_OPCODE.get(opcode)
         if command is not None:
@@ -1542,14 +1563,6 @@ class Decompiler:
         if inner["opcode"] == "lmsTempVars2_getThreadVariable":
             return self._thread_name(_unquote(self._value(blocks, inner, "VAR"))) != variable
         return True
-
-    def _negated(self, blocks: dict, block: dict, name: str) -> str:
-        """Turn ``repeat_until (not c)`` back into ``while (c)``."""
-        inner = _first_block(blocks, block, name)
-        if inner is not None and inner["opcode"] == "operator_not":
-            return self._value(blocks, inner, "OPERAND")
-        condition = self._value(blocks, block, name)
-        return f"!({condition})"
 
     # -- value helpers -----------------------------------------------------
     def _value(self, blocks: dict, block: dict, name: str) -> str:
@@ -2031,11 +2044,13 @@ def _needs_rename(name: str, local: bool) -> bool:
 
     A dot means "Stage variable" in this language, so a sprite-local project
     variable called ``buffer.glyphs`` has to lose the dot or every read would
-    resolve to a (new, empty) Stage list.
+    resolve to a (new, empty) Stage list. A project may also call a variable
+    ``Infinity`` or ``NaN`` -- those read as numbers, so the declaration they
+    produced could not be parsed back (``public Infinity = 0;`` was ``E0026``).
     """
     if not _valid_dotted(name):
         return True
-    if any(part in ALL_KEYWORDS for part in name.split(".")):
+    if any(part in ALL_KEYWORDS or part in NUMBER_WORDS for part in name.split(".")):
         return True
     return local and "." in name
 
@@ -2048,7 +2063,7 @@ def _sanitised_name(name: str, taken: set[str], local: bool) -> str:
     """
     base = name.replace(".", "_") if local else name
     candidate = _flat_identifier(base)
-    while candidate in taken or candidate in ALL_KEYWORDS:
+    while candidate in taken or candidate in ALL_KEYWORDS or candidate in NUMBER_WORDS:
         candidate += "_"
     taken.add(candidate)
     return candidate
@@ -2060,9 +2075,9 @@ def _flat_identifier(name: str) -> str:
 
 
 def _safe_name(name: str) -> str:
-    """Identifier that is guaranteed not to collide with a keyword."""
+    """Identifier that is guaranteed not to collide with a keyword or a literal."""
     cleaned = _identifier(name)
-    if cleaned in ALL_KEYWORDS:
+    if cleaned in ALL_KEYWORDS or cleaned in NUMBER_WORDS:
         cleaned += "_"
     return cleaned
 
@@ -2327,6 +2342,17 @@ def _unquote(text: str) -> str:
             i += 1
         return "".join(out)
     return text
+
+
+def _wrap_not(condition: str) -> str:
+    """A condition that is safe after ``!``: a bare operator gets parentheses.
+
+    ``while (!a && b)`` would negate only ``a``, so anything that is not a
+    single call or name is wrapped; a name or a bare call reads better without.
+    """
+    if re.fullmatch(r"[^\s()<>!=&|+*/%-]+(\([^()]*\))?", condition):
+        return condition
+    return f"({condition})"
 
 
 def _fstring_text(text: str) -> str:

@@ -432,6 +432,12 @@ MESSAGES: tuple[Message, ...] = (
             "are ``\"ArrowUp\"`` and friends. An unknown name compiles to a "
             "block that can never fire."),
 
+    Message("E0089", "error", "not a project this build can read",
+            "An ``.sb3`` is a zip whose ``project.json`` is at the top; a folder "
+            "zipped from outside gives ``folder/project.json`` and a renamed "
+            "archive may not be a zip at all. The message names the first entry "
+            "that was found instead."),
+
     Message("E9999", "error", "unclassified",
             "No catalogue entry matched; please report the message verbatim."),
 )
