@@ -24,7 +24,15 @@ class model {
         vinit();
         Runtime.setTurboMode(true);
         Runtime.setFramerate(60);
+        // The model takes seconds to load and `gtm.load` waits for it, so it
+        // runs in its own thread: the game (and the timeout below) must not be
+        // held up by a camera that never answers.
+        Control.broadcast("gtm load");
         main();
+    }
+    metadata loadGestures pos 44,44;
+    public void loadGestures() { // hook: broadcast gtm load
+        init();
     }
     public void vinit(){
         lu.clear();
@@ -38,27 +46,19 @@ class model {
         log.clear();
     }
     public void main() {
-        console.info("Init model...")
-        call init();
         _t = Sensing.timer()+10;
         Control.waitUntil(gtm.status()=='ready' || gtm.status()=='error' || Sensing.timer()>_t);
         if (gtm.status() == "ready" && gtm.cameraActive()){
             console.log("Model ready!");
-        } elif (gtm.status() == "error") {
-            // The reason is in lastError(): a refused camera is the common one.
-            console.error(join('Google Teachable Machine is not usable: ',gtm.lastError()));
-            Control.stopAll();
-        } elif (!gtm.cameraActive()) {
-            console.error('Could not activate camera. Is permission granted?')
-            console.error(join('GTM Debug info: ',gtm.lastError()));
-            Control.stopAll();
-        } elif (Sensing.timer()>_t) {
-            console.warn('Timeout loading model and will continue loading in background.');
+        } elif (Sensing.timer() > _t && gtm.status() != "error") {
+            console.warn('Still loading the model; gestures start when it is ready.');
         } else {
-            console.error('Something went wrong.');
-            console.error(join('GTM Debug info: ',gtm.lastError()));
-            Control.stopAll();
-        }  
+            // The reason is in lastError(): a refused camera is the common one.
+            // Only the gestures are off — the game keeps running, and the arrow
+            // keys still work, so nothing here may stop the other scripts.
+            console.warn(join('Gestures are off, use the arrow keys: ', gtm.lastError()));
+            active = 0;
+        }
         while(active){
             trig = 0;
             getConfidence(); // -> trig
