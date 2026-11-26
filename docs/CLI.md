@@ -273,7 +273,7 @@ everything from:
 
 | path | what |
 | --- | --- |
-| `serve_files/ext/<id>.js` | each extension, fetched at build time and referenced as `serve_files/ext/<id>.js` instead of a `data:` URL |
+| `serve_files/ext/<id>.js?v=<hash>` | each extension, fetched at build time and referenced instead of a `data:` URL; the hash makes every build its own URL, because a CDN caches `.js` by extension and would keep serving the previous build for hours |
 | `serve_files/lib/@tensorflow/tfjs@…/dist/tf.min.js` | TensorFlow.js, at the path `gtm` builds from its base |
 | `serve_files/lib/@teachablemachine/pose@…/…` | the pose runtime, when the model needs it |
 | `serve_files/lib/tfjs-models/savedmodel/posenet/…` | posenet's pretrained weights, which the pose runtime fetches by absolute URL |

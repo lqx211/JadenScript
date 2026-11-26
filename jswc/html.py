@@ -27,6 +27,7 @@ with the URL and the fix, is worth more than a 1.9 MB file that half works.
 
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import os
@@ -267,6 +268,17 @@ def _clear_assets(assets: Path) -> None:
         shutil.rmtree(assets / owned, ignore_errors=True)
 
 
+def _cache_buster(payload: bytes) -> str:
+    """``?v=<hash>`` for an extension this build wrote.
+
+    A CDN caches by extension, and `.js` is on every default list: after a
+    rebuild the edge kept answering with the *previous* extension for four
+    hours, so a fix looked like it had not shipped. The query makes each build
+    its own URL, and it is part of what `mapping` hands to the project.
+    """
+    return "?v=" + hashlib.sha256(payload).hexdigest()[:8]
+
+
 def _assets_js(written: list[Path], directory: Path) -> str:
     """``window.JSWC_ASSETS``: what the build wrote, as page-relative paths.
 
@@ -305,9 +317,12 @@ def self_hosted(sb3: bytes, output: str | Path, *, extension_urls=None,
             continue
         target = assets / "ext" / f"{extension_id}.js"
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(_fetch(url))
+        payload = _fetch(url)
+        target.write_bytes(payload)
         written.append(target)
-        mapping[extension_id] = f"{prefix}/ext/{extension_id}.js"
+        mapping[extension_id] = (
+            f"{prefix}/ext/{extension_id}.js{_cache_buster(payload)}"
+        )
 
     for relative in VENDORED_LIBRARIES:
         target = assets / "lib" / relative

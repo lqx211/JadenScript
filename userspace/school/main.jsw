@@ -64,40 +64,59 @@ class model {
         }
         camOn = gtm.cameraActive();
         gtmWhy = gtm.lastError();
-        // Still opening is not the same as broken: the permission prompt can sit
-        // there for longer than the deadline, and the loop picks the camera up
-        // the moment it delivers frames. Only an error turns the gestures off.
-        if (gtmState == "ready" && (camOn == "true" || gtmWhy == "")) {
-            console.log("Model ready!");
-        } else {
-            // The reason is in lastError(): a refused camera is the common one.
-            // Only the gestures are off — the game keeps running, and the arrow
-            // keys still work, so nothing here may stop the other scripts.
+        if (gtmState == "error") {
+            // The model itself failed; a camera cannot fix that. Only the
+            // gestures are off — the game keeps running, and the arrow keys
+            // still work, so nothing here may stop the other scripts.
             console.warn(join('Gestures are off, use the arrow keys: ', gtmWhy));
             active = 0;
+        } elif (camOn == "true") {
+            console.log("Model ready!");
+        } else {
+            // Loading, or waiting for the permission prompt. The loop stays up
+            // and starts reading the moment the camera delivers frames — click
+            // the stage to ask again after allowing it in the address bar.
+            console.warn(join('Gestures wait for the camera, click the stage to retry: ', gtmWhy));
         }
         while(active){
             gtmState = gtm.status();
             camOn = gtm.cameraActive();
             gtmWhy = gtm.lastError();
             trig = 0;
-            getConfidence(); // -> trig
-            _can = !ignored || Sensing.timer() > ignore_time+0.8; // 800ms cooldown
-            if (_can && trig!=0 && trig!=4){
-                if (trig==1){
-                    controller.mu();
-                } elif (trig==2){
-                    controller.ml();
-                } elif (trig==3){
-                    controller.mr();
+            if (camOn != "true") {
+                // Nothing to read yet; idle instead of sampling a camera that
+                // is not there (`confidence()` would report 0 for a "stop").
+                Control.wait(0.2);
+            } else {
+                getConfidence(); // -> trig
+                _can = !ignored || Sensing.timer() > ignore_time+0.8; // 800ms cooldown
+                if (_can && trig!=0 && trig!=4){
+                    if (trig==1){
+                        controller.mu();
+                    } elif (trig==2){
+                        controller.ml();
+                    } elif (trig==3){
+                        controller.mr();
+                    }
+                    ignored = true; // latch only when we acted, so it repeats after the cooldown
+                    ignore_time = Sensing.timer();
                 }
-                ignored = true; // latch only when we acted, so it repeats after the cooldown
-                ignore_time = Sensing.timer();
+                if (trig==4){ // 'stop' pose releases the latch
+                    ignored = false;
+                }
+                Control.wait(0.02); // 20ms per sample, see requiredSamples
             }
-            if (trig==4){ // 'stop' pose releases the latch
-                ignored = false;
-            }
-            Control.wait(0.02); // 20ms per sample, see requiredSamples
+        }
+    }
+    metadata whenClicked pos 44,120;
+    public void whenClicked() { // hook: stage click
+        // A camera that was refused can be allowed in the address bar; asking
+        // again here reopens it without reloading the page. Already-open is a
+        // no-op inside the extension.
+        if (active && gtm.status() == "ready") {
+            gtm.startCamera();
+            camOn = gtm.cameraActive();
+            gtmWhy = gtm.lastError();
         }
     }
     public void init(){

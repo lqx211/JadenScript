@@ -554,10 +554,20 @@
             'gtm: this browser has no camera API here; open the project over https or localhost'
           );
         }
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: 'environment' },
-          audio: false,
-        });
+        /* `facingMode` as a plain value is a *required* constraint in some
+           builds, and a laptop has no rear camera: there it throws
+           OverconstrainedError and the page looks like it has none at all.
+           `ideal` degrades to whatever camera exists. */
+        let stream;
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: { ideal: 'environment' } },
+            audio: false,
+          });
+        } catch (error) {
+          if (!error || error.name !== 'OverconstrainedError') throw error;
+          stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+        }
         const video = document.createElement('video');
         video.playsInline = true;
         video.muted = true;
@@ -575,7 +585,10 @@
         this.error = '';
         this.keepUpdating();
       } catch (error) {
-        this.error = error && error.message ? error.message : String(error);
+        /* The name is the part that says what to do: NotAllowedError is the
+           refused permission, NotFoundError means no camera at all. */
+        const name = error && error.name ? `${error.name}: ` : '';
+        this.error = name + (error && error.message ? error.message : String(error));
         this.stopCamera();
       }
       return '';
