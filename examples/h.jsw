@@ -1,0 +1,488 @@
+public v24 = 0;
+public v14 = 0;
+public v12 = ["36258db2b8e9a8a4fd6224b9", "-136.381", "-129.274", "20117", "pen101", "29d34045b78ba23b", "track66", "325", "naIN", "pen98", "FCVET", "IDRKRJwTk", "stage_loop", "bank435", "frame_engine", "loop851", "1342433", "84b917762304c3b7", "costume_loop", "note986", "tjlWhSs", "hwxxWXWH", "708ac741", "22377a3824bbf0b3", "-64.351", "BZDKq", "3.634", "loop307", "sample costume", "728", "clone_voice"];
+import "assets/lists/v2.jsa";
+public v26 = [0];
+public v23 = [];
+public v25 = [443760638];
+public v16 = [0];
+import "assets/lists/v19.jsa";
+public v0 = ["033f4d89502a", "XURllA", "FTRKIsDkI", "f3ff906fa6e7", "72", "KGUgkS", "frame_reset", "YnEBf", "lngmx", "89.473", "137.625", "tick_stage", "-95.743", "-96.046", "kernel_sector", "YpfnZsW", "voice_stage", "380493c3a5b9", "costume765", "voice343", "150.617", "sample_tempo", "WJbmxdlq", "hfSnr", "stage876", "30.595", "bank note", "JecdIlZU"];
+import "assets/lists/v5.jsa";
+public v8 = [1, "", 0, 8, 5, 12, 15, 27, 23, 18, 4, 25, -1];
+
+stage: costume=0, volume=100, layer=0, tempo=60, video="on", videoTransparency=50;
+stage {
+    metadata p5 pos 48,64;
+    private void p5(IcDha3, afdslo, hd7thb) {
+        if (2 > 20) {
+            v24 = 0;
+        } else {
+            v24 += 2;
+        }
+        if (44 > 13) {
+            v14 = 0;
+        } else {
+            v14 += 2;
+        }
+        v23.add(join(52, 2));
+    }
+
+    metadata p8 pos 48,672;
+    private void p8(g98lOg, IxvipA) { // proccode p8 %b %b
+        v14 = 2;
+        v14 += 4;
+        if (!g98lOg) {
+            v14 += 1;
+        }
+        v2.add(join(77, 51));
+        repeat (4) {
+            v24 += 1;
+        }
+    }
+
+    metadata p13 pos 48,1224;
+    private void p13(mHRYPE, oW4WVp, kwUbgd) { // proccode p13 %b %b %s
+        v24 -= 1;
+        if (!oW4WVp) {
+            v24 += 1;
+        }
+        repeat (5) {
+            v14 += 1;
+        }
+        v14 = kwUbgd;
+        repeat (6) {
+            v24 += 1;
+        }
+        if (!oW4WVp) {
+            v14 += 1;
+        }
+        repeat (2) {
+            v14 += 1;
+        }
+        v14 = kwUbgd;
+    }
+}
+
+s0: name="s0", x=0, y=0, size=100, direction=90, show=1, costume=0, volume=100, layer=1, rotation="all", draggable=0;
+class s0 {
+    private v13 = 0;
+    private v7 = 0;
+    private v6 = 0;
+    private v11 = 0;
+    private v15 = 0;
+    private v20 = 0;
+    private v10 = 0;
+    private v21 = 0;
+    private v22 = 0;
+    private v1 = 0;
+    private v18 = 0;
+    private v17 = 0;
+    private v3 = "";
+    private v9 = 0;
+    private v4 = ["D", "M", "x", "d", "e", "C", "g", "H", "%", "&", "B", "l", "R", "z", "o", "T", "q", "r", "^", "Q", "w", "v", "w", "x", "!", "z", " "];
+    private v27 = [];
+
+    metadata greenFlag pos 48,64;
+    public void greenFlag() {
+        if (v16.get(1) == 0) {
+            v26.set(1, 0);
+            v23.clear();
+        }
+    }
+
+    metadata p2 pos 584,64;
+    private void p2(cJxjPb) {
+        v5.set(cJxjPb + 1, v2.get(v5.get(cJxjPb + 0)));
+        v5.set(cJxjPb + 2, v19.get(v5.get(cJxjPb + 0)));
+        v5.set(cJxjPb + 0, v5.get(cJxjPb + 0) + 1);
+        if (v5.get(cJxjPb + 1) == 111004) {
+            p4(cJxjPb, 8 + 6);
+        } elif (v5.get(cJxjPb + 1) == 743927) {
+            p4(cJxjPb, 4);
+            p4(cJxjPb, 3);
+            p12(cJxjPb, join(v5.get(cJxjPb + 3), v5.get(cJxjPb + 4)));
+        } elif (v5.get(cJxjPb + 1) == 1703546) {
+            p4(cJxjPb, 3);
+            v18 += v5.get(cJxjPb + 3);
+        } elif (v5.get(cJxjPb + 1) == 1788649) {
+            p4(cJxjPb, 4);
+            p4(cJxjPb, 3);
+            p12(cJxjPb, v5.get(cJxjPb + 3) > v5.get(cJxjPb + 4));
+        } elif (v5.get(cJxjPb + 1) == 1847401) {
+            v27.add(v5.get(cJxjPb + 8 + 10));
+        } elif (v5.get(cJxjPb + 1) == 2128223) {
+            p12(cJxjPb, v5.get(cJxjPb + 8 + 0));
+        } elif (v5.get(cJxjPb + 1) == 2191646) {
+            p4(cJxjPb, 8 + 8);
+        } elif (v5.get(cJxjPb + 1) == 2407060) {
+            p4(cJxjPb, 8 + 2);
+        } elif (v5.get(cJxjPb + 1) == 2448300) {
+            p4(cJxjPb, 8 + 12);
+        } elif (v5.get(cJxjPb + 1) == 2470135) {
+            p12(cJxjPb, v21);
+        } elif (v5.get(cJxjPb + 1) == 2590687) {
+            p12(cJxjPb, v22);
+        } elif (v5.get(cJxjPb + 1) == 2660469) {
+            p4(cJxjPb, 8 + 19);
+        } elif (v5.get(cJxjPb + 1) == 2710562) {
+            p12(cJxjPb, v17);
+        } elif (v5.get(cJxjPb + 1) == 3088728) {
+            p4(cJxjPb, 3);
+            v22 = v5.get(cJxjPb + 3);
+        } elif (v5.get(cJxjPb + 1) == 3217126) {
+            p4(cJxjPb, 8 + 13);
+        } elif (v5.get(cJxjPb + 1) == 3234423) {
+            p12(cJxjPb, v7);
+        } elif (v5.get(cJxjPb + 1) == 3345621) {
+            p4(cJxjPb, 8 + 10);
+        } elif (v5.get(cJxjPb + 1) == 3377077) {
+            p12(cJxjPb, v15);
+        } elif (v5.get(cJxjPb + 1) == 3826846) {
+            p12(cJxjPb, v27.get(v5.get(cJxjPb + 8 + 0)));
+        } elif (v5.get(cJxjPb + 1) == 4641501) {
+            p12(cJxjPb, v4.get(v5.get(cJxjPb + 8 + 6)));
+        } elif (v5.get(cJxjPb + 1) == 4669683) {
+            p4(cJxjPb, 4);
+            p4(cJxjPb, 3);
+            p12(cJxjPb, v5.get(cJxjPb + 3) - v5.get(cJxjPb + 4));
+        } elif (v5.get(cJxjPb + 1) == 5014895) {
+            v27.add(v5.get(cJxjPb + 8 + 13));
+        } elif (v5.get(cJxjPb + 1) == 5097262) {
+            p15(cJxjPb);
+            p17(v5.get(cJxjPb + 8 + 2));
+        } elif (v5.get(cJxjPb + 1) == 5267925) {
+            p4(cJxjPb, 8 + 0);
+        } elif (v5.get(cJxjPb + 1) == 5470166) {
+            p4(cJxjPb, 8 + 1);
+        } elif (v5.get(cJxjPb + 1) == 5705087) {
+            p15(cJxjPb);
+            p6(v5.get(cJxjPb + 8 + 0));
+        } elif (v5.get(cJxjPb + 1) == 6191326) {
+            p4(cJxjPb, 3);
+            v17 = v5.get(cJxjPb + 3);
+        } elif (v5.get(cJxjPb + 1) == 6954867) {
+            p12(cJxjPb, v8.get(v5.get(cJxjPb + 2)));
+        } elif (v5.get(cJxjPb + 1) == 6985280) {
+            p15(cJxjPb);
+            p0();
+        } elif (v5.get(cJxjPb + 1) == 7085873) {
+            p4(cJxjPb, 3);
+            v9 = v5.get(cJxjPb + 3);
+        } elif (v5.get(cJxjPb + 1) == 7330264) {
+            v27.add(v5.get(cJxjPb + 8 + 14));
+        } elif (v5.get(cJxjPb + 1) == 7352511) {
+            p4(cJxjPb, 8 + 5);
+        } elif (v5.get(cJxjPb + 1) == 7505342) {
+            v27.add(v5.get(cJxjPb + 8 + 11));
+        } elif (v5.get(cJxjPb + 1) == 7509197) {
+            p12(cJxjPb, v10);
+        } elif (v5.get(cJxjPb + 1) == 7767771) {
+            p4(cJxjPb, 3);
+            v18 = v5.get(cJxjPb + 3);
+        } elif (v5.get(cJxjPb + 1) == 7836746) {
+            p12(cJxjPb, v4.get(v5.get(cJxjPb + 8 + 3)));
+        } elif (v5.get(cJxjPb + 1) == 7923279) {
+            p12(cJxjPb, v6);
+        } elif (v5.get(cJxjPb + 1) == 8052919) {
+            v27.add(v5.get(cJxjPb + 8 + 20));
+        } elif (v5.get(cJxjPb + 1) == 8239608) {
+            v27.add(v5.get(cJxjPb + 8 + 12));
+        } elif (v5.get(cJxjPb + 1) == 8297938) {
+            p4(cJxjPb, 8 + 4);
+        } elif (v5.get(cJxjPb + 1) == 8387592) {
+            p4(cJxjPb, 3);
+            v13 = v5.get(cJxjPb + 3);
+        } elif (v5.get(cJxjPb + 1) == 8440056) {
+            p12(cJxjPb, v27.length());
+        } elif (v5.get(cJxjPb + 1) == 8623830) {
+            p4(cJxjPb, 3);
+            v15 = v5.get(cJxjPb + 3);
+        } elif (v5.get(cJxjPb + 1) == 8677138) {
+            p4(cJxjPb, 3);
+            Looks.say(v5.get(cJxjPb + 3));
+        } elif (v5.get(cJxjPb + 1) == 8727078) {
+            p15(cJxjPb);
+            p14();
+        } elif (v5.get(cJxjPb + 1) == 8819100) {
+            p15(cJxjPb);
+            v5.set(cJxjPb + 0, v5.get(cJxjPb + 2));
+        } elif (v5.get(cJxjPb + 1) == 9107688) {
+            p15(cJxjPb);
+            v5.set(cJxjPb + 0, 0);
+            Control.stopThisScript();
+        } elif (v5.get(cJxjPb + 1) == 9249730) {
+            p4(cJxjPb, 8 + 15);
+        } elif (v5.get(cJxjPb + 1) == 9384217) {
+            v27.add(v5.get(cJxjPb + 8 + 15));
+        } elif (v5.get(cJxjPb + 1) == 9387707) {
+            p12(cJxjPb, v11);
+        } elif (v5.get(cJxjPb + 1) == 9569025) {
+            p12(cJxjPb, v4.get(v5.get(cJxjPb + 8 + 9)));
+        } elif (v5.get(cJxjPb + 1) == 9681349) {
+            p4(cJxjPb, 3);
+            v6 = v5.get(cJxjPb + 3);
+        } elif (v5.get(cJxjPb + 1) == 9728891) {
+            p4(cJxjPb, 8 + 11);
+        } elif (v5.get(cJxjPb + 1) == 9731440) {
+            p4(cJxjPb, 8 + 7);
+        } elif (v5.get(cJxjPb + 1) == 9910859) {
+            v27.add(v5.get(cJxjPb + 8 + 17));
+        } elif (v5.get(cJxjPb + 1) == 10011488) {
+            p15(cJxjPb);
+            p3();
+        } elif (v5.get(cJxjPb + 1) == 10151634) {
+            p12(cJxjPb, v4.get(v5.get(cJxjPb + 8 + 2)));
+        } elif (v5.get(cJxjPb + 1) == 10355506) {
+            p12(cJxjPb, v9);
+        } elif (v5.get(cJxjPb + 1) == 10538784) {
+            p4(cJxjPb, 4);
+            p4(cJxjPb, 3);
+            p12(cJxjPb, v5.get(cJxjPb + 3) + v5.get(cJxjPb + 4));
+        } elif (v5.get(cJxjPb + 1) == 11392518) {
+            p12(cJxjPb, v13);
+        } elif (v5.get(cJxjPb + 1) == 11603121) {
+            p4(cJxjPb, 8 + 17);
+        } elif (v5.get(cJxjPb + 1) == 11607269) {
+            v27.add(v5.get(cJxjPb + 8 + 18));
+        } elif (v5.get(cJxjPb + 1) == 11900128) {
+            p4(cJxjPb, 4);
+            p4(cJxjPb, 3);
+            p12(cJxjPb, v5.get(cJxjPb + 3) < v5.get(cJxjPb + 4));
+        } elif (v5.get(cJxjPb + 1) == 11945646) {
+            v27.add(v5.get(cJxjPb + 8 + 16));
+        } elif (v5.get(cJxjPb + 1) == 11992850) {
+            p12(cJxjPb, v4.get(v5.get(cJxjPb + 8 + 5)));
+        } elif (v5.get(cJxjPb + 1) == 12816667) {
+            p4(cJxjPb, 8 + 16);
+        } elif (v5.get(cJxjPb + 1) == 12935232) {
+            p12(cJxjPb, v4.get(v5.get(cJxjPb + 8 + 8)));
+        } elif (v5.get(cJxjPb + 1) == 13084628) {
+            p12(cJxjPb, v4.get(v5.get(cJxjPb + 8 + 1)));
+        } elif (v5.get(cJxjPb + 1) == 13237442) {
+            v27.clear();
+        } elif (v5.get(cJxjPb + 1) == 13291458) {
+            p4(cJxjPb, 3);
+            if (!(v5.get(cJxjPb + 3) != 0)) {
+                v5.set(cJxjPb + 0, v5.get(cJxjPb + 2));
+            }
+        } elif (v5.get(cJxjPb + 1) == 13353801) {
+            v27.add(v5.get(cJxjPb + 8 + 19));
+        } elif (v5.get(cJxjPb + 1) == 13455547) {
+            p4(cJxjPb, 8 + 18);
+        } elif (v5.get(cJxjPb + 1) == 13716506) {
+            p12(cJxjPb, v18);
+        } elif (v5.get(cJxjPb + 1) == 13977251) {
+            p4(cJxjPb, 3);
+            v11 = v5.get(cJxjPb + 3);
+        } elif (v5.get(cJxjPb + 1) == 14473048) {
+            p4(cJxjPb, 3);
+            v10 = v5.get(cJxjPb + 3);
+        } elif (v5.get(cJxjPb + 1) == 15139744) {
+            p12(cJxjPb, v4.get(v5.get(cJxjPb + 8 + 7)));
+        } elif (v5.get(cJxjPb + 1) == 15157480) {
+            p12(cJxjPb, v20);
+        } elif (v5.get(cJxjPb + 1) == 15158613) {
+            v27.delete(v5.get(cJxjPb + 8 + 1));
+        } elif (v5.get(cJxjPb + 1) == 15704688) {
+            p4(cJxjPb, 3);
+            v21 = v5.get(cJxjPb + 3);
+        } elif (v5.get(cJxjPb + 1) == 15981371) {
+            p4(cJxjPb, 3);
+            v20 = v5.get(cJxjPb + 3);
+        } elif (v5.get(cJxjPb + 1) == 16073643) {
+            p4(cJxjPb, 8 + 14);
+        } elif (v5.get(cJxjPb + 1) == 16324490) {
+            p4(cJxjPb, 3);
+            v7 = v5.get(cJxjPb + 3);
+        } elif (v5.get(cJxjPb + 1) == 16476380) {
+            p4(cJxjPb, 8 + 3);
+        } elif (v5.get(cJxjPb + 1) == 16522180) {
+            p4(cJxjPb, 8 + 9);
+        } elif (v5.get(cJxjPb + 1) == 16632730) {
+            p4(cJxjPb, 8 + 20);
+        } elif (v5.get(cJxjPb + 1) == 16700158) {
+            p12(cJxjPb, v4.get(v5.get(cJxjPb + 8 + 4)));
+        } else {
+            v5.set(cJxjPb + 0, 0);
+            Control.stopThisScript();
+        }
+    }
+
+    metadata p1 pos 1580,64;
+    private void p1(NAvRsu) {
+        while (1) {
+            p2(NAvRsu);
+            if (v5.get(NAvRsu + 0) == 0) {
+                v23.add(NAvRsu);
+                v16.set(1, v16.get(1) - 1);
+                if (v16.get(1) == 0) {
+                    v26.set(1, 0);
+                    v23.clear();
+                }
+                Control.stopThisScript();
+            }
+        }
+    }
+
+    metadata p16 pos 2256,64;
+    private void p16(Z2RCpd, xNLelG) { // proccode p16 %b %s
+        v19.add(join(51, 35));
+        v10 = xNLelG;
+        if (13 > 25) {
+            v21 = 0;
+        } else {
+            v21 += 2;
+        }
+        v15 = xNLelG;
+        v22 -= 1;
+        if (11 > 37) {
+            v24 = 0;
+        } else {
+            v24 += 2;
+        }
+        if (!Z2RCpd) {
+            v22 += 1;
+        }
+    }
+
+    metadata greenFlag pos 48,376;
+    public void greenFlag() {
+        p11(1, 0);
+    }
+
+    metadata p17 pos 48,552;
+    private void p17(tl5hTQ) {
+        p10(13, 0, 1, tl5hTQ);
+    }
+
+    metadata p14 pos 48,744;
+    private void p14() {
+        p10(16, 0, 0, "");
+    }
+
+    metadata p10 pos 1580,768;
+    private void p10(WwQxxf, gEeqWg, s44g6V, QKB4DA) {
+        if (v25.get(1) != 443760638) {
+            Control.stopThisScript();
+        }
+        if (v16.get(1) == 0) {
+            v26.set(1, 0);
+            v23.clear();
+        }
+        if (v23.length() > 0) {
+            v1 = v23.get(v23.length());
+            v23.delete(v23.length());
+        } else {
+            if (v26.get(1) + 36 > v5.length()) {
+                repeat (36) {
+                    v5.add("");
+                }
+            }
+            v26.set(1, v26.get(1) + 36);
+            v1 = v26.get(1) - 36 + 1;
+        }
+        v16.set(1, v16.get(1) + 1);
+        v5.set(v1 + 7, 0);
+        v5.set(v1, WwQxxf);
+        v5.set(v1 + 5, v1 + 8 + s44g6V + gEeqWg);
+        v5.set(v1 + 8, 0);
+        if (s44g6V > 0) {
+            v5.set(v1 + 8, QKB4DA);
+        } else {
+            v5.set(v1 + 8, 0);
+        }
+        p1(v1);
+    }
+
+    metadata p6 pos 48,936;
+    private void p6(N2tLTZ) {
+        p10(35, 20, 1, N2tLTZ);
+    }
+
+    metadata p7 pos 2256,952;
+    private void p7(q8UNLe) { // proccode p7 %b
+        v8.add(join(16, 15));
+        v6 += 4;
+        if (!q8UNLe) {
+            v13 += 1;
+        }
+        v21 += 6;
+    }
+
+    metadata p0 pos 48,1128;
+    private void p0() {
+        p10(116, 3, 0, "");
+    }
+
+    metadata c2 pos 48,1320;
+    public void c2() { // hook: broadcast c2
+        p11(9, 0);
+    }
+
+    metadata p3 pos 48,1496;
+    private void p3() {
+        p10(136, 1, 0, "");
+    }
+
+    metadata c3 pos 48,1688;
+    public void c3() { // hook: broadcast c3
+        p11(11, 0);
+    }
+
+    metadata p12 pos 48,1864;
+    private void p12(MmQ1fx, eleeQK) {
+        v5.set(MmQ1fx + 5, v5.get(MmQ1fx + 5) + 1);
+        v5.set(v5.get(MmQ1fx + 5), eleeQK);
+    }
+
+    metadata p4 pos 48,2144;
+    private void p4(JrUXtG, aiWKfh) {
+        v5.set(JrUXtG + aiWKfh, v5.get(v5.get(JrUXtG + 5)));
+        v5.set(JrUXtG + 5, v5.get(JrUXtG + 5) - 1);
+    }
+
+    metadata p11 pos 1580,2376;
+    private void p11(vq42wv, GaCzhE) {
+        if (v25.get(1) != 443760638) {
+            Control.stopThisScript();
+        }
+        if (v16.get(1) == 0) {
+            v26.set(1, 0);
+            v23.clear();
+        }
+        if (v23.length() > 0) {
+            v1 = v23.get(v23.length());
+            v23.delete(v23.length());
+        } else {
+            if (v26.get(1) + 36 > v5.length()) {
+                repeat (36) {
+                    v5.add("");
+                }
+            }
+            v26.set(1, v26.get(1) + 36);
+            v1 = v26.get(1) - 36 + 1;
+        }
+        v16.set(1, v16.get(1) + 1);
+        v5.set(v1 + 7, 0);
+        v5.set(v1, vq42wv);
+        v5.set(v1 + 5, v1 + 8 + GaCzhE);
+        v5.set(v1 + 8, 0);
+        p1(v1);
+    }
+
+    metadata p9 pos 48,2432;
+    private void p9(Joipjb, IdWevZ) {
+        p15(Joipjb);
+        v5.set(Joipjb + 6, IdWevZ);
+        v5.set(Joipjb + 7, 1);
+    }
+
+    metadata p15 pos 48,2736;
+    private void p15(XdM2YF) {
+        if (v5.get(XdM2YF + 7) == 1) {
+            v5.set(XdM2YF + 7, 0);
+            Control.broadcast(v5.get(XdM2YF + 6));
+        }
+    }
+}
